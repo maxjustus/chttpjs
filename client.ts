@@ -10,12 +10,12 @@
 //  2. Checksum calculation: CityHash128 with 64-bit rotation (swapping high and low halves)
 //  3. Key parameter: Use decompress=1 in query parameters when sending compressed data
 
-
 // import * as lz4 from "https://esm.sh/jsr/@nick/lz4";
 import { encodeBlock, decodeBlock, Method } from "./compression2.ts";
 
-
-async function* readResponse<T = any>(response: Promise<Response>): AsyncGenerator<T> {
+async function* readResponse<T = any>(
+  response: Promise<Response>,
+): AsyncGenerator<T> {
   console.log("Response status:", response.status);
   const reader = (await response).body.getReader();
   const decoder = new TextDecoder();
@@ -25,11 +25,11 @@ async function* readResponse<T = any>(response: Promise<Response>): AsyncGenerat
     if (done) break;
 
     const chunk = decoder.decode(value, { stream: true });
-    const lines = chunk.split('\n').filter(line => line);
+    const lines = chunk.split("\n").filter((line) => line);
 
     for (const line of lines) {
       const data = JSON.parse(line);
-      yield data
+      yield data;
     }
   }
 }
@@ -40,20 +40,22 @@ const buildReqUrl = (baseUrl: string, params: Record<string, string>) => {
     url.searchParams.append(key, encodeURIComponent(value));
   });
   return url.toString();
-}
+};
 
 function selectFetch<T = any>(query: string, sessionId: string) {
-  const url = buildReqUrl('http://localhost:8123/', {
+  const url = buildReqUrl("http://localhost:8123/", {
     session_id: sessionId,
-    decompress: '1',
-    default_format: 'JSONEachRowWithProgress',
+    decompress: "1",
+    default_format: "JSONEachRowWithProgress",
   });
 
-  return readResponse<T>(fetch(url, {
-    method: 'POST',
-    body: query
-  }))
-};
+  return readResponse<T>(
+    fetch(url, {
+      method: "POST",
+      body: query,
+    }),
+  );
+}
 
 async function execFetch(query: string, sessionId: string) {
   for await (const res of selectFetch(query, sessionId)) {
@@ -62,24 +64,24 @@ async function execFetch(query: string, sessionId: string) {
 }
 
 const insertFetch = async (query: string, data: any[], sessionId: string) => {
-  const dataStr = data.map(d => JSON.stringify(d)).join('\n') + '\n';
+  const dataStr = data.map((d) => JSON.stringify(d)).join("\n") + "\n";
 
   const dataBytes = new TextEncoder().encode(dataStr);
   const compressed = await encodeBlock(dataBytes, Method.LZ4);
 
-  console.log('Compressed size:', compressed.length);
-  const url = buildReqUrl('http://localhost:8123/', {
+  console.log("Compressed size:", compressed.length);
+  const url = buildReqUrl("http://localhost:8123/", {
     session_id: sessionId,
     query: query,
   });
 
   const res = await fetch(url, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Content-Encoding': 'lz4',
-      'Content-Type': 'application/octet-stream',
+      "Content-Encoding": "lz4",
+      "Content-Type": "application/octet-stream",
     },
-    body: compressed
+    body: compressed,
   });
 
   if (!res.ok) {
@@ -91,27 +93,24 @@ const insertFetch = async (query: string, data: any[], sessionId: string) => {
 };
 
 (async () => {
-  const sessionId = '12345';
+  const sessionId = "12345";
 
-  const data = [
-    { hello: 'world' },
-    { hello: 'steve' },
-  ];
+  const data = [{ hello: "world" }, { hello: "steve" }];
 
-  const query = 'SELECT number FROM numbers(5)';
+  const query = "SELECT number FROM numbers(5)";
 
   for await (const res of selectFetch(query, sessionId)) {
     console.log(res);
-  };
+  }
 
-  const createQuery = 'CREATE TABLE IF NOT EXISTS test (hello String) ENGINE = Memory';
+  const createQuery =
+    "CREATE TABLE IF NOT EXISTS test (hello String) ENGINE = Memory";
 
   await execFetch(createQuery, sessionId);
 
-  const insertQuery = 'INSERT INTO test (hello) VALUES';
+  const insertQuery = "INSERT INTO test (hello) VALUES";
 
   const res = await insertFetch(insertQuery, data, sessionId);
 
-  console.log('Insert response status:', res);
+  console.log("Insert response status:", res);
 })();
-

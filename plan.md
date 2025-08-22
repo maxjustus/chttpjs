@@ -1,10 +1,13 @@
 # Streaming Insert Implementation Plan
 
 ## Overview
+
 Implement a streaming insert function that accepts an async generator, buffers rows, compresses them in chunks, and sends them progressively to ClickHouse using HTTP chunked transfer encoding.
 
 ## Background
+
 Based on analysis of clickhouse-rs implementation:
+
 - Uses 256KB buffer size
 - Sends chunks when buffer reaches ~254KB
 - Each chunk is compressed independently
@@ -14,9 +17,11 @@ Based on analysis of clickhouse-rs implementation:
 ## Implementation Strategy
 
 ### 1. Create `insertCompressedStream` function
+
 **Location**: `client-node.js`
 
 **Features**:
+
 - Accept async generator/iterator that yields data items
 - Buffer items until reaching size threshold (default 256KB like clickhouse-rs)
 - Compress each buffer as a separate block
@@ -26,27 +31,31 @@ Based on analysis of clickhouse-rs implementation:
 ### 2. Key Design Decisions
 
 **Buffering Strategy**:
+
 - Buffer size: 256KB (matches clickhouse-rs)
 - Threshold to send: ~254KB (leaves room for last row)
 - Buffer by bytes, not row count (more predictable memory usage)
 
 **HTTP Approach**:
+
 - Use Node.js native chunked transfer encoding (omit Content-Length header)
 - Keep connection open while streaming chunks
 - Each chunk is a complete compressed block
 
 **Progress Reporting**:
+
 - Yield objects with: `{ blocksSent, bytesCompressed, bytesUncompressed, rowsProcessed }`
 - Allow monitoring of compression ratios and throughput
 
 ### 3. Implementation Steps
 
 1. **Create streaming function signature**:
+
    ```javascript
    async function* insertCompressedStream(
      query,           // INSERT query
      dataGenerator,   // Async generator yielding rows
-     sessionId,       
+     sessionId,
      options = {}     // method, bufferSize, etc.
    )
    ```
@@ -75,27 +84,32 @@ Based on analysis of clickhouse-rs implementation:
 ### 4. Example Implementation Structure
 
 ```javascript
-async function* insertCompressedStream(query, dataGenerator, sessionId, options = {}) {
+async function* insertCompressedStream(
+  query,
+  dataGenerator,
+  sessionId,
+  options = {},
+) {
   const {
     method = Method.LZ4,
-    bufferSize = 256 * 1024,  // 256KB
-    threshold = bufferSize - 2048  // Leave room for last row
+    bufferSize = 256 * 1024, // 256KB
+    threshold = bufferSize - 2048, // Leave room for last row
   } = options;
 
   // Start HTTP request with chunked encoding
-  const url = buildReqUrl('http://localhost:8123/', {
+  const url = buildReqUrl("http://localhost:8123/", {
     session_id: sessionId,
     query: query,
-    decompress: '1',
-    http_native_compression_disable_checksumming_on_decompress: '1',
+    decompress: "1",
+    http_native_compression_disable_checksumming_on_decompress: "1",
   });
 
   const req = http.request(url, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Content-Type': 'application/octet-stream',
-      'Transfer-Encoding': 'chunked'
-    }
+      "Content-Type": "application/octet-stream",
+      "Transfer-Encoding": "chunked",
+    },
   });
 
   let buffer = [];
@@ -105,16 +119,16 @@ async function* insertCompressedStream(query, dataGenerator, sessionId, options 
 
   try {
     for await (const row of dataGenerator) {
-      const line = JSON.stringify(row) + '\n';
+      const line = JSON.stringify(row) + "\n";
       buffer.push(line);
       bufferBytes += Buffer.byteLength(line);
       totalRows++;
 
       if (bufferBytes >= threshold) {
         // Compress and send this chunk
-        const dataBytes = Buffer.from(buffer.join(''), 'utf8');
+        const dataBytes = Buffer.from(buffer.join(""), "utf8");
         const compressed = encodeBlock(dataBytes, method);
-        
+
         req.write(compressed);
         blocksSent++;
 
@@ -122,7 +136,7 @@ async function* insertCompressedStream(query, dataGenerator, sessionId, options 
           blocksSent,
           bytesCompressed: compressed.length,
           bytesUncompressed: bufferBytes,
-          rowsProcessed: totalRows
+          rowsProcessed: totalRows,
         };
 
         // Reset buffer
@@ -133,7 +147,7 @@ async function* insertCompressedStream(query, dataGenerator, sessionId, options 
 
     // Send remaining data
     if (buffer.length > 0) {
-      const dataBytes = Buffer.from(buffer.join(''), 'utf8');
+      const dataBytes = Buffer.from(buffer.join(""), "utf8");
       const compressed = encodeBlock(dataBytes, method);
       req.write(compressed);
       blocksSent++;
@@ -143,23 +157,22 @@ async function* insertCompressedStream(query, dataGenerator, sessionId, options 
         bytesCompressed: compressed.length,
         bytesUncompressed: bufferBytes,
         rowsProcessed: totalRows,
-        complete: true
+        complete: true,
       };
     }
 
     // End request and wait for response
     await new Promise((resolve, reject) => {
-      req.on('response', (res) => {
+      req.on("response", (res) => {
         if (res.statusCode === 200) {
           resolve();
         } else {
           reject(new Error(`Insert failed: ${res.statusCode}`));
         }
       });
-      req.on('error', reject);
+      req.on("error", reject);
       req.end();
     });
-
   } catch (error) {
     req.destroy();
     throw error;
@@ -207,15 +220,19 @@ async function* generateData() {
 
 // Stream insert with progress monitoring
 const stream = insertCompressedStream(
-  'INSERT INTO test FORMAT JSONEachRow',
+  "INSERT INTO test FORMAT JSONEachRow",
   generateData(),
   sessionId,
-  { method: Method.ZSTD }
+  { method: Method.ZSTD },
 );
 
 for await (const progress of stream) {
-  console.log(`Sent ${progress.blocksSent} blocks, ${progress.rowsProcessed} rows`);
-  console.log(`Compression ratio: ${(progress.bytesUncompressed / progress.bytesCompressed).toFixed(2)}x`);
+  console.log(
+    `Sent ${progress.blocksSent} blocks, ${progress.rowsProcessed} rows`,
+  );
+  console.log(
+    `Compression ratio: ${(progress.bytesUncompressed / progress.bytesCompressed).toFixed(2)}x`,
+  );
 }
 ```
 
