@@ -1,7 +1,7 @@
 // Node.js version of ClickHouse compression with proper CityHash128
-const bling = require("bling-hashes");
-const lz4 = require("lz4");
-const zstd = require("zstd-napi");
+import * as bling from "bling-hashes";
+import * as lz4 from "lz4";
+import * as zstd from "zstd-napi";
 
 // ClickHouse uses a custom compression format with the following structure:
 // - 16-byte CityHash128 checksum (v1.0.2)
@@ -10,14 +10,17 @@ const zstd = require("zstd-napi");
 // - 4-byte uncompressed size (little-endian)
 // - Raw compressed data
 
+/** @readonly @enum {number} */
 const Method = {
   None: 0x02,
   LZ4: 0x82,
   ZSTD: 0x90,
 };
 
-// CityHash128 with 64-bit rotation for ClickHouse
-function cityHash128LE(bytes) {
+/**
+ * CityHash128 with 64-bit rotation for ClickHouse
+ */
+function cityHash128LE(bytes: Buffer): Buffer {
   // bling-hashes city128 returns a City128Value object
   const hashObj = bling.city128(bytes);
 
@@ -30,33 +33,43 @@ function cityHash128LE(bytes) {
   return rotated;
 }
 
-// LZ4 compression for ClickHouse (raw block without size prefix)
-function lz4CompressCH(raw) {
+/**
+ * LZ4 compression for ClickHouse (raw block without size prefix)
+ */
+function lz4CompressCH(raw: Buffer): Buffer {
   const maxSize = lz4.encodeBound(raw.length);
   const compressed = Buffer.alloc(maxSize);
   const compressedSize = lz4.encodeBlock(raw, compressed);
   return compressed.slice(0, compressedSize);
 }
 
-// LZ4 decompression for ClickHouse
-function lz4DecompressCH(compressed, uncompressedSize) {
+/**
+ * LZ4 decompression for ClickHouse
+ */
+function lz4DecompressCH(compressed: Buffer, uncompressedSize: number): Buffer {
   const output = Buffer.alloc(uncompressedSize);
   lz4.decodeBlock(compressed, output);
   return output;
 }
 
-// ZSTD compression for ClickHouse (raw block)
-function zstdCompressCH(raw, level = 3) {
+/**
+ * ZSTD compression for ClickHouse (raw block)
+ */
+function zstdCompressCH(raw: Buffer, level: number = 3): Buffer {
   return zstd.compress(raw, level);
 }
 
-// ZSTD decompression for ClickHouse
-function zstdDecompressCH(compressed) {
+/**
+ * ZSTD decompression for ClickHouse
+ */
+function zstdDecompressCH(compressed: Buffer): Buffer {
   return zstd.decompress(compressed);
 }
 
-// Encode a block in ClickHouse format
-function encodeBlock(raw, mode = Method.LZ4) {
+/**
+ * Encode a block in ClickHouse format
+ */
+function encodeBlock(raw: Buffer, mode: number = Method.LZ4): Buffer {
   let compressed;
   let compressedDataSize;
 
@@ -88,8 +101,10 @@ function encodeBlock(raw, mode = Method.LZ4) {
   return Buffer.concat([checksum, metadata, compressed]);
 }
 
-// Decode a single block from ClickHouse format
-function decodeBlock(block, skipChecksumVerification = false) {
+/**
+ * Decode a single block from ClickHouse format
+ */
+function decodeBlock(block: Buffer, skipChecksumVerification: boolean = false): Buffer {
   if (block.length < 25) throw new Error("block too small");
 
   const checksum = block.slice(0, 16);
@@ -122,8 +137,10 @@ function decodeBlock(block, skipChecksumVerification = false) {
   throw new Error(`Unsupported compression method 0x${mode.toString(16)}`);
 }
 
-// Decode multiple blocks from ClickHouse response
-function decodeBlocks(data, skipChecksumVerification = false) {
+/**
+ * Decode multiple blocks from ClickHouse response
+ */
+function decodeBlocks(data: Buffer, skipChecksumVerification: boolean = false): Buffer {
   const blocks = [];
   let offset = 0;
 
@@ -150,7 +167,7 @@ function decodeBlocks(data, skipChecksumVerification = false) {
   return Buffer.concat(blocks);
 }
 
-module.exports = {
+export {
   Method,
   encodeBlock,
   decodeBlock,

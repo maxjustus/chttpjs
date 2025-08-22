@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": false,
+    "skipLibCheck": true,
+    "declaration": false
+  },
+  "include": [
+    "*.ts",
+    "types.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "test-*.js",
+    "test/"
+  ]
+}

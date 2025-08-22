@@ -1,8 +1,8 @@
 const { describe, it, before, after } = require("node:test");
 const assert = require("node:assert");
 const { startClickHouse, stopClickHouse } = require("./setup");
-const { insertCompressed, execQuery } = require("../client-node");
-const { Method } = require("../compression-node");
+const { insertCompressed, execQuery } = require("../client");
+const { Method } = require("../compression");
 
 describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   let clickhouse;

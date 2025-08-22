@@ -5,7 +5,7 @@ const {
   decodeBlock,
   decodeBlocks,
   Method,
-} = require("../compression-node");
+} = require("../compression");
 
 describe("Compression", () => {
   describe("LZ4 compression", () => {
