@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/*.test.js",
+    "test:compression": "node --test test/compression.test.js",
+    "test:integration": "node --test test/integration.test.js"
   },
   "keywords": [],
   "author": "",
@@ -17,5 +19,9 @@
     "lz4": "^0.6.5",
     "node-int64": "^0.4.0",
     "zstd-napi": "^0.0.12"
+  },
+  "devDependencies": {
+    "@testcontainers/clickhouse": "^11.5.1",
+    "testcontainers": "^11.5.1"
   }
 }
