@@ -48,8 +48,21 @@ const decompressed = decodeBlock(compressedData, true);
 - `compression-node.js` - Core compression implementation
 - `client-node.js` - Example client showing how to use compression with ClickHouse
 
+## Features
+
+- **LZ4 compression** - Fast compression with good ratios
+- **ZSTD compression** - Better compression ratios (often 5-10x better than LZ4)
+- **Multi-block support** - Handles multiple compressed blocks in responses
+- **Bidirectional** - Both sending and receiving compressed data
+
 ## Dependencies
 
 ```bash
-npm install lz4 bling-hashes
+npm install lz4 bling-hashes zstd-napi
 ```
+
+## Compression Comparison
+
+For repetitive data:
+- LZ4: ~4x compression ratio, fastest
+- ZSTD: ~37x compression ratio, slightly slower but much better compression

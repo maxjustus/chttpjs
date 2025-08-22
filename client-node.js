@@ -1,4 +1,4 @@
-const { encodeBlock, decodeBlock, Method } = require('./compression-node');
+const { encodeBlock, decodeBlock, decodeBlocks, Method } = require('./compression-node');
 const http = require('http');
 
 function buildReqUrl(baseUrl, params) {
@@ -9,17 +9,19 @@ function buildReqUrl(baseUrl, params) {
   return url;
 }
 
-async function insertCompressed(query, data, sessionId) {
+async function insertCompressed(query, data, sessionId, method = Method.LZ4) {
   // Convert data to JSON lines format
   const dataStr = data.map(d => JSON.stringify(d)).join('\n') + '\n';
   const dataBytes = Buffer.from(dataStr, 'utf8');
   
   // Compress using ClickHouse format
-  const compressed = encodeBlock(dataBytes, Method.LZ4);
+  const compressed = encodeBlock(dataBytes, method);
   
+  const methodName = method === Method.LZ4 ? 'LZ4' : method === Method.ZSTD ? 'ZSTD' : 'None';
+  console.log(`Compression: ${methodName}`);
   console.log('Original size:', dataBytes.length);
   console.log('Compressed size:', compressed.length);
-  console.log('First 30 bytes (hex):', compressed.slice(0, 30).toString('hex'));
+  console.log('Compression ratio:', (dataBytes.length / compressed.length).toFixed(2) + 'x');
   
   const url = buildReqUrl('http://localhost:8123/', {
     session_id: sessionId,
@@ -53,6 +55,7 @@ async function insertCompressed(query, data, sessionId) {
   });
 }
 
+// TODO: stream blocks?
 async function execQuery(query, sessionId, compressed = false) {
   const params = {
     session_id: sessionId,
@@ -79,7 +82,7 @@ async function execQuery(query, sessionId, compressed = false) {
           if (compressed) {
             // Decompress the response (skip checksum verification due to CityHash version mismatch)
             try {
-              const decompressed = decodeBlock(body, true);
+              const decompressed = decodeBlocks(body, true);
               resolve(decompressed.toString());
             } catch (err) {
               reject(new Error(`Decompression failed: ${err.message}`));
@@ -106,36 +109,39 @@ async function main() {
     await execQuery('DROP TABLE IF EXISTS test', sessionId);
     await execQuery('CREATE TABLE test (hello String) ENGINE = Memory', sessionId);
     
-    // Insert data with compression
-    console.log('\nInserting compressed data...');
-    // const data = [
-    //   { hello: 'world' },
-    //   { hello: 'steve' },
-    // ];
-
-    // big data to test
+    // Test data
     let data = [];
     for (let i = 0; i < 10000; i++) {
       data.push({ hello: 'world' + i });
     }
     
-    
+    // Test LZ4 compression
+    console.log('\n=== Testing LZ4 Compression ===');
     const insertQuery = 'INSERT INTO test (hello) FORMAT JSONEachRow';
-    await insertCompressed(insertQuery, data, sessionId);
-    console.log('Insert successful!');
+    await insertCompressed(insertQuery, data.slice(0, 5000), sessionId, Method.LZ4);
+    console.log('LZ4 insert successful!');
     
-    // Query to verify (uncompressed)
-    console.log('\nQuerying data (uncompressed)...');
-    const result = await execQuery('SELECT * FROM test FORMAT JSONEachRow', sessionId);
-    console.log('Result:', result);
+    // Test ZSTD compression
+    console.log('\n=== Testing ZSTD Compression ===');
+    await insertCompressed(insertQuery, data.slice(5000), sessionId, Method.ZSTD);
+    console.log('ZSTD insert successful!');
     
-    // Query with compressed response
-    console.log('\nQuerying data (compressed response)...');
-    const compressedResult = await execQuery('SELECT * FROM test FORMAT JSONEachRow', sessionId, true);
-    console.log('Result:', compressedResult);
+    // Query to verify
+    console.log('\nQuerying to verify inserts...');
+    const countResult = await execQuery('SELECT count(*) as cnt FROM test FORMAT JSON', sessionId);
+    const countData = JSON.parse(countResult);
+    console.log('Total rows inserted:', countData.data[0].cnt);
     
-    // Verify they match
-    console.log('\nResults match:', result === compressedResult);
+    // Test compressed response
+    console.log('\nQuerying with compressed response...');
+    const compressedResult = await execQuery('SELECT count(*) as cnt FROM test FORMAT JSON', sessionId, true);
+    const compressedData = JSON.parse(compressedResult);
+    console.log('Total rows (from compressed response):', compressedData.data[0].cnt);
+
+    const selectResult = await execQuery('SELECT * FROM test FORMAT JSON', sessionId, true);
+    const selectData = JSON.parse(selectResult);
+    const matches = selectData.data.every((row, index) => row.hello === 'world' + index);
+    console.log('rows match expected:', matches);
     
   } catch (error) {
     console.error('Error:', error.message);
