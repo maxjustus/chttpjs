@@ -4,14 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --test test/*.test.js",
-    "test:compression": "node --test test/compression.test.js",
-    "test:integration": "node --test test/integration.test.js"
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test:compression": "node --experimental-strip-types --test test/compression.test.ts",
+    "test:integration": "node --experimental-strip-types --test test/integration.test.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
     "bling-hashes": "^2.0.0",
     "farmhash": "^4.0.2",

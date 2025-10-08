@@ -1,5 +1,12 @@
-import { encodeBlock, decodeBlock, Method } from "./compression";
-import * as http from "http";
+import {
+  encodeBlock,
+  decodeBlock,
+  Method,
+  type MethodCode,
+} from "./compression.ts";
+import http from "node:http";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 interface AuthConfig {
   username?: string;
@@ -43,7 +50,7 @@ async function insertCompressed(
   query: string,
   data: any[] | AsyncIterable<any> | Iterable<any>,
   sessionId: string,
-  method: number = Method.LZ4,
+  method: MethodCode = Method.LZ4,
   options: InsertOptions = {},
 ): Promise<string> {
   const baseUrl = options.baseUrl || "http://localhost:8123/";
@@ -291,7 +298,6 @@ async function* execQuery(
     }
   } else {
     // For compressed, decompress blocks as they arrive
-    const { decodeBlock } = await import("./compression");
     let buffer = Buffer.alloc(0);
 
     for await (const chunk of stream) {
@@ -435,6 +441,10 @@ async function main() {
 export { insertCompressed, execQuery, buildReqUrl };
 
 // Only run main if this is the main module
-if (require.main === module) {
-  main();
+const isDirectExecution =
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectExecution) {
+  void main();
 }

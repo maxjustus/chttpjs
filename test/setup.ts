@@ -1,8 +1,8 @@
-const { ClickHouseContainer } = require("@testcontainers/clickhouse");
+import { ClickHouseContainer } from "@testcontainers/clickhouse";
 
-let container;
+let container: ClickHouseContainer | undefined;
 
-async function startClickHouse() {
+export async function startClickHouse() {
   console.log("Starting ClickHouse container...");
 
   // Configure ClickHouse with explicit user/password
@@ -29,14 +29,9 @@ async function startClickHouse() {
   };
 }
 
-async function stopClickHouse() {
+export async function stopClickHouse() {
   if (container) {
     console.log("Stopping ClickHouse container...");
     await container.stop();
   }
 }
-
-module.exports = {
-  startClickHouse,
-  stopClickHouse,
-};

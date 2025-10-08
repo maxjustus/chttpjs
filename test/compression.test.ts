@@ -1,11 +1,12 @@
-const { describe, it, before, after } = require("node:test");
-const assert = require("node:assert");
-const {
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+
+import {
   encodeBlock,
   decodeBlock,
   decodeBlocks,
   Method,
-} = require("../compression");
+} from "../compression.ts";
 
 describe("Compression", () => {
   describe("LZ4 compression", () => {

@@ -1,163 +1,137 @@
-// Node.js version of ClickHouse compression with proper CityHash128
-import * as bling from "bling-hashes";
+import { city128 } from "bling-hashes";
 import * as lz4 from "lz4";
 import * as zstd from "zstd-napi";
 
-// ClickHouse uses a custom compression format with the following structure:
-// - 16-byte CityHash128 checksum (v1.0.2)
-// - 1-byte magic number (0x82 for LZ4, 0x90 for ZSTD)
-// - 4-byte compressed size (little-endian, includes 9-byte header)
-// - 4-byte uncompressed size (little-endian)
-// - Raw compressed data
+const CHECKSUM_SIZE = 16;
+const HEADER_SIZE = 9;
+const MAGIC_OFFSET = 0;
+const COMPRESSED_SIZE_OFFSET = 1;
+const UNCOMPRESSED_SIZE_OFFSET = 5;
 
-/** @readonly @enum {number} */
-const Method = {
+export const Method = {
   None: 0x02,
   LZ4: 0x82,
   ZSTD: 0x90,
-};
+} as const;
 
-/**
- * CityHash128 with 64-bit rotation for ClickHouse
- */
-function cityHash128LE(bytes: Buffer): Buffer {
-  // bling-hashes city128 returns a City128Value object
-  const hashObj = bling.city128(bytes);
+export type MethodCode = (typeof Method)[keyof typeof Method];
 
-  // Get the two 8-byte buffers
+export function cityHash128LE(bytes: Buffer): Buffer {
+  const hashObj = city128(bytes);
   const [loBuf, hiBuf] = hashObj.toBuffers();
-
-  // Rotate right 64 bits: swap the two 8-byte halves for ClickHouse
-  const rotated = Buffer.concat([hiBuf, loBuf]);
-
-  return rotated;
+  return Buffer.concat([hiBuf, loBuf]);
 }
 
-/**
- * LZ4 compression for ClickHouse (raw block without size prefix)
- */
-function lz4CompressCH(raw: Buffer): Buffer {
+function lz4Compress(raw: Buffer): Buffer {
   const maxSize = lz4.encodeBound(raw.length);
   const compressed = Buffer.alloc(maxSize);
   const compressedSize = lz4.encodeBlock(raw, compressed);
-  return compressed.slice(0, compressedSize);
+  return compressed.subarray(0, compressedSize);
 }
 
-/**
- * LZ4 decompression for ClickHouse
- */
-function lz4DecompressCH(compressed: Buffer, uncompressedSize: number): Buffer {
+function lz4Decompress(compressed: Buffer, uncompressedSize: number): Buffer {
   const output = Buffer.alloc(uncompressedSize);
   lz4.decodeBlock(compressed, output);
   return output;
 }
 
-/**
- * ZSTD compression for ClickHouse (raw block)
- */
-function zstdCompressCH(raw: Buffer, level: number = 3): Buffer {
+function zstdCompress(raw: Buffer, level = 3): Buffer {
   return zstd.compress(raw, level);
 }
 
-/**
- * ZSTD decompression for ClickHouse
- */
-function zstdDecompressCH(compressed: Buffer): Buffer {
+function zstdDecompress(compressed: Buffer): Buffer {
   return zstd.decompress(compressed);
 }
 
-/**
- * Encode a block in ClickHouse format
- */
-function encodeBlock(raw: Buffer, mode: number = Method.LZ4): Buffer {
-  let compressed;
-  let compressedDataSize;
+export function encodeBlock(
+  raw: Buffer,
+  mode: MethodCode = Method.LZ4,
+): Buffer {
+  let compressed: Buffer;
 
-  if (mode === Method.LZ4) {
-    compressed = lz4CompressCH(raw);
-    compressedDataSize = compressed.length;
-  } else if (mode === Method.ZSTD) {
-    compressed = zstdCompressCH(raw);
-    compressedDataSize = compressed.length;
-  } else if (mode === Method.None) {
-    compressed = raw;
-    compressedDataSize = compressed.length;
-  } else {
-    throw new Error(`Unsupported compression method 0x${mode.toString(16)}`);
+  switch (mode) {
+    case Method.LZ4:
+      compressed = lz4Compress(raw);
+      break;
+    case Method.ZSTD:
+      compressed = zstdCompress(raw);
+      break;
+    case Method.None:
+      compressed = raw;
+      break;
+    default:
+      throw new Error(`Unsupported compression method 0x${mode.toString(16)}`);
   }
 
-  // Create metadata: magic(1) + compressed_size(4) + uncompressed_size(4)
-  // Note: compressed_size includes the 9-byte header size
-  const metadata = Buffer.alloc(9);
-  metadata[0] = mode; // magic byte (0x82 for LZ4, 0x90 for ZSTD)
-  metadata.writeUInt32LE(9 + compressedDataSize, 1); // compressed_size (header + data)
-  metadata.writeUInt32LE(raw.length, 5); // uncompressed_size
+  const metadata = Buffer.alloc(HEADER_SIZE);
+  metadata[MAGIC_OFFSET] = mode;
+  metadata.writeUInt32LE(HEADER_SIZE + compressed.length, COMPRESSED_SIZE_OFFSET);
+  metadata.writeUInt32LE(raw.length, UNCOMPRESSED_SIZE_OFFSET);
 
-  // Hash metadata + compressed data
-  const toHash = Buffer.concat([metadata, compressed]);
-  const checksum = cityHash128LE(toHash);
-
-  // Assemble final block: checksum + metadata + compressed
+  const checksum = cityHash128LE(Buffer.concat([metadata, compressed]));
   return Buffer.concat([checksum, metadata, compressed]);
 }
 
-/**
- * Decode a single block from ClickHouse format
- */
-function decodeBlock(block: Buffer, skipChecksumVerification: boolean = false): Buffer {
-  if (block.length < 25) throw new Error("block too small");
+export function decodeBlock(
+  block: Buffer,
+  skipChecksumVerification = false,
+): Buffer {
+  if (block.length < CHECKSUM_SIZE + HEADER_SIZE) {
+    throw new Error("block too small");
+  }
 
-  const checksum = block.slice(0, 16);
-  const metadata = block.slice(16, 25);
-  const compressed = block.slice(25);
+  const checksum = block.subarray(0, CHECKSUM_SIZE);
+  const metadata = block.subarray(CHECKSUM_SIZE, CHECKSUM_SIZE + HEADER_SIZE);
+  const compressed = block.subarray(CHECKSUM_SIZE + HEADER_SIZE);
 
-  // Verify checksum (skip if using different CityHash implementation)
   if (!skipChecksumVerification) {
-    const toHash = Buffer.concat([metadata, compressed]);
-    const expected = cityHash128LE(toHash);
+    const expected = cityHash128LE(Buffer.concat([metadata, compressed]));
     if (!checksum.equals(expected)) {
       throw new Error("checksum mismatch");
     }
   }
 
-  // Parse metadata
-  const mode = metadata[0];
-  const compressedSize = metadata.readUInt32LE(1);
-  const uncompressedSize = metadata.readUInt32LE(5);
+  const mode = metadata[MAGIC_OFFSET] as MethodCode;
+  const compressedSize = metadata.readUInt32LE(COMPRESSED_SIZE_OFFSET);
+  const uncompressedSize = metadata.readUInt32LE(UNCOMPRESSED_SIZE_OFFSET);
 
-  if (compressedSize !== 9 + compressed.length) {
+  if (compressedSize !== HEADER_SIZE + compressed.length) {
     throw new Error(
-      `compressed_size mismatch: expected ${compressedSize}, got ${9 + compressed.length}`,
+      `compressed_size mismatch: expected ${compressedSize}, got ${HEADER_SIZE + compressed.length}`,
     );
   }
 
-  if (mode === Method.None) return compressed;
-  if (mode === Method.LZ4) return lz4DecompressCH(compressed, uncompressedSize);
-  if (mode === Method.ZSTD) return zstdDecompressCH(compressed);
-  throw new Error(`Unsupported compression method 0x${mode.toString(16)}`);
+  switch (mode) {
+    case Method.None:
+      return compressed;
+    case Method.LZ4:
+      return lz4Decompress(compressed, uncompressedSize);
+    case Method.ZSTD:
+      return zstdDecompress(compressed);
+    default:
+      throw new Error(`Unsupported compression method 0x${mode.toString(16)}`);
+  }
 }
 
-/**
- * Decode multiple blocks from ClickHouse response
- */
-function decodeBlocks(data: Buffer, skipChecksumVerification: boolean = false): Buffer {
-  const blocks = [];
+export function decodeBlocks(
+  data: Buffer,
+  skipChecksumVerification = false,
+): Buffer {
+  const blocks: Buffer[] = [];
   let offset = 0;
 
-  while (offset < data.length) {
-    if (data.length - offset < 25) {
-      break; // Not enough data for another block
-    }
-
-    // Read the compressed size from metadata to know how big this block is
-    const compressedSize = data.readUInt32LE(offset + 17);
-    const blockSize = 16 + compressedSize; // checksum + metadata + compressed data
+  while (offset + CHECKSUM_SIZE + HEADER_SIZE <= data.length) {
+    const metadataOffset = offset + CHECKSUM_SIZE;
+    const compressedSize = data.readUInt32LE(
+      metadataOffset + COMPRESSED_SIZE_OFFSET,
+    );
+    const blockSize = CHECKSUM_SIZE + compressedSize;
 
     if (offset + blockSize > data.length) {
-      break; // Not enough data for complete block
+      break;
     }
 
-    const block = data.slice(offset, offset + blockSize);
+    const block = data.subarray(offset, offset + blockSize);
     const decompressed = decodeBlock(block, skipChecksumVerification);
     blocks.push(decompressed);
 
@@ -166,11 +140,3 @@ function decodeBlocks(data: Buffer, skipChecksumVerification: boolean = false): 
 
   return Buffer.concat(blocks);
 }
-
-export {
-  Method,
-  encodeBlock,
-  decodeBlock,
-  decodeBlocks,
-  cityHash128LE,
-};
