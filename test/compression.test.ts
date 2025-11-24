@@ -1,37 +1,60 @@
-import { describe, it } from "node:test";
+import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  init,
   encodeBlock,
   decodeBlock,
   decodeBlocks,
   Method,
 } from "../compression.ts";
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+function concat(arrays: Uint8Array[]): Uint8Array {
+  const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const arr of arrays) {
+    result.set(arr, offset);
+    offset += arr.length;
+  }
+  return result;
+}
+
+function readUInt32LE(arr: Uint8Array, offset: number): number {
+  return arr[offset] | (arr[offset + 1] << 8) | (arr[offset + 2] << 16) | (arr[offset + 3] << 24) >>> 0;
+}
+
 describe("Compression", () => {
+  before(async () => {
+    await init();
+  });
+
   describe("LZ4 compression", () => {
     it("should compress and decompress data correctly", () => {
-      const data = Buffer.from("Hello, World! This is a test.");
+      const data = encoder.encode("Hello, World! This is a test.");
       const compressed = encodeBlock(data, Method.LZ4);
       const decompressed = decodeBlock(compressed, true);
 
-      assert.strictEqual(decompressed.toString(), data.toString());
+      assert.strictEqual(decoder.decode(decompressed), decoder.decode(data));
     });
 
     it("should handle empty data", () => {
-      const data = Buffer.from("");
+      const data = encoder.encode("");
       const compressed = encodeBlock(data, Method.None);
       const decompressed = decodeBlock(compressed, true);
 
-      assert.strictEqual(decompressed.toString(), "");
+      assert.strictEqual(decoder.decode(decompressed), "");
     });
 
     it("should handle large repetitive data efficiently", () => {
-      const data = Buffer.from("A".repeat(10000));
+      const data = encoder.encode("A".repeat(10000));
       const compressed = encodeBlock(data, Method.LZ4);
       const decompressed = decodeBlock(compressed, true);
 
-      assert.strictEqual(decompressed.toString(), data.toString());
+      assert.strictEqual(decoder.decode(decompressed), decoder.decode(data));
       // LZ4 should compress repetitive data well
       assert.ok(compressed.length < data.length / 10);
     });
@@ -39,15 +62,15 @@ describe("Compression", () => {
 
   describe("ZSTD compression", () => {
     it("should compress and decompress data correctly", () => {
-      const data = Buffer.from("Hello, World! This is a ZSTD test.");
+      const data = encoder.encode("Hello, World! This is a ZSTD test.");
       const compressed = encodeBlock(data, Method.ZSTD);
       const decompressed = decodeBlock(compressed, true);
 
-      assert.strictEqual(decompressed.toString(), data.toString());
+      assert.strictEqual(decoder.decode(decompressed), decoder.decode(data));
     });
 
     it("should achieve better compression than LZ4 for repetitive data", () => {
-      const data = Buffer.from("ABCD".repeat(1000));
+      const data = encoder.encode("ABCD".repeat(1000));
 
       const lz4Compressed = encodeBlock(data, Method.LZ4);
       const zstdCompressed = encodeBlock(data, Method.ZSTD);
@@ -55,8 +78,8 @@ describe("Compression", () => {
       const lz4Decompressed = decodeBlock(lz4Compressed, true);
       const zstdDecompressed = decodeBlock(zstdCompressed, true);
 
-      assert.strictEqual(lz4Decompressed.toString(), data.toString());
-      assert.strictEqual(zstdDecompressed.toString(), data.toString());
+      assert.strictEqual(decoder.decode(lz4Decompressed), decoder.decode(data));
+      assert.strictEqual(decoder.decode(zstdDecompressed), decoder.decode(data));
 
       // ZSTD typically achieves better compression
       console.log(
@@ -67,64 +90,64 @@ describe("Compression", () => {
 
   describe("Multi-block decompression", () => {
     it("should decompress multiple blocks correctly", () => {
-      const data1 = Buffer.from("First block data");
-      const data2 = Buffer.from("Second block data");
-      const data3 = Buffer.from("Third block data");
+      const data1 = encoder.encode("First block data");
+      const data2 = encoder.encode("Second block data");
+      const data3 = encoder.encode("Third block data");
 
       const block1 = encodeBlock(data1, Method.LZ4);
       const block2 = encodeBlock(data2, Method.LZ4);
       const block3 = encodeBlock(data3, Method.LZ4);
 
-      const combined = Buffer.concat([block1, block2, block3]);
+      const combined = concat([block1, block2, block3]);
       const decompressed = decodeBlocks(combined, true);
 
-      const expected = Buffer.concat([data1, data2, data3]).toString();
-      assert.strictEqual(decompressed.toString(), expected);
+      const expected = decoder.decode(concat([data1, data2, data3]));
+      assert.strictEqual(decoder.decode(decompressed), expected);
     });
 
     it("should handle mixed compression methods", () => {
-      const data1 = Buffer.from("LZ4 compressed block");
-      const data2 = Buffer.from("ZSTD compressed block");
-      const data3 = Buffer.from("Uncompressed block");
+      const data1 = encoder.encode("LZ4 compressed block");
+      const data2 = encoder.encode("ZSTD compressed block");
+      const data3 = encoder.encode("Uncompressed block");
 
       const block1 = encodeBlock(data1, Method.LZ4);
       const block2 = encodeBlock(data2, Method.ZSTD);
       const block3 = encodeBlock(data3, Method.None);
 
-      const combined = Buffer.concat([block1, block2, block3]);
+      const combined = concat([block1, block2, block3]);
       const decompressed = decodeBlocks(combined, true);
 
-      const expected = Buffer.concat([data1, data2, data3]).toString();
-      assert.strictEqual(decompressed.toString(), expected);
+      const expected = decoder.decode(concat([data1, data2, data3]));
+      assert.strictEqual(decoder.decode(decompressed), expected);
     });
   });
 
   describe("Partial block handling", () => {
     it("should handle block split across chunks", async () => {
-      const data = Buffer.from("Test data for partial block handling");
+      const data = encoder.encode("Test data for partial block handling");
       const compressed = encodeBlock(data, Method.LZ4);
 
       // Simulate the decompression logic with partial chunks
-      async function processChunks(chunks) {
-        let buffer = Buffer.alloc(0);
+      async function processChunks(chunks: Uint8Array[]) {
+        let buffer = new Uint8Array(0);
         let result = "";
 
         for (const chunk of chunks) {
-          buffer = Buffer.concat([buffer, chunk]);
+          buffer = concat([buffer, chunk]);
 
           while (buffer.length >= 25) {
             if (buffer.length < 17) break;
 
-            const compressedSize = buffer.readUInt32LE(17);
+            const compressedSize = readUInt32LE(buffer, 17);
             const blockSize = 16 + compressedSize;
 
             if (buffer.length < blockSize) break;
 
-            const block = buffer.slice(0, blockSize);
-            buffer = buffer.slice(blockSize);
+            const block = buffer.subarray(0, blockSize);
+            buffer = buffer.subarray(blockSize);
 
             const decompressed = decodeBlock(block, true);
-            result += decompressed.toString();
+            result += decoder.decode(decompressed);
           }
         }
 
@@ -141,24 +164,24 @@ describe("Compression", () => {
       ];
 
       for (const testCase of testCases) {
-        const chunks = [];
+        const chunks: Uint8Array[] = [];
         let offset = 0;
 
         for (const size of testCase.splits) {
           if (offset >= compressed.length) break;
           const chunkSize = Math.min(size, compressed.length - offset);
-          chunks.push(compressed.slice(offset, offset + chunkSize));
+          chunks.push(compressed.subarray(offset, offset + chunkSize));
           offset += chunkSize;
         }
 
         if (offset < compressed.length) {
-          chunks.push(compressed.slice(offset));
+          chunks.push(compressed.subarray(offset));
         }
 
         const result = await processChunks(chunks);
         assert.strictEqual(
           result,
-          data.toString(),
+          decoder.decode(data),
           `Failed for: ${testCase.name}`,
         );
       }

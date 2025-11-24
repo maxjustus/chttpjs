@@ -1,21 +1,3 @@
 // Type declarations for third-party modules
 
-declare module "./ch-city.js" {
-  interface ChCity {
-    cityhash64(data: string | Uint8Array | ArrayBuffer): Uint8Array;
-    cityhash64Hex(data: string | Uint8Array | ArrayBuffer): string;
-    cityhash102(data: string | Uint8Array | ArrayBuffer): Uint8Array;
-    cityhash102Hex(data: string | Uint8Array | ArrayBuffer): string;
-    digest64Length(): number;
-    digestLength(): number;
-    version(): string;
-  }
-
-  export function createChCity(): Promise<ChCity>;
-}
-
-
-declare module "zstd-napi" {
-  export function compress(data: Buffer, level?: number): Buffer;
-  export function decompress(data: Buffer): Buffer;
-}
+// ch-city.js types are in ch-city.d.ts

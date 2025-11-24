@@ -13,8 +13,8 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "lz4-napi": "^2.9.0",
-    "zstd-napi": "^0.0.12"
+    "@bokuweb/zstd-wasm": "^0.0.27",
+    "@nick/lz4": "npm:@jsr/nick__lz4@^0.3.4"
   },
   "devDependencies": {
     "@testcontainers/clickhouse": "^11.5.1",

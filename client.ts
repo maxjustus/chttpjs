@@ -1,12 +1,29 @@
 import {
+  init,
   encodeBlock,
   decodeBlock,
   Method,
   type MethodCode,
 } from "./compression.ts";
-import http from "node:http";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+
+// Uint8Array helpers
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+function concat(arrays: Uint8Array[]): Uint8Array {
+  const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const arr of arrays) {
+    result.set(arr, offset);
+    offset += arr.length;
+  }
+  return result;
+}
+
+function readUInt32LE(arr: Uint8Array, offset: number): number {
+  return arr[offset] | (arr[offset + 1] << 8) | (arr[offset + 2] << 16) | (arr[offset + 3] << 24) >>> 0;
+}
 
 interface AuthConfig {
   username?: string;
@@ -16,10 +33,9 @@ interface AuthConfig {
 function buildReqUrl(baseUrl: string, params: Record<string, string>, auth?: AuthConfig): URL {
   const url = new URL(baseUrl);
   Object.entries(params).forEach(([key, value]) => {
-    url.searchParams.append(key, value); // Don't double-encode
+    url.searchParams.append(key, value);
   });
 
-  // Add basic auth if provided
   if (auth && auth.username) {
     url.searchParams.append("user", auth.username);
     if (auth.password) {
@@ -55,23 +71,20 @@ async function insertCompressed(
 ): Promise<string> {
   const baseUrl = options.baseUrl || "http://localhost:8123/";
   const {
-    bufferSize = 256 * 1024, // 256KB like clickhouse-rs
-    threshold = bufferSize - 2048, // Leave room for last row
+    bufferSize = 256 * 1024,
+    threshold = bufferSize - 2048,
     onProgress = null,
   } = options;
 
-  // Check if data is a generator/async iterable
   const isGenerator =
     data &&
     (typeof (data as any)[Symbol.asyncIterator] === "function" ||
       typeof (data as any)[Symbol.iterator] === "function");
 
   if (!isGenerator) {
-    // Original array implementation
+    // Array implementation
     const dataStr = (data as any[]).map((d: any) => JSON.stringify(d)).join("\n") + "\n";
-    const dataBytes = Buffer.from(dataStr, "utf8");
-
-    // Compress using ClickHouse format
+    const dataBytes = encoder.encode(dataStr);
     const compressed = encodeBlock(dataBytes, method);
 
     const methodName =
@@ -94,33 +107,19 @@ async function insertCompressed(
       options.auth,
     );
 
-    return new Promise((resolve, reject) => {
-      const req = http.request(
-        url,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "Content-Length": compressed.length,
-          },
-        },
-        (res) => {
-          let body = "";
-          res.on("data", (chunk) => (body += chunk));
-          res.on("end", () => {
-            if (res.statusCode !== 200) {
-              reject(new Error(`Insert failed: ${res.statusCode} - ${body}`));
-            } else {
-              resolve(body);
-            }
-          });
-        },
-      );
-
-      req.on("error", reject);
-      req.write(compressed);
-      req.end();
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+      },
+      body: compressed,
     });
+
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`Insert failed: ${response.status} - ${body}`);
+    }
+    return body;
   }
 
   // Streaming implementation for generators
@@ -134,107 +133,91 @@ async function insertCompressed(
     options.auth,
   );
 
-  return new Promise((resolve, reject) => {
-    const req = http.request(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/octet-stream",
-        "Transfer-Encoding": "chunked",
-      },
-    });
+  let buffer: string[] = [];
+  let bufferBytes = 0;
+  let totalRows = 0;
+  let blocksSent = 0;
+  let totalCompressed = 0;
+  let totalUncompressed = 0;
 
-    let buffer: string[] = [];
-    let bufferBytes = 0;
-    let totalRows = 0;
-    let blocksSent = 0;
-    let totalCompressed = 0;
-    let totalUncompressed = 0;
+  // Collect all compressed blocks
+  const blocks: Uint8Array[] = [];
 
-    req.on("response", (res) => {
-      let body = "";
-      res.on("data", (chunk) => (body += chunk));
-      res.on("end", () => {
-        if (res.statusCode !== 200) {
-          reject(new Error(`Insert failed: ${res.statusCode} - ${body}`));
-        } else {
-          console.log(`Streamed ${blocksSent} blocks, ${totalRows} rows`);
-          console.log(
-            `Total compression ratio: ${(totalUncompressed / totalCompressed).toFixed(2)}x`,
-          );
-          resolve(body);
-        }
-      });
-    });
+  for await (const rows of data) {
+    const rowsArray = Array.isArray(rows) ? rows : [rows];
 
-    req.on("error", reject);
+    for (const row of rowsArray) {
+      const line = JSON.stringify(row) + "\n";
+      buffer.push(line);
+      bufferBytes += encoder.encode(line).length;
+      totalRows++;
 
-    async function processStream() {
-      try {
-        for await (const rows of data) {
-          // Handle both single row and array of rows
-          const rowsArray = Array.isArray(rows) ? rows : [rows];
+      if (bufferBytes >= threshold) {
+        const dataBytes = encoder.encode(buffer.join(""));
+        const compressed = encodeBlock(dataBytes, method);
 
-          for (const row of rowsArray) {
-            const line = JSON.stringify(row) + "\n";
-            buffer.push(line);
-            bufferBytes += Buffer.byteLength(line);
-            totalRows++;
+        blocks.push(compressed);
+        blocksSent++;
+        totalCompressed += compressed.length;
+        totalUncompressed += bufferBytes;
 
-            if (bufferBytes >= threshold) {
-              // Compress and send this chunk
-              const dataBytes = Buffer.from(buffer.join(""), "utf8");
-              const compressed = encodeBlock(dataBytes, method);
-
-              req.write(compressed);
-              blocksSent++;
-              totalCompressed += compressed.length;
-              totalUncompressed += bufferBytes;
-
-              if (onProgress) {
-                onProgress({
-                  blocksSent,
-                  bytesCompressed: compressed.length,
-                  bytesUncompressed: bufferBytes,
-                  rowsProcessed: totalRows,
-                });
-              }
-
-              // Reset buffer
-              buffer = [];
-              bufferBytes = 0;
-            }
-          }
+        if (onProgress) {
+          onProgress({
+            blocksSent,
+            bytesCompressed: compressed.length,
+            bytesUncompressed: bufferBytes,
+            rowsProcessed: totalRows,
+          });
         }
 
-        // Send remaining data
-        if (buffer.length > 0) {
-          const dataBytes = Buffer.from(buffer.join(""), "utf8");
-          const compressed = encodeBlock(dataBytes, method);
-          req.write(compressed);
-          blocksSent++;
-          totalCompressed += compressed.length;
-          totalUncompressed += bufferBytes;
-
-          if (onProgress) {
-            onProgress({
-              blocksSent,
-              bytesCompressed: compressed.length,
-              bytesUncompressed: bufferBytes,
-              rowsProcessed: totalRows,
-              complete: true,
-            });
-          }
-        }
-
-        req.end();
-      } catch (error: unknown) {
-        req.destroy();
-        reject(error);
+        buffer = [];
+        bufferBytes = 0;
       }
     }
+  }
 
-    processStream();
+  // Send remaining data
+  if (buffer.length > 0) {
+    const dataBytes = encoder.encode(buffer.join(""));
+    const compressed = encodeBlock(dataBytes, method);
+    blocks.push(compressed);
+    blocksSent++;
+    totalCompressed += compressed.length;
+    totalUncompressed += bufferBytes;
+
+    if (onProgress) {
+      onProgress({
+        blocksSent,
+        bytesCompressed: compressed.length,
+        bytesUncompressed: bufferBytes,
+        rowsProcessed: totalRows,
+        complete: true,
+      });
+    }
+  }
+
+  // Combine all blocks and send
+  const allData = concat(blocks);
+
+  const response = await fetch(url.toString(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+    },
+    body: allData,
   });
+
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`Insert failed: ${response.status} - ${body}`);
+  }
+
+  console.log(`Streamed ${blocksSent} blocks, ${totalRows} rows`);
+  console.log(
+    `Total compression ratio: ${(totalUncompressed / totalCompressed).toFixed(2)}x`,
+  );
+
+  return body;
 }
 
 interface QueryOptions {
@@ -255,194 +238,83 @@ async function* execQuery(
   };
 
   if (compressed) {
-    params.compress = "1"; // Request compressed response
+    params.compress = "1";
   }
 
   const url = buildReqUrl(baseUrl, params, options.auth);
 
-  const stream = await new Promise<http.IncomingMessage>((resolve, reject) => {
-    const req = http.request(
-      url,
-      {
-        method: "POST",
-      },
-      (res) => {
-        if (res.statusCode !== 200) {
-          // Error handling - need to buffer error response
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk) => chunks.push(chunk));
-          res.on("end", () => {
-            const body = Buffer.concat(chunks);
-            reject(
-              new Error(`Query failed: ${res.statusCode} - ${body.toString()}`),
-            );
-          });
-          return;
-        }
-
-        resolve(res);
-      },
-    );
-
-    req.on("error", reject);
-    req.write(query);
-    req.end();
+  const response = await fetch(url.toString(), {
+    method: "POST",
+    body: query,
   });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Query failed: ${response.status} - ${body}`);
+  }
+
+  if (!response.body) {
+    throw new Error("Response body is null");
+  }
+
+  const reader = response.body.getReader();
 
   if (!compressed) {
     // For non-compressed, stream data directly
-    for await (const chunk of stream) {
-      yield chunk.toString();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      yield decoder.decode(value, { stream: true });
     }
   } else {
     // For compressed, decompress blocks as they arrive
-    let buffer = Buffer.alloc(0);
+    let buffer = new Uint8Array(0);
 
-    for await (const chunk of stream) {
-      buffer = Buffer.concat([buffer, chunk]);
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (value) {
+        buffer = concat([buffer, value]);
+      }
 
       // Process complete blocks from buffer
       while (buffer.length >= 25) {
-        // Check if we have enough data for a complete block
         if (buffer.length < 17) break;
 
-        // Read compressed size to know block size
-        const compressedSize = buffer.readUInt32LE(17);
+        const compressedSize = readUInt32LE(buffer, 17);
         const blockSize = 16 + compressedSize;
 
         if (buffer.length < blockSize) break;
 
-        // Extract and decompress block
-        const block = buffer.slice(0, blockSize);
-        buffer = buffer.slice(blockSize);
+        const block = buffer.subarray(0, blockSize);
+        buffer = buffer.subarray(blockSize);
 
         try {
           const decompressed = decodeBlock(block);
-          yield decompressed.toString();
+          yield decoder.decode(decompressed);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           throw new Error(`Block decompression failed: ${message}`);
         }
       }
+
+      if (done) break;
     }
 
     // Process any remaining complete blocks
     while (buffer.length >= 25) {
       if (buffer.length < 17) break;
-      const compressedSize = buffer.readUInt32LE(17);
+      const compressedSize = readUInt32LE(buffer, 17);
       const blockSize = 16 + compressedSize;
       if (buffer.length < blockSize) break;
 
-      const block = buffer.slice(0, blockSize);
-      buffer = buffer.slice(blockSize);
+      const block = buffer.subarray(0, blockSize);
+      buffer = buffer.subarray(blockSize);
 
       const decompressed = decodeBlock(block);
-      yield decompressed.toString();
+      yield decoder.decode(decompressed);
     }
   }
 }
 
-async function main() {
-  const sessionId = "12345";
-
-  try {
-    // Create table (drop first to ensure clean state)
-    console.log("Creating table...");
-    for await (const chunk of execQuery(
-      "DROP TABLE IF EXISTS test",
-      sessionId,
-    )) {
-      // Just consume the stream
-    }
-    for await (const chunk of execQuery(
-      "CREATE TABLE test (hello String) ENGINE = Memory",
-      sessionId,
-    )) {
-      // Just consume the stream
-    }
-
-    // Test data
-    let data: Array<{ hello: string }> = [];
-    for (let i = 0; i < 10000; i++) {
-      data.push({ hello: "world" + i });
-    }
-
-    // Test LZ4 compression
-    console.log("\n=== Testing LZ4 Compression ===");
-    const insertQuery = "INSERT INTO test (hello) FORMAT JSONEachRow";
-    await insertCompressed(
-      insertQuery,
-      data.slice(0, 5000),
-      sessionId,
-      Method.LZ4,
-    );
-    console.log("LZ4 insert successful!");
-
-    // Test ZSTD compression
-    console.log("\n=== Testing ZSTD Compression ===");
-    await insertCompressed(
-      insertQuery,
-      data.slice(5000),
-      sessionId,
-      Method.ZSTD,
-    );
-    console.log("ZSTD insert successful!");
-
-    // Query to verify
-    console.log("\nQuerying to verify inserts...");
-    let countResult = "";
-    for await (const chunk of execQuery(
-      "SELECT count(*) as cnt FROM test FORMAT JSON",
-      sessionId,
-    )) {
-      countResult += chunk;
-    }
-    const countData = JSON.parse(countResult);
-    console.log("Total rows inserted:", countData.data[0].cnt);
-
-    // Test compressed response
-    console.log("\nQuerying with compressed response...");
-    let compressedResult = "";
-    for await (const chunk of execQuery(
-      "SELECT count(*) as cnt FROM test FORMAT JSON",
-      sessionId,
-      true,
-    )) {
-      compressedResult += chunk;
-    }
-    const compressedData = JSON.parse(compressedResult);
-    console.log(
-      "Total rows (from compressed response):",
-      compressedData.data[0].cnt,
-    );
-
-    let selectResult = "";
-    for await (const chunk of execQuery(
-      "SELECT * FROM test FORMAT JSON",
-      sessionId,
-      true,
-    )) {
-      selectResult += chunk;
-    }
-    const selectData = JSON.parse(selectResult);
-    const matches = selectData.data.every(
-      (row: any, index: number) => row.hello === "world" + index,
-    );
-    console.log("rows match expected:", matches);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error("Error:", message);
-  }
-}
-
-// Export functions for use in tests
-export { insertCompressed, execQuery, buildReqUrl };
-
-// Only run main if this is the main module
-const isDirectExecution =
-  process.argv[1] !== undefined &&
-  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-
-if (isDirectExecution) {
-  void main();
-}
+export { init, insertCompressed, execQuery, buildReqUrl };

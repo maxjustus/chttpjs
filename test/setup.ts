@@ -1,11 +1,10 @@
-import { ClickHouseContainer } from "@testcontainers/clickhouse";
+import { ClickHouseContainer, StartedClickHouseContainer } from "@testcontainers/clickhouse";
 
-let container: ClickHouseContainer | undefined;
+let container: StartedClickHouseContainer | undefined;
 
 export async function startClickHouse() {
   console.log("Starting ClickHouse container...");
 
-  // Configure ClickHouse with explicit user/password
   container = await new ClickHouseContainer(
     "clickhouse/clickhouse-server:latest",
   )

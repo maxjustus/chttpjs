@@ -2,16 +2,17 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { insertCompressed, execQuery } from "../client.ts";
+import { init, insertCompressed, execQuery } from "../client.ts";
 import { Method } from "../compression.ts";
 
 describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
-  let clickhouse;
-  let baseUrl;
-  let auth;
+  let clickhouse: Awaited<ReturnType<typeof startClickHouse>>;
+  let baseUrl: string;
+  let auth: { username: string; password: string };
   const sessionId = Date.now().toString();
 
   before(async () => {
+    await init();
     clickhouse = await startClickHouse();
     baseUrl = clickhouse.url + "/";
     auth = { username: clickhouse.username, password: clickhouse.password };
@@ -380,7 +381,8 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
           // should not reach here
         }
         assert.fail("Should have thrown an error");
-      } catch (error) {
+      } catch (err) {
+        const error = err as Error;
         assert.ok(
           error.message.includes("UNKNOWN_TABLE") ||
             error.message.includes("doesn't exist"),
@@ -411,7 +413,8 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
           { baseUrl, auth },
         );
         assert.fail("Should have thrown an error");
-      } catch (error) {
+      } catch (err) {
+        const error = err as Error;
         assert.ok(
           error.message.includes("TYPE_MISMATCH") ||
             error.message.includes("Cannot parse"),

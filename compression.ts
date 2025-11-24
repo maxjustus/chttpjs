@@ -1,8 +1,48 @@
 import { createChCity } from "./ch-city.js";
-import { compressSync, uncompressSync } from "lz4-napi";
-import * as zstd from "zstd-napi";
+import { compress as lz4CompressRaw, decompress as lz4DecompressRaw } from "@nick/lz4";
+import { init as initZstd, compress as zstdCompressRaw, decompress as zstdDecompressRaw } from "@bokuweb/zstd-wasm";
 
-const chCity = await createChCity();
+// Module state - initialized by init()
+let chCity: Awaited<ReturnType<typeof createChCity>>;
+let initialized = false;
+
+export async function init(): Promise<void> {
+  if (initialized) return;
+  await initZstd();
+  chCity = await createChCity();
+  initialized = true;
+}
+
+// Uint8Array helpers
+function concat(arrays: Uint8Array[]): Uint8Array {
+  const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const arr of arrays) {
+    result.set(arr, offset);
+    offset += arr.length;
+  }
+  return result;
+}
+
+function readUInt32LE(arr: Uint8Array, offset: number): number {
+  return arr[offset] | (arr[offset + 1] << 8) | (arr[offset + 2] << 16) | (arr[offset + 3] << 24) >>> 0;
+}
+
+function writeUInt32LE(arr: Uint8Array, value: number, offset: number): void {
+  arr[offset] = value & 0xff;
+  arr[offset + 1] = (value >> 8) & 0xff;
+  arr[offset + 2] = (value >> 16) & 0xff;
+  arr[offset + 3] = (value >> 24) & 0xff;
+}
+
+function equals(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 
 const CHECKSUM_SIZE = 16;
 const HEADER_SIZE = 9;
@@ -18,38 +58,38 @@ export const Method = {
 
 export type MethodCode = (typeof Method)[keyof typeof Method];
 
-export function cityHash128LE(bytes: Buffer): Buffer {
-  const hash = Buffer.from(chCity.cityhash102(bytes));
+export function cityHash128LE(bytes: Uint8Array): Uint8Array {
+  const hash = chCity.cityhash102(bytes);
   // Swap hi/lo 8-byte halves to match ClickHouse's expected byte order
-  return Buffer.concat([hash.subarray(8, 16), hash.subarray(0, 8)]);
+  return concat([hash.subarray(8, 16), hash.subarray(0, 8)]);
 }
 
-function lz4Compress(raw: Buffer): Buffer {
-  // lz4-napi prepends 4-byte uncompressed size, but ClickHouse expects raw block data
-  const withPrefix = compressSync(raw);
+function lz4Compress(raw: Uint8Array): Uint8Array {
+  // @nick/lz4 prepends 4-byte uncompressed size, but ClickHouse expects raw block data
+  const withPrefix = lz4CompressRaw(raw);
   return withPrefix.subarray(4);
 }
 
-function lz4Decompress(compressed: Buffer, uncompressedSize: number): Buffer {
-  // lz4-napi expects 4-byte uncompressed size prefix
-  const prefix = Buffer.alloc(4);
-  prefix.writeUInt32LE(uncompressedSize, 0);
-  return uncompressSync(Buffer.concat([prefix, compressed]));
+function lz4Decompress(compressed: Uint8Array, uncompressedSize: number): Uint8Array {
+  // @nick/lz4 expects 4-byte uncompressed size prefix
+  const prefix = new Uint8Array(4);
+  writeUInt32LE(prefix, uncompressedSize, 0);
+  return lz4DecompressRaw(concat([prefix, compressed]));
 }
 
-function zstdCompress(raw: Buffer, level = 3): Buffer {
-  return zstd.compress(raw, level);
+function zstdCompress(raw: Uint8Array, level = 3): Uint8Array {
+  return zstdCompressRaw(raw, level);
 }
 
-function zstdDecompress(compressed: Buffer): Buffer {
-  return zstd.decompress(compressed);
+function zstdDecompress(compressed: Uint8Array): Uint8Array {
+  return zstdDecompressRaw(compressed);
 }
 
 export function encodeBlock(
-  raw: Buffer,
+  raw: Uint8Array,
   mode: MethodCode = Method.LZ4,
-): Buffer {
-  let compressed: Buffer;
+): Uint8Array {
+  let compressed: Uint8Array;
 
   switch (mode) {
     case Method.LZ4:
@@ -61,23 +101,25 @@ export function encodeBlock(
     case Method.None:
       compressed = raw;
       break;
-    default:
-      throw new Error(`Unsupported compression method 0x${mode.toString(16)}`);
+    default: {
+      const _exhaustive: never = mode;
+      throw new Error(`Unsupported compression method 0x${(mode as number).toString(16)}`);
+    }
   }
 
-  const metadata = Buffer.alloc(HEADER_SIZE);
+  const metadata = new Uint8Array(HEADER_SIZE);
   metadata[MAGIC_OFFSET] = mode;
-  metadata.writeUInt32LE(HEADER_SIZE + compressed.length, COMPRESSED_SIZE_OFFSET);
-  metadata.writeUInt32LE(raw.length, UNCOMPRESSED_SIZE_OFFSET);
+  writeUInt32LE(metadata, HEADER_SIZE + compressed.length, COMPRESSED_SIZE_OFFSET);
+  writeUInt32LE(metadata, raw.length, UNCOMPRESSED_SIZE_OFFSET);
 
-  const checksum = cityHash128LE(Buffer.concat([metadata, compressed]));
-  return Buffer.concat([checksum, metadata, compressed]);
+  const checksum = cityHash128LE(concat([metadata, compressed]));
+  return concat([checksum, metadata, compressed]);
 }
 
 export function decodeBlock(
-  block: Buffer,
+  block: Uint8Array,
   skipChecksumVerification = false,
-): Buffer {
+): Uint8Array {
   if (block.length < CHECKSUM_SIZE + HEADER_SIZE) {
     throw new Error("block too small");
   }
@@ -87,15 +129,15 @@ export function decodeBlock(
   const compressed = block.subarray(CHECKSUM_SIZE + HEADER_SIZE);
 
   if (!skipChecksumVerification) {
-    const expected = cityHash128LE(Buffer.concat([metadata, compressed]));
-    if (!checksum.equals(expected)) {
+    const expected = cityHash128LE(concat([metadata, compressed]));
+    if (!equals(checksum, expected)) {
       throw new Error("checksum mismatch");
     }
   }
 
   const mode = metadata[MAGIC_OFFSET] as MethodCode;
-  const compressedSize = metadata.readUInt32LE(COMPRESSED_SIZE_OFFSET);
-  const uncompressedSize = metadata.readUInt32LE(UNCOMPRESSED_SIZE_OFFSET);
+  const compressedSize = readUInt32LE(metadata, COMPRESSED_SIZE_OFFSET);
+  const uncompressedSize = readUInt32LE(metadata, UNCOMPRESSED_SIZE_OFFSET);
 
   if (compressedSize !== HEADER_SIZE + compressed.length) {
     throw new Error(
@@ -110,23 +152,23 @@ export function decodeBlock(
       return lz4Decompress(compressed, uncompressedSize);
     case Method.ZSTD:
       return zstdDecompress(compressed);
-    default:
-      throw new Error(`Unsupported compression method 0x${mode.toString(16)}`);
+    default: {
+      const _exhaustive: never = mode;
+      throw new Error(`Unsupported compression method 0x${(mode as number).toString(16)}`);
+    }
   }
 }
 
 export function decodeBlocks(
-  data: Buffer,
+  data: Uint8Array,
   skipChecksumVerification = false,
-): Buffer {
-  const blocks: Buffer[] = [];
+): Uint8Array {
+  const blocks: Uint8Array[] = [];
   let offset = 0;
 
   while (offset + CHECKSUM_SIZE + HEADER_SIZE <= data.length) {
     const metadataOffset = offset + CHECKSUM_SIZE;
-    const compressedSize = data.readUInt32LE(
-      metadataOffset + COMPRESSED_SIZE_OFFSET,
-    );
+    const compressedSize = readUInt32LE(data, metadataOffset + COMPRESSED_SIZE_OFFSET);
     const blockSize = CHECKSUM_SIZE + compressedSize;
 
     if (offset + blockSize > data.length) {
@@ -140,5 +182,5 @@ export function decodeBlocks(
     offset += blockSize;
   }
 
-  return Buffer.concat(blocks);
+  return concat(blocks);
 }
