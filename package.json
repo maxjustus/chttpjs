@@ -13,11 +13,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "bling-hashes": "^2.0.0",
-    "farmhash": "^4.0.2",
-    "hash-wasm": "^4.12.0",
-    "lz4": "^0.6.5",
-    "node-int64": "^0.4.0",
+    "lz4-napi": "^2.9.0",
     "zstd-napi": "^0.0.12"
   },
   "devDependencies": {

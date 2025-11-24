@@ -1,18 +1,19 @@
 // Type declarations for third-party modules
 
-declare module "bling-hashes" {
-  interface City128Value {
-    toBuffers(): [Buffer, Buffer];
+declare module "./ch-city.js" {
+  interface ChCity {
+    cityhash64(data: string | Uint8Array | ArrayBuffer): Uint8Array;
+    cityhash64Hex(data: string | Uint8Array | ArrayBuffer): string;
+    cityhash102(data: string | Uint8Array | ArrayBuffer): Uint8Array;
+    cityhash102Hex(data: string | Uint8Array | ArrayBuffer): string;
+    digest64Length(): number;
+    digestLength(): number;
+    version(): string;
   }
-  
-  export function city128(data: Buffer): City128Value;
+
+  export function createChCity(): Promise<ChCity>;
 }
 
-declare module "lz4" {
-  export function encodeBound(size: number): number;
-  export function encodeBlock(src: Buffer, dst: Buffer): number;
-  export function decodeBlock(src: Buffer, dst: Buffer): number;
-}
 
 declare module "zstd-napi" {
   export function compress(data: Buffer, level?: number): Buffer;

@@ -1,6 +1,8 @@
-import { city128 } from "bling-hashes";
-import * as lz4 from "lz4";
+import { createChCity } from "./ch-city.js";
+import { compressSync, uncompressSync } from "lz4-napi";
 import * as zstd from "zstd-napi";
+
+const chCity = await createChCity();
 
 const CHECKSUM_SIZE = 16;
 const HEADER_SIZE = 9;
@@ -17,22 +19,22 @@ export const Method = {
 export type MethodCode = (typeof Method)[keyof typeof Method];
 
 export function cityHash128LE(bytes: Buffer): Buffer {
-  const hashObj = city128(bytes);
-  const [loBuf, hiBuf] = hashObj.toBuffers();
-  return Buffer.concat([hiBuf, loBuf]);
+  const hash = Buffer.from(chCity.cityhash102(bytes));
+  // Swap hi/lo 8-byte halves to match ClickHouse's expected byte order
+  return Buffer.concat([hash.subarray(8, 16), hash.subarray(0, 8)]);
 }
 
 function lz4Compress(raw: Buffer): Buffer {
-  const maxSize = lz4.encodeBound(raw.length);
-  const compressed = Buffer.alloc(maxSize);
-  const compressedSize = lz4.encodeBlock(raw, compressed);
-  return compressed.subarray(0, compressedSize);
+  // lz4-napi prepends 4-byte uncompressed size, but ClickHouse expects raw block data
+  const withPrefix = compressSync(raw);
+  return withPrefix.subarray(4);
 }
 
 function lz4Decompress(compressed: Buffer, uncompressedSize: number): Buffer {
-  const output = Buffer.alloc(uncompressedSize);
-  lz4.decodeBlock(compressed, output);
-  return output;
+  // lz4-napi expects 4-byte uncompressed size prefix
+  const prefix = Buffer.alloc(4);
+  prefix.writeUInt32LE(uncompressedSize, 0);
+  return uncompressSync(Buffer.concat([prefix, compressed]));
 }
 
 function zstdCompress(raw: Buffer, level = 3): Buffer {

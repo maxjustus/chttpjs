@@ -108,4 +108,3 @@ ClickHouse uses a custom compression format:
 - 4-byte uncompressed size
 - Raw compressed data
 
-The client currently bypasses checksum verification using `http_native_compression_disable_checksumming_on_decompress=1` due to CityHash version incompatibility. Proper CityHash128 implementation will be added in a future update.

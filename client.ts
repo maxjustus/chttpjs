@@ -90,7 +90,6 @@ async function insertCompressed(
         session_id: sessionId,
         query: query,
         decompress: "1",
-        http_native_compression_disable_checksumming_on_decompress: "1",
       },
       options.auth,
     );
@@ -131,7 +130,6 @@ async function insertCompressed(
       session_id: sessionId,
       query: query,
       decompress: "1",
-      http_native_compression_disable_checksumming_on_decompress: "1",
     },
     options.auth,
   );
@@ -319,7 +317,7 @@ async function* execQuery(
         buffer = buffer.slice(blockSize);
 
         try {
-          const decompressed = decodeBlock(block, true);
+          const decompressed = decodeBlock(block);
           yield decompressed.toString();
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
@@ -338,7 +336,7 @@ async function* execQuery(
       const block = buffer.slice(0, blockSize);
       buffer = buffer.slice(blockSize);
 
-      const decompressed = decodeBlock(block, true);
+      const decompressed = decodeBlock(block);
       yield decompressed.toString();
     }
   }
