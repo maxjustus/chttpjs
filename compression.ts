@@ -1,14 +1,35 @@
 import { createChCity } from "./ch-city.js";
 import { compress as lz4CompressRaw, decompress as lz4DecompressRaw } from "@nick/lz4";
-import { init as initZstd, compress as zstdCompressRaw, decompress as zstdDecompressRaw } from "@bokuweb/zstd-wasm";
+
+// Build-time constant set by esbuild --define
+// When bundled: replaced with true/false literal, enabling dead-code elimination
+// When unbundled (dev): undefined, so we default to true
+declare const BUILD_WITH_ZSTD: boolean | undefined;
+
+// Conditional ZSTD imports - tree-shaken when BUILD_WITH_ZSTD=false
+let zstdCompressFn: ((source: Uint8Array, level: number) => Uint8Array) | undefined;
+let zstdDecompressFn: ((source: Uint8Array) => Uint8Array) | undefined;
 
 // Module state - initialized by init()
 let chCity: Awaited<ReturnType<typeof createChCity>>;
 let initialized = false;
 
+async function initZstd(): Promise<void> {
+  const zstd = await import("@dweb-browser/zstd-wasm");
+  const getZstdWasm = (await import("@dweb-browser/zstd-wasm/zstd_wasm_bg_wasm")).default;
+  zstd.initSync({ module: getZstdWasm() });
+  zstdCompressFn = zstd.compress;
+  zstdDecompressFn = zstd.decompress;
+}
+
 export async function init(): Promise<void> {
   if (initialized) return;
-  await initZstd();
+
+  // Use BUILD_WITH_ZSTD directly for tree-shaking, fallback to true for dev
+  if (typeof BUILD_WITH_ZSTD === "undefined" || BUILD_WITH_ZSTD) {
+    await initZstd();
+  }
+
   chCity = await createChCity();
   initialized = true;
 }
@@ -78,11 +99,17 @@ function lz4Decompress(compressed: Uint8Array, uncompressedSize: number): Uint8A
 }
 
 function zstdCompress(raw: Uint8Array, level = 3): Uint8Array {
-  return zstdCompressRaw(raw, level);
+  if (!zstdCompressFn) {
+    throw new Error("ZSTD compression not available in this build variant");
+  }
+  return zstdCompressFn(raw, level);
 }
 
 function zstdDecompress(compressed: Uint8Array): Uint8Array {
-  return zstdDecompressRaw(compressed);
+  if (!zstdDecompressFn) {
+    throw new Error("ZSTD decompression not available in this build variant");
+  }
+  return zstdDecompressFn(compressed);
 }
 
 export function encodeBlock(

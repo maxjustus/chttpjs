@@ -1,3 +1,4 @@
 node_modules
 clickhouse-rs
 .claude/
+dist/

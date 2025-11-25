@@ -4,6 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "build": "npm run build:full && npm run build:lz4",
+    "build:full": "esbuild index.ts --bundle --format=esm --outfile=dist/chttp.js --platform=browser --target=es2022 --minify --define:BUILD_WITH_ZSTD=true",
+    "build:lz4": "esbuild index.ts --bundle --format=esm --outfile=dist/chttp-lz4.js --platform=browser --target=es2022 --minify --define:BUILD_WITH_ZSTD=false",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "test:compression": "node --experimental-strip-types --test test/compression.test.ts",
     "test:integration": "node --experimental-strip-types --test test/integration.test.ts"
@@ -13,11 +16,12 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "@bokuweb/zstd-wasm": "^0.0.27",
+    "@dweb-browser/zstd-wasm": "^1.2.1",
     "@nick/lz4": "npm:@jsr/nick__lz4@^0.3.4"
   },
   "devDependencies": {
     "@testcontainers/clickhouse": "^11.5.1",
+    "esbuild": "^0.27.0",
     "testcontainers": "^11.5.1"
   }
 }
