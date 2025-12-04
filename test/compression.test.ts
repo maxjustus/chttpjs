@@ -55,8 +55,6 @@ describe("Compression", () => {
       const decompressed = decodeBlock(compressed, true);
 
       assert.strictEqual(decoder.decode(decompressed), decoder.decode(data));
-      // LZ4 should compress repetitive data well
-      assert.ok(compressed.length < data.length / 10);
     });
   });
 

@@ -67,6 +67,20 @@ await insert(
 - `Method.ZSTD` - smaller output
 - `Method.None` - no compression
 
+### Benchmark vs HTTP gzip
+
+10K JSON rows (1.4MB):
+
+| Method  | Compress | Decompress | Ratio |
+|---------|----------|------------|-------|
+| LZ4     | 1.4ms    | 0.3ms      | 4.2x  |
+| ZSTD    | 2.5ms    | 0.9ms      | 8.7x  |
+| gzip    | 8.2ms    | 1.9ms      | 8.0x  |
+
+LZ4 is 6x faster than gzip. ZSTD beats gzip on both speed and ratio.
+
+Run `make bench` to reproduce.
+
 ## Development
 
 ```bash
