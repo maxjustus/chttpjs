@@ -3,7 +3,7 @@ import {
   encodeBlock,
   decodeBlock,
   Method,
-  MethodCode,
+  type MethodCode,
 } from "./compression.ts";
 
 export type Compression = "lz4" | "zstd" | "none";
