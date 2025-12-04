@@ -30,6 +30,11 @@ interface AuthConfig {
   password?: string;
 }
 
+/**
+ * Build a ClickHouse HTTP URL with query parameters.
+ * @param params - Query params including ClickHouse settings (max_execution_time, etc.)
+ *   See: https://clickhouse.com/docs/en/operations/settings/settings
+ */
 function buildReqUrl(baseUrl: string, params: Record<string, string>, auth?: AuthConfig): URL {
   const url = new URL(baseUrl);
   Object.entries(params).forEach(([key, value]) => {
@@ -56,13 +61,15 @@ interface ProgressInfo {
 
 interface InsertOptions {
   baseUrl?: string;
+  /** Size in bytes for the compression buffer (default: 256KB) */
   bufferSize?: number;
+  /** Byte threshold to trigger compression flush (default: bufferSize - 2048) */
   threshold?: number;
   onProgress?: (progress: ProgressInfo) => void;
   auth?: AuthConfig;
 }
 
-async function insertCompressed(
+async function insert(
   query: string,
   data: any[] | AsyncIterable<any> | Iterable<any>,
   sessionId: string,
@@ -225,7 +232,7 @@ interface QueryOptions {
   auth?: AuthConfig;
 }
 
-async function* execQuery(
+async function* query(
   query: string,
   sessionId: string,
   compressed: boolean = false,
@@ -317,4 +324,4 @@ async function* execQuery(
   }
 }
 
-export { init, insertCompressed, execQuery, buildReqUrl };
+export { init, insert, query, buildReqUrl };

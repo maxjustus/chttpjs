@@ -2,7 +2,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { init, insertCompressed, execQuery } from "../client.ts";
+import { init, insert, query } from "../client.ts";
 import { Method } from "../compression.ts";
 
 describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
@@ -25,7 +25,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Basic operations", () => {
     it("should create and query a table", async () => {
       // Create table
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_basic (id UInt32, name String) ENGINE = Memory",
         sessionId,
         false,
@@ -41,7 +41,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         { id: 3, name: "Charlie" },
       ];
 
-      await insertCompressed(
+      await insert(
         "INSERT INTO test_basic FORMAT JSONEachRow",
         data,
         sessionId,
@@ -51,7 +51,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       // Query data
       let result = "";
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "SELECT * FROM test_basic ORDER BY id FORMAT JSON",
         sessionId,
         false,
@@ -66,7 +66,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[2].name, "Charlie");
 
       // Clean up
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "DROP TABLE test_basic",
         sessionId,
         false,
@@ -80,7 +80,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Compression methods", () => {
     it("should insert with LZ4 compression", async () => {
       // Create table
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_lz4 (value String) ENGINE = Memory",
         sessionId,
         false,
@@ -93,7 +93,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         value: `test_${i}`,
       }));
 
-      await insertCompressed(
+      await insert(
         "INSERT INTO test_lz4 FORMAT JSONEachRow",
         data,
         sessionId,
@@ -103,7 +103,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       // Verify count
       let result = "";
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "SELECT count(*) as cnt FROM test_lz4 FORMAT JSON",
         sessionId,
         false,
@@ -116,7 +116,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(Number(parsed.data[0].cnt), 1000);
 
       // Clean up
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "DROP TABLE test_lz4",
         sessionId,
         false,
@@ -128,7 +128,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
     it("should insert with ZSTD compression", async () => {
       // Create table
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_zstd (value String) ENGINE = Memory",
         sessionId,
         false,
@@ -141,7 +141,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         value: `test_${i}`,
       }));
 
-      await insertCompressed(
+      await insert(
         "INSERT INTO test_zstd FORMAT JSONEachRow",
         data,
         sessionId,
@@ -151,7 +151,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       // Verify count
       let result = "";
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "SELECT count(*) as cnt FROM test_zstd FORMAT JSON",
         sessionId,
         false,
@@ -164,7 +164,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(Number(parsed.data[0].cnt), 1000);
 
       // Clean up
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "DROP TABLE test_zstd",
         sessionId,
         false,
@@ -178,7 +178,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Streaming inserts with generators", () => {
     it("should handle generator that yields batches", async () => {
       // Create table
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_generator (id UInt32, value String) ENGINE = Memory",
         sessionId,
         false,
@@ -202,7 +202,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       }
 
       let progressUpdates = 0;
-      await insertCompressed(
+      await insert(
         "INSERT INTO test_generator FORMAT JSONEachRow",
         generateBatches(),
         sessionId,
@@ -221,7 +221,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       // Verify count
       let result = "";
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "SELECT count(*) as cnt FROM test_generator FORMAT JSON",
         sessionId,
         false,
@@ -234,7 +234,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(Number(parsed.data[0].cnt), 1000);
 
       // Clean up
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "DROP TABLE test_generator",
         sessionId,
         false,
@@ -246,7 +246,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
     it("should handle generator that yields single rows", async () => {
       // Create table
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_single (id UInt32) ENGINE = Memory",
         sessionId,
         false,
@@ -262,7 +262,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         }
       }
 
-      await insertCompressed(
+      await insert(
         "INSERT INTO test_single FORMAT JSONEachRow",
         generateSingle(),
         sessionId,
@@ -272,7 +272,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       // Verify
       let result = "";
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "SELECT count(*) as cnt FROM test_single FORMAT JSON",
         sessionId,
         false,
@@ -285,7 +285,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(Number(parsed.data[0].cnt), 500);
 
       // Clean up
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "DROP TABLE test_single",
         sessionId,
         false,
@@ -299,7 +299,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Streaming queries with compression", () => {
     it("should stream compressed query results", async () => {
       // Setup: Create table with data
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_stream (id UInt32) ENGINE = Memory",
         sessionId,
         false,
@@ -310,7 +310,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       // Insert test data
       const data = Array.from({ length: 10000 }, (_, i) => ({ id: i }));
-      await insertCompressed(
+      await insert(
         "INSERT INTO test_stream FORMAT JSONEachRow",
         data,
         sessionId,
@@ -322,7 +322,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       let chunks = 0;
       let totalRows = 0;
 
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "SELECT * FROM test_stream FORMAT JSONEachRow",
         sessionId,
         true, // compressed
@@ -337,7 +337,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(totalRows, 10000);
 
       // Clean up
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "DROP TABLE test_stream",
         sessionId,
         false,
@@ -352,7 +352,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       let chunks = 0;
       let totalRows = 0;
 
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "SELECT number FROM system.numbers LIMIT 100000 FORMAT CSV",
         sessionId,
         true, // compressed
@@ -372,7 +372,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Error handling", () => {
     it("should handle invalid queries", async () => {
       try {
-        for await (const chunk of execQuery(
+        for await (const chunk of query(
           "SELECT * FROM non_existent_table",
           sessionId,
           false,
@@ -392,7 +392,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
     it("should handle insert errors", async () => {
       // Create table with specific schema
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_error (id UInt32) ENGINE = Memory",
         sessionId,
         false,
@@ -405,7 +405,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       const invalidData = [{ id: "not_a_number" }];
 
       try {
-        await insertCompressed(
+        await insert(
           "INSERT INTO test_error FORMAT JSONEachRow",
           invalidData,
           sessionId,
@@ -422,7 +422,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       }
 
       // Clean up
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "DROP TABLE test_error",
         sessionId,
         false,
@@ -445,7 +445,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       let blocksDetected = 0;
       let lastChunkSize = 0;
 
-      for await (const chunk of execQuery(
+      for await (const chunk of query(
         "SELECT * FROM system.numbers LIMIT 1000000",
         sessionId,
         true, // compressed

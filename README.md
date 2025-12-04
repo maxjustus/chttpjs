@@ -16,7 +16,7 @@ import { ... } from "@maxjustus/chttp/lz4";
 ## Quick Start
 
 ```ts
-import { insertCompressed, execQuery, Method } from "@maxjustus/chttp";
+import { insert, query, Method } from "@maxjustus/chttp";
 
 const config = {
   baseUrl: "http://localhost:8123/",
@@ -24,7 +24,7 @@ const config = {
 };
 
 // Insert with compression
-await insertCompressed(
+await insert(
   "INSERT INTO table FORMAT JSONEachRow",
   [{ id: 1, name: "test" }],
   "session123",
@@ -33,7 +33,7 @@ await insertCompressed(
 );
 
 // Query with compressed response
-for await (const chunk of execQuery(
+for await (const chunk of query(
   "SELECT * FROM table FORMAT JSON",
   "session123",
   true,
@@ -52,7 +52,7 @@ async function* generateData() {
   }
 }
 
-await insertCompressed(
+await insert(
   "INSERT INTO large_table FORMAT JSONEachRow",
   generateData(),
   "session123",
