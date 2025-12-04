@@ -32,8 +32,14 @@
     "ch-city-wasm": "^0.1.1"
   },
   "devDependencies": {
+    "@bokuweb/zstd-wasm": "^0.0.27",
+    "@hpcc-js/wasm-zstd": "^1.8.0",
+    "@lichtblick/wasm-zstd": "^1.0.0",
+    "@oneidentity/zstd-js": "^1.0.3",
     "@testcontainers/clickhouse": "^11.5.1",
     "esbuild": "^0.27.0",
-    "testcontainers": "^11.5.1"
+    "lz4-napi": "^2.9.0",
+    "testcontainers": "^11.5.1",
+    "zstd-napi": "^0.0.12"
   }
 }

@@ -71,13 +71,14 @@ await insert(
 
 10K JSON rows (1.4MB):
 
-| Method  | Compress | Decompress | Ratio |
-|---------|----------|------------|-------|
-| LZ4     | 1.4ms    | 0.3ms      | 4.2x  |
-| ZSTD    | 2.5ms    | 0.9ms      | 8.7x  |
-| gzip    | 8.2ms    | 1.9ms      | 8.0x  |
+| Method     | Compress | Decompress | Ratio |
+|------------|----------|------------|-------|
+| LZ4 wasm   | 1.3ms    | 0.4ms      | 4.3x  |
+| LZ4 native | 1.2ms    | 0.8ms      | 4.1x  |
+| ZSTD       | 2.5ms    | 0.9ms      | 8.7x  |
+| gzip       | 7.9ms    | 2.0ms      | 8.0x  |
 
-LZ4 is 6x faster than gzip. ZSTD beats gzip on both speed and ratio.
+LZ4 is 6x faster than gzip. ZSTD beats gzip on both speed and ratio. WASM LZ4 matches native performance.
 
 Run `make bench` to reproduce.
 
