@@ -5,13 +5,18 @@ ClickHouse HTTP client with native compression (LZ4/ZSTD).
 ## Install
 
 ```bash
-npm install
+npm install @maxjustus/chttp
+```
+
+For smaller bundle (LZ4 only, no ZSTD):
+```ts
+import { ... } from "@maxjustus/chttp/lz4";
 ```
 
 ## Quick Start
 
 ```ts
-import { insertCompressed, execQuery, Method } from "./index.ts";
+import { insertCompressed, execQuery, Method } from "@maxjustus/chttp";
 
 const config = {
   baseUrl: "http://localhost:8123/",

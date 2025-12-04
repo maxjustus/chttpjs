@@ -1,4 +1,4 @@
-.PHONY: build build-full build-lz4 test
+.PHONY: build build-full build-lz4 test publish
 
 build: build-full build-lz4
 
@@ -10,3 +10,6 @@ build-lz4:
 
 test:
 	npm test
+
+publish:
+	npm publish --access=public
