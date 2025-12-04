@@ -63,24 +63,34 @@ await insert(
 
 ## Compression
 
-- `Method.LZ4` - fast (default)
-- `Method.ZSTD` - smaller output
+- `Method.LZ4` - fast, WASM (default)
+- `Method.ZSTD` - smaller output, native in Node.js with WASM fallback
 - `Method.None` - no compression
 
-### Benchmark vs HTTP gzip
+ZSTD automatically uses native bindings (`zstd-napi`) in Node.js, falling back to WASM (`@bokuweb/zstd-wasm`) in browsers or if native fails to load. Native is ~2x faster than WASM. The native bindings are an optional dependency and install automatically on supported platforms.
 
-10K JSON rows (1.4MB):
+### Benchmark
 
-| Method     | Compress | Decompress | Ratio |
-|------------|----------|------------|-------|
-| LZ4 wasm   | 1.3ms    | 0.4ms      | 4.3x  |
-| LZ4 native | 1.2ms    | 0.8ms      | 4.1x  |
-| ZSTD       | 2.5ms    | 0.9ms      | 8.7x  |
-| gzip       | 7.9ms    | 2.0ms      | 8.0x  |
+Compression ratio by data type:
 
-LZ4 is 6x faster than gzip. ZSTD beats gzip on both speed and ratio. WASM LZ4 matches native performance.
+| Data Type      | LZ4   | ZSTD     | gzip   |
+|----------------|-------|----------|--------|
+| Random bytes   | 1.0x  | 1.0x     | 1.0x   |
+| Repeated       | 250x  | 14,706x  | 963x   |
+| JSON (varied)  | 4.3x  | 9.0x     | 8.0x   |
+| UUIDs          | 1.0x  | 1.9x     | 1.7x   |
+| Log lines      | 5.5x  | 17.6x    | 11.5x  |
 
-Run `make bench` to reproduce.
+Speed (686KB varied JSON):
+
+| Method     | Compress | Decompress |
+|------------|----------|------------|
+| LZ4 wasm   | 0.6ms    | 0.2ms      |
+| ZSTD napi  | 0.6ms    | 0.3ms      |
+| ZSTD wasm  | 1.4ms    | 0.4ms      |
+| gzip       | 4.2ms    | 0.9ms      |
+
+ZSTD with native bindings (auto-detected in Node.js) matches LZ4 speed with 2x better compression. Run `npm run bench` to reproduce.
 
 ## Development
 

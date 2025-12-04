@@ -1,23 +1,65 @@
-import { gzip, gunzip, deflate, inflate } from "node:zlib";
+import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { compressFrame, decompressFrame } from "lz4-napi";
 import { compress as zstdNativeCompress, decompress as zstdNativeDecompress } from "zstd-napi";
 import * as bokuweb from "@bokuweb/zstd-wasm";
-import * as lichtblick from "@lichtblick/wasm-zstd";
-import { Zstd as HpccZstd } from "@hpcc-js/wasm-zstd";
-import { init, encodeBlock, decodeBlock, Method } from "../compression.ts";
+import { init, encodeBlock, decodeBlock, Method, usingNativeZstd } from "../compression.ts";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
-const deflateAsync = promisify(deflate);
-const inflateAsync = promisify(inflate);
 
 const encoder = new TextEncoder();
 
-function generateTestData(rows: number): Uint8Array {
-  const data = [];
-  for (let i = 0; i < rows; i++) {
-    data.push(JSON.stringify({
+interface TestDataSet {
+  name: string;
+  data: Uint8Array;
+  description: string;
+}
+
+function generateTestDataSets(): TestDataSet[] {
+  const datasets: TestDataSet[] = [];
+
+  // 1. High entropy - random bytes (incompressible)
+  const randomBytes = new Uint8Array(500_000);
+  // getRandomValues has 64KB limit, fill in chunks
+  for (let i = 0; i < randomBytes.length; i += 65536) {
+    const chunk = randomBytes.subarray(i, Math.min(i + 65536, randomBytes.length));
+    crypto.getRandomValues(chunk);
+  }
+  datasets.push({
+    name: "random",
+    data: randomBytes,
+    description: "Random bytes (high entropy)",
+  });
+
+  // 2. Very low entropy - repeated pattern
+  const repeated = new Uint8Array(500_000);
+  const pattern = encoder.encode("AAAAAAAAAA");
+  for (let i = 0; i < repeated.length; i++) {
+    repeated[i] = pattern[i % pattern.length];
+  }
+  datasets.push({
+    name: "repeated",
+    data: repeated,
+    description: "Repeated 'A' pattern (very low entropy)",
+  });
+
+  // 3. Low entropy - repeated JSON objects
+  const repeatedJson: string[] = [];
+  const sameObj = JSON.stringify({ id: 1, name: "test", value: 100 });
+  for (let i = 0; i < 5000; i++) {
+    repeatedJson.push(sameObj);
+  }
+  datasets.push({
+    name: "json-repeat",
+    data: encoder.encode(repeatedJson.join("\n")),
+    description: "Identical JSON rows (low entropy)",
+  });
+
+  // 4. Medium entropy - typical JSON with variation
+  const variedJson: string[] = [];
+  for (let i = 0; i < 5000; i++) {
+    variedJson.push(JSON.stringify({
       id: i,
       timestamp: Date.now(),
       user_id: `user_${i % 1000}`,
@@ -25,7 +67,44 @@ function generateTestData(rows: number): Uint8Array {
       metadata: { page: `/page/${i % 100}`, duration: Math.random() * 1000 },
     }));
   }
-  return encoder.encode(data.join("\n") + "\n");
+  datasets.push({
+    name: "json-varied",
+    data: encoder.encode(variedJson.join("\n")),
+    description: "Varied JSON rows (medium entropy)",
+  });
+
+  // 5. Medium-high entropy - UUIDs
+  const uuids: string[] = [];
+  for (let i = 0; i < 10000; i++) {
+    uuids.push(crypto.randomUUID());
+  }
+  datasets.push({
+    name: "uuids",
+    data: encoder.encode(uuids.join("\n")),
+    description: "UUIDs (medium-high entropy)",
+  });
+
+  // 6. Log-like data - timestamps + messages
+  const logs: string[] = [];
+  const levels = ["INFO", "DEBUG", "WARN", "ERROR"];
+  const messages = [
+    "Request processed successfully",
+    "Database connection established",
+    "Cache miss for key",
+    "User authentication failed",
+    "File not found",
+  ];
+  for (let i = 0; i < 5000; i++) {
+    const ts = new Date(Date.now() + i * 1000).toISOString();
+    logs.push(`${ts} ${levels[i % 4]} ${messages[i % 5]} id=${i}`);
+  }
+  datasets.push({
+    name: "logs",
+    data: encoder.encode(logs.join("\n")),
+    description: "Log lines with timestamps (medium entropy)",
+  });
+
+  return datasets;
 }
 
 interface BenchResult {
@@ -71,109 +150,78 @@ async function benchMethod(
   };
 }
 
+type CompressionMethod = {
+  name: string;
+  compress: (d: Uint8Array, origLen: number) => Promise<Uint8Array>;
+  decompress: (d: Uint8Array, origLen: number) => Promise<Uint8Array>;
+};
+
+function getMethods(): CompressionMethod[] {
+  return [
+    {
+      name: "LZ4 wasm",
+      compress: async (d) => encodeBlock(d, Method.LZ4),
+      decompress: async (d) => decodeBlock(d, true),
+    },
+    {
+      name: "LZ4 native",
+      compress: async (d) => new Uint8Array(await compressFrame(Buffer.from(d))),
+      decompress: async (d) => new Uint8Array(await decompressFrame(Buffer.from(d))),
+    },
+    {
+      name: "ZSTD chttp",
+      compress: async (d) => encodeBlock(d, Method.ZSTD),
+      decompress: async (d) => decodeBlock(d, true),
+    },
+    {
+      name: "ZSTD wasm",
+      compress: async (d) => bokuweb.compress(d, 3),
+      decompress: async (d) => bokuweb.decompress(d),
+    },
+    {
+      name: "ZSTD napi",
+      compress: async (d) => new Uint8Array(zstdNativeCompress(d)),
+      decompress: async (d) => new Uint8Array(zstdNativeDecompress(d)),
+    },
+    {
+      name: "gzip",
+      compress: async (d) => new Uint8Array(await gzipAsync(d)),
+      decompress: async (d) => new Uint8Array(await gunzipAsync(d)),
+    },
+  ];
+}
+
 async function main() {
   await init();
   await bokuweb.init();
-  await lichtblick.isLoaded;
-  const hpcc = await HpccZstd.load();
 
-  const rows = 10000;
-  const iterations = 10;
-  const data = generateTestData(rows);
+  const iterations = 5;
+  const datasets = generateTestDataSets();
+  const methods = getMethods();
 
-  console.log(`Benchmark: ${rows} JSON rows, ${data.length} bytes, ${iterations} iterations\n`);
+  console.log(`ZSTD backend: ${usingNativeZstd ? "native (zstd-napi)" : "WASM (@bokuweb/zstd-wasm)"}`);
+  console.log(`Iterations: ${iterations}\n`);
 
-  const results: BenchResult[] = [];
+  for (const dataset of datasets) {
+    console.log(`\n${"=".repeat(70)}`);
+    console.log(`${dataset.name.toUpperCase()}: ${dataset.description}`);
+    console.log(`Size: ${(dataset.data.length / 1024).toFixed(1)} KB`);
+    console.log("=".repeat(70));
+    console.log("Method         Compress(ms)  Decompress(ms)  Ratio   Size");
+    console.log("-".repeat(70));
 
-  // LZ4 (WASM)
-  results.push(await benchMethod(
-    "LZ4 wasm",
-    data,
-    async (d) => encodeBlock(d, Method.LZ4),
-    async (d) => decodeBlock(d, true),
-    iterations,
-  ));
-
-  // LZ4 (native)
-  results.push(await benchMethod(
-    "LZ4 native",
-    data,
-    async (d) => new Uint8Array(await compressFrame(Buffer.from(d))),
-    async (d) => new Uint8Array(await decompressFrame(Buffer.from(d))),
-    iterations,
-  ));
-
-  // ZSTD @dweb-browser (current)
-  results.push(await benchMethod(
-    "ZSTD dweb",
-    data,
-    async (d) => encodeBlock(d, Method.ZSTD),
-    async (d) => decodeBlock(d, true),
-    iterations,
-  ));
-
-  // ZSTD @bokuweb
-  results.push(await benchMethod(
-    "ZSTD bokuweb",
-    data,
-    async (d) => bokuweb.compress(d, 3),
-    async (d) => bokuweb.decompress(d),
-    iterations,
-  ));
-
-  // ZSTD @lichtblick (Facebook official)
-  const dataLen = data.length;
-  results.push(await benchMethod(
-    "ZSTD lichtblk",
-    data,
-    async (d) => new Uint8Array(lichtblick.compress(d, 3)),
-    async (d) => new Uint8Array(lichtblick.decompress(d, dataLen)),
-    iterations,
-  ));
-
-  // ZSTD @hpcc-js
-  results.push(await benchMethod(
-    "ZSTD hpcc",
-    data,
-    async (d) => hpcc.compress(d, 3),
-    async (d) => hpcc.decompress(d),
-    iterations,
-  ));
-
-  // ZSTD (native)
-  results.push(await benchMethod(
-    "ZSTD native",
-    data,
-    async (d) => new Uint8Array(zstdNativeCompress(d)),
-    async (d) => new Uint8Array(zstdNativeDecompress(d)),
-    iterations,
-  ));
-
-  // gzip
-  results.push(await benchMethod(
-    "gzip",
-    data,
-    async (d) => new Uint8Array(await gzipAsync(d)),
-    async (d) => new Uint8Array(await gunzipAsync(d)),
-    iterations,
-  ));
-
-  // deflate
-  results.push(await benchMethod(
-    "deflate",
-    data,
-    async (d) => new Uint8Array(await deflateAsync(d)),
-    async (d) => new Uint8Array(await inflateAsync(d)),
-    iterations,
-  ));
-
-  // Print results
-  console.log("Method         Compress(ms)  Decompress(ms)  Ratio   Size");
-  console.log("------         ------------  --------------  -----   ----");
-  for (const r of results) {
-    console.log(
-      `${r.method.padEnd(14)} ${r.compressMs.toFixed(2).padStart(12)}  ${r.decompressMs.toFixed(2).padStart(14)}  ${r.ratio.toFixed(2).padStart(5)}x  ${r.compressedSize}`,
-    );
+    for (const method of methods) {
+      const result = await benchMethod(
+        method.name,
+        dataset.data,
+        (d) => method.compress(d, dataset.data.length),
+        (d) => method.decompress(d, dataset.data.length),
+        iterations,
+      );
+      console.log(
+        `${result.method.padEnd(14)} ${result.compressMs.toFixed(2).padStart(12)}  ${result.decompressMs.toFixed(2).padStart(14)}  ${result.ratio.toFixed(2).padStart(5)}x  ${result.compressedSize}`,
+      );
+    }
   }
 }
 

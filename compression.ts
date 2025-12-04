@@ -13,12 +13,28 @@ let zstdDecompressFn: ((source: Uint8Array) => Uint8Array) | undefined;
 // Module state - initialized by init()
 let initialized = false;
 
+/** True if using native zstd-napi, false if using WASM */
+export let usingNativeZstd = false;
+
 async function initZstd(): Promise<void> {
-  const zstd = await import("@dweb-browser/zstd-wasm");
-  const getZstdWasm = (await import("@dweb-browser/zstd-wasm/zstd_wasm_bg_wasm")).default;
-  zstd.initSync({ module: getZstdWasm() });
-  zstdCompressFn = zstd.compress;
-  zstdDecompressFn = zstd.decompress;
+  // Try native zstd-napi first in Node.js
+  if (typeof process !== "undefined" && process.versions?.node) {
+    try {
+      const native = await import("zstd-napi");
+      zstdCompressFn = (d, level) => new Uint8Array(native.compress(d, level));
+      zstdDecompressFn = (d) => new Uint8Array(native.decompress(d));
+      usingNativeZstd = true;
+      return;
+    } catch {
+      // Native not available, fall through to WASM
+    }
+  }
+
+  // WASM fallback
+  const wasm = await import("@bokuweb/zstd-wasm");
+  await wasm.init();
+  zstdCompressFn = wasm.compress;
+  zstdDecompressFn = wasm.decompress;
 }
 
 export async function init(): Promise<void> {
