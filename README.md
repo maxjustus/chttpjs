@@ -31,11 +31,10 @@ await insert(
   config  // compression defaults to "lz4"
 );
 
-// Query with compressed response
+// Query (compression enabled by default)
 for await (const chunk of query(
   "SELECT * FROM table FORMAT JSON",
   "session123",
-  true,
   config,
 )) {
   console.log(chunk);

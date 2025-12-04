@@ -27,8 +27,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_basic (id UInt32, name String) ENGINE = Memory",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -52,7 +51,6 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "SELECT * FROM test_basic ORDER BY id FORMAT JSON",
         sessionId,
-        false,
         { baseUrl, auth },
       )) {
         result += chunk;
@@ -67,8 +65,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "DROP TABLE test_basic",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -81,8 +78,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_lz4 (value String) ENGINE = Memory",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -103,7 +99,6 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "SELECT count(*) as cnt FROM test_lz4 FORMAT JSON",
         sessionId,
-        false,
         { baseUrl, auth },
       )) {
         result += chunk;
@@ -116,8 +111,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "DROP TABLE test_lz4",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -128,8 +122,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_zstd (value String) ENGINE = Memory",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -150,7 +143,6 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "SELECT count(*) as cnt FROM test_zstd FORMAT JSON",
         sessionId,
-        false,
         { baseUrl, auth },
       )) {
         result += chunk;
@@ -163,8 +155,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "DROP TABLE test_zstd",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -177,8 +168,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_generator (id UInt32, value String) ENGINE = Memory",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -220,7 +210,6 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "SELECT count(*) as cnt FROM test_generator FORMAT JSON",
         sessionId,
-        false,
         { baseUrl, auth },
       )) {
         result += chunk;
@@ -233,8 +222,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "DROP TABLE test_generator",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -245,8 +233,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_single (id UInt32) ENGINE = Memory",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -270,7 +257,6 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "SELECT count(*) as cnt FROM test_single FORMAT JSON",
         sessionId,
-        false,
         { baseUrl, auth },
       )) {
         result += chunk;
@@ -283,8 +269,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "DROP TABLE test_single",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -297,8 +282,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_stream (id UInt32) ENGINE = Memory",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -319,7 +303,6 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "SELECT * FROM test_stream FORMAT JSONEachRow",
         sessionId,
-        true, // compressed
         { baseUrl, auth },
       )) {
         chunks++;
@@ -334,8 +317,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "DROP TABLE test_stream",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -349,7 +331,6 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "SELECT number FROM system.numbers LIMIT 100000 FORMAT CSV",
         sessionId,
-        true, // compressed
         { baseUrl, auth },
       )) {
         chunks++;
@@ -389,8 +370,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "CREATE TABLE IF NOT EXISTS test_error (id UInt32) ENGINE = Memory",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -418,8 +398,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "DROP TABLE test_error",
         sessionId,
-        false,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
@@ -441,7 +420,6 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       for await (const chunk of query(
         "SELECT * FROM system.numbers LIMIT 1000000",
         sessionId,
-        true, // compressed
         { baseUrl, auth },
       )) {
         // Each chunk is a decompressed block

@@ -241,16 +241,19 @@ async function insert(
 interface QueryOptions {
   baseUrl?: string;
   auth?: AuthConfig;
+  /** Compression method for response: "lz4" (default), "zstd", or "none" */
+  compression?: Compression;
 }
 
 async function* query(
   query: string,
   sessionId: string,
-  compressed: boolean = false,
   options: QueryOptions = {},
 ): AsyncGenerator<string, void, unknown> {
   await init();
   const baseUrl = options.baseUrl || "http://localhost:8123/";
+  const compression = options.compression ?? "lz4";
+  const compressed = compression !== "none";
   const params: Record<string, string> = {
     session_id: sessionId,
     default_format: "JSONEachRowWithProgress",
