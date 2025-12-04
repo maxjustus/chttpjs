@@ -1,5 +1,5 @@
 import { cityhash_102_128 } from "ch-city-wasm";
-import { compress as lz4CompressRaw, decompress as lz4DecompressRaw } from "@nick/lz4";
+import { compress as lz4CompressRaw, decompress as lz4DecompressRaw } from "./vendor/lz4/lz4.js";
 
 // Build-time constant set by esbuild --define
 // When bundled: replaced with true/false literal, enabling dead-code elimination

@@ -1,6 +1,6 @@
 {
   "name": "@maxjustus/chttp",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "ClickHouse HTTP client with native compression (LZ4/ZSTD)",
   "type": "module",
   "main": "./dist/chttp.js",
@@ -11,6 +11,7 @@
   },
   "files": [
     "dist",
+    "vendor",
     "*.ts",
     "*.d.ts"
   ],
@@ -22,13 +23,13 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "test:compression": "node --experimental-strip-types --test test/compression.test.ts",
     "test:integration": "node --experimental-strip-types --test test/integration.test.ts",
-    "bench": "node --experimental-strip-types bench/compression.ts"
+    "bench": "node --experimental-strip-types bench/compression.ts",
+    "vendor:lz4": "npx jsr add @nick/lz4 && cp node_modules/@nick/lz4/lib/lz4.js node_modules/@nick/lz4/lib/lz4.internal.js vendor/lz4/ && rm -rf node_modules/@nick"
   },
   "author": "maxjustus",
   "license": "ISC",
   "dependencies": {
     "@bokuweb/zstd-wasm": "^0.0.27",
-    "@nick/lz4": "npm:@jsr/nick__lz4@^0.3.4",
     "ch-city-wasm": "^0.1.1"
   },
   "optionalDependencies": {
