@@ -86,6 +86,7 @@ async function insert(
   sessionId: string,
   options: InsertOptions = {},
 ): Promise<string> {
+  await init();
   const baseUrl = options.baseUrl || "http://localhost:8123/";
   const {
     compression = "lz4",
@@ -248,6 +249,7 @@ async function* query(
   compressed: boolean = false,
   options: QueryOptions = {},
 ): AsyncGenerator<string, void, unknown> {
+  await init();
   const baseUrl = options.baseUrl || "http://localhost:8123/";
   const params: Record<string, string> = {
     session_id: sessionId,
