@@ -39,6 +39,9 @@ for await (const chunk of query(
 )) {
   console.log(chunk);
 }
+
+// DDL statements (consume the iterator)
+for await (const _ of query("CREATE TABLE ...", "session123", config)) {}
 ```
 
 ## Streaming Large Inserts
