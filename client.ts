@@ -3,8 +3,17 @@ import {
   encodeBlock,
   decodeBlock,
   Method,
-  type MethodCode,
 } from "./compression.ts";
+
+export type Compression = "lz4" | "zstd" | "none";
+
+function compressionToMethod(compression: Compression): number {
+  switch (compression) {
+    case "lz4": return Method.LZ4;
+    case "zstd": return Method.ZSTD;
+    case "none": return Method.None;
+  }
+}
 
 // Uint8Array helpers
 const encoder = new TextEncoder();
@@ -61,6 +70,8 @@ interface ProgressInfo {
 
 interface InsertOptions {
   baseUrl?: string;
+  /** Compression method: "lz4" (default), "zstd", or "none" */
+  compression?: Compression;
   /** Size in bytes for the compression buffer (default: 256KB) */
   bufferSize?: number;
   /** Byte threshold to trigger compression flush (default: bufferSize - 2048) */
@@ -73,15 +84,16 @@ async function insert(
   query: string,
   data: any[] | AsyncIterable<any> | Iterable<any>,
   sessionId: string,
-  method: MethodCode = Method.LZ4,
   options: InsertOptions = {},
 ): Promise<string> {
   const baseUrl = options.baseUrl || "http://localhost:8123/";
   const {
+    compression = "lz4",
     bufferSize = 256 * 1024,
     threshold = bufferSize - 2048,
     onProgress = null,
   } = options;
+  const method = compressionToMethod(compression);
 
   const isGenerator =
     data &&
@@ -94,9 +106,7 @@ async function insert(
     const dataBytes = encoder.encode(dataStr);
     const compressed = encodeBlock(dataBytes, method);
 
-    const methodName =
-      method === Method.LZ4 ? "LZ4" : method === Method.ZSTD ? "ZSTD" : "None";
-    console.log(`Compression: ${methodName}`);
+    console.log(`Compression: ${compression}`);
     console.log("Original size:", dataBytes.length);
     console.log("Compressed size:", compressed.length);
     console.log(

@@ -16,7 +16,7 @@ import { ... } from "@maxjustus/chttp/lz4";
 ## Quick Start
 
 ```ts
-import { insert, query, Method } from "@maxjustus/chttp";
+import { insert, query } from "@maxjustus/chttp";
 
 const config = {
   baseUrl: "http://localhost:8123/",
@@ -28,8 +28,7 @@ await insert(
   "INSERT INTO table FORMAT JSONEachRow",
   [{ id: 1, name: "test" }],
   "session123",
-  Method.LZ4,
-  config
+  config  // compression defaults to "lz4"
 );
 
 // Query with compressed response
@@ -56,16 +55,16 @@ await insert(
   "INSERT INTO large_table FORMAT JSONEachRow",
   generateData(),
   "session123",
-  Method.ZSTD,
-  { onProgress: (p) => console.log(`${p.rowsProcessed} rows`) }  // add baseUrl/auth as needed
+  { compression: "zstd", onProgress: (p) => console.log(`${p.rowsProcessed} rows`) }
 );
 ```
 
 ## Compression
 
-- `Method.LZ4` - fast, WASM (default)
-- `Method.ZSTD` - smaller output, native in Node.js with WASM fallback
-- `Method.None` - no compression
+Set `compression` in options:
+- `"lz4"` - fast, WASM (default)
+- `"zstd"` - smaller output, native in Node.js with WASM fallback
+- `"none"` - no compression
 
 ZSTD automatically uses native bindings (`zstd-napi`) in Node.js, falling back to WASM (`@bokuweb/zstd-wasm`) in browsers or if native fails to load. Native is ~2x faster than WASM. The native bindings are an optional dependency and install automatically on supported platforms.
 

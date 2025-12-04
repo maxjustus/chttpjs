@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 import { init, insert, query } from "../client.ts";
-import { Method } from "../compression.ts";
 
 describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   let clickhouse: Awaited<ReturnType<typeof startClickHouse>>;
@@ -45,7 +44,6 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         "INSERT INTO test_basic FORMAT JSONEachRow",
         data,
         sessionId,
-        Method.LZ4,
         { baseUrl, auth },
       );
 
@@ -97,8 +95,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         "INSERT INTO test_lz4 FORMAT JSONEachRow",
         data,
         sessionId,
-        Method.LZ4,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "lz4" },
       );
 
       // Verify count
@@ -145,8 +142,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         "INSERT INTO test_zstd FORMAT JSONEachRow",
         data,
         sessionId,
-        Method.ZSTD,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "zstd" },
       );
 
       // Verify count
@@ -206,10 +202,10 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         "INSERT INTO test_generator FORMAT JSONEachRow",
         generateBatches(),
         sessionId,
-        Method.LZ4,
         {
           baseUrl,
           auth,
+          compression: "lz4",
           onProgress: (progress) => {
             progressUpdates++;
             assert.ok(progress.rowsProcessed > 0);
@@ -266,8 +262,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         "INSERT INTO test_single FORMAT JSONEachRow",
         generateSingle(),
         sessionId,
-        Method.ZSTD,
-        { baseUrl, auth },
+        { baseUrl, auth, compression: "zstd" },
       );
 
       // Verify
@@ -314,7 +309,6 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         "INSERT INTO test_stream FORMAT JSONEachRow",
         data,
         sessionId,
-        Method.LZ4,
         { baseUrl, auth },
       );
 
@@ -409,7 +403,6 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
           "INSERT INTO test_error FORMAT JSONEachRow",
           invalidData,
           sessionId,
-          Method.LZ4,
           { baseUrl, auth },
         );
         assert.fail("Should have thrown an error");
