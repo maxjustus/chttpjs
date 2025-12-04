@@ -350,8 +350,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         for await (const chunk of query(
           "SELECT * FROM non_existent_table",
           sessionId,
-          false,
-          { baseUrl, auth },
+          { baseUrl, auth, compression: "none" },
         )) {
           // should not reach here
         }

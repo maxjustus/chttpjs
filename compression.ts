@@ -29,7 +29,7 @@ async function initZstd(): Promise<void> {
   if (typeof process !== "undefined" && process.versions?.node) {
     try {
       const native = await import("zstd-napi");
-      zstdCompressFn = (d, level) => new Uint8Array(native.compress(d, level));
+      zstdCompressFn = (d, level) => new Uint8Array(native.compress(d, { compressionLevel: level }));
       zstdDecompressFn = (d) => new Uint8Array(native.decompress(d));
       usingNativeZstd = true;
       return;

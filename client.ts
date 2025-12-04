@@ -3,11 +3,12 @@ import {
   encodeBlock,
   decodeBlock,
   Method,
+  MethodCode,
 } from "./compression.ts";
 
 export type Compression = "lz4" | "zstd" | "none";
 
-function compressionToMethod(compression: Compression): number {
+function compressionToMethod(compression: Compression): MethodCode {
   switch (compression) {
     case "lz4": return Method.LZ4;
     case "zstd": return Method.ZSTD;
