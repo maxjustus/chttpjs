@@ -1,55 +1,44 @@
-# ClickHouse HTTP Client with Native Compression
+# chttp
 
-A TypeScript/Node.js client for ClickHouse that implements the native compression protocol for efficient data insertion and querying.
+ClickHouse HTTP client with native compression (LZ4/ZSTD).
 
-## Features
-
-- **Native compression**: LZ4 and ZSTD compression compatible with ClickHouse format
-- **Streaming inserts**: Memory-efficient insertion of large datasets using async generators
-- **Streaming queries**: Process query results as they arrive with optional compression
-- **TypeScript support**: Full type safety with strict TypeScript compilation
-- **Comprehensive testing**: Integration tests with real ClickHouse via testcontainers
-
-## Installation
+## Install
 
 ```bash
-npm install lz4 bling-hashes zstd-napi @testcontainers/clickhouse
+npm install
 ```
 
-## Usage
+## Quick Start
 
 ```ts
-import { insertCompressed, execQuery, Method } from "./client.ts";
+import { insertCompressed, execQuery, Method } from "./index.ts";
 
-// Insert data with compression
+const config = {
+  baseUrl: "http://localhost:8123/",
+  auth: { username: "default", password: "" }
+};
+
+// Insert with compression
 await insertCompressed(
   "INSERT INTO table FORMAT JSONEachRow",
   [{ id: 1, name: "test" }],
   "session123",
   Method.LZ4,
-  { 
-    baseUrl: "http://localhost:8123/",
-    auth: { username: "default", password: "password" }
-  }
+  config
 );
 
-// Stream query results
+// Query with compressed response
 for await (const chunk of execQuery(
   "SELECT * FROM table FORMAT JSON",
   "session123",
-  true, // compressed response
-  {
-    baseUrl: "http://localhost:8123/",
-    auth: { username: "default", password: "password" },
-  },
+  true,
+  config,
 )) {
   console.log(chunk);
 }
 ```
 
-## Streaming Inserts
-
-Handle large datasets efficiently with async generators:
+## Streaming Large Inserts
 
 ```ts
 async function* generateData() {
@@ -63,48 +52,29 @@ await insertCompressed(
   generateData(),
   "session123",
   Method.ZSTD,
-  {
-    onProgress: (progress) => {
-      console.log(`Processed ${progress.rowsProcessed} rows`);
-    }
-  }
+  { onProgress: (p) => console.log(`${p.rowsProcessed} rows`) }  // add baseUrl/auth as needed
 );
 ```
 
-## Compression Methods
+## Compression
 
-- `Method.LZ4` - Fast compression (default)
-- `Method.ZSTD` - Better compression ratios
-- `Method.None` - No compression
+- `Method.LZ4` - fast (default)
+- `Method.ZSTD` - smaller output
+- `Method.None` - no compression
 
 ## Development
 
-### TypeScript Compilation
-
 ```bash
-tsc  # Compile TypeScript to JavaScript
-tsc --noEmit  # Type check without output
+npm test  # runs integration tests against ClickHouse via testcontainers
 ```
 
-### Testing
+Requires Node.js 24+ (uses `--experimental-strip-types` for direct TS execution).
 
-Run the test suite:
+## Wire Format
 
-```bash
-npm test
-```
-
-Tests use testcontainers to spin up a real ClickHouse instance for integration testing.
-
-> **Note**  
-> Run all scripts with Node.js 24+ using the `--experimental-strip-types` flag (the provided npm scripts already include it) so that the runtime can execute the TypeScript sources directly.
-
-## Implementation Details
-
-ClickHouse uses a custom compression format:
+ClickHouse native compression blocks:
 - 16-byte CityHash128 checksum (v1.0.2)
-- 1-byte magic number (0x82 for LZ4, 0x90 for ZSTD)
+- 1-byte method (0x82=LZ4, 0x90=ZSTD)
 - 4-byte compressed size (includes 9-byte header)
 - 4-byte uncompressed size
-- Raw compressed data
-
+- compressed data
