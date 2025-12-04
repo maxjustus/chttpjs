@@ -1,4 +1,4 @@
-import { cityhash_102_128 } from "ch-city-wasm";
+import { cityhash_102_128 } from "./vendor/cityhash/cityhash.js";
 
 // Build-time constant set by esbuild --define
 // When bundled: replaced with true/false literal, enabling dead-code elimination
@@ -19,6 +19,7 @@ export let usingNativeZstd = false;
 
 async function initLz4(): Promise<void> {
   const lz4 = await import("./vendor/lz4/lz4.js");
+  await lz4.init();
   lz4CompressFn = lz4.compress;
   lz4DecompressFn = lz4.decompress;
 }
