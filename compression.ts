@@ -1,4 +1,4 @@
-import { createChCity } from "./ch-city.js";
+import { cityhash_102_128 } from "ch-city-wasm";
 import { compress as lz4CompressRaw, decompress as lz4DecompressRaw } from "@nick/lz4";
 
 // Build-time constant set by esbuild --define
@@ -11,7 +11,6 @@ let zstdCompressFn: ((source: Uint8Array, level: number) => Uint8Array) | undefi
 let zstdDecompressFn: ((source: Uint8Array) => Uint8Array) | undefined;
 
 // Module state - initialized by init()
-let chCity: Awaited<ReturnType<typeof createChCity>>;
 let initialized = false;
 
 async function initZstd(): Promise<void> {
@@ -30,7 +29,6 @@ export async function init(): Promise<void> {
     await initZstd();
   }
 
-  chCity = await createChCity();
   initialized = true;
 }
 
@@ -80,7 +78,7 @@ export const Method = {
 export type MethodCode = (typeof Method)[keyof typeof Method];
 
 export function cityHash128LE(bytes: Uint8Array): Uint8Array {
-  const hash = chCity.cityhash102(bytes);
+  const hash = cityhash_102_128(bytes);
   // Swap hi/lo 8-byte halves to match ClickHouse's expected byte order
   return concat([hash.subarray(8, 16), hash.subarray(0, 8)]);
 }

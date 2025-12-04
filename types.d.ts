@@ -1,7 +1,5 @@
 // Type declarations for third-party modules
 
-// ch-city.js types are in ch-city.d.ts
-
 // Build-time constant set by esbuild --define
 // May be undefined when running unbundled in development
 declare const BUILD_WITH_ZSTD: boolean | undefined;
