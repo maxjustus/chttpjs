@@ -108,14 +108,6 @@ async function insert(
     const dataBytes = encoder.encode(dataStr);
     const compressed = encodeBlock(dataBytes, method);
 
-    console.log(`Compression: ${compression}`);
-    console.log("Original size:", dataBytes.length);
-    console.log("Compressed size:", compressed.length);
-    console.log(
-      "Compression ratio:",
-      (dataBytes.length / compressed.length).toFixed(2) + "x",
-    );
-
     const url = buildReqUrl(
       baseUrl,
       {
@@ -230,11 +222,6 @@ async function insert(
   if (!response.ok) {
     throw new Error(`Insert failed: ${response.status} - ${body}`);
   }
-
-  console.log(`Streamed ${blocksSent} blocks, ${totalRows} rows`);
-  console.log(
-    `Total compression ratio: ${(totalUncompressed / totalCompressed).toFixed(2)}x`,
-  );
 
   return body;
 }
