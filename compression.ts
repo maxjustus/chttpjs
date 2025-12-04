@@ -1,12 +1,13 @@
 import { cityhash_102_128 } from "ch-city-wasm";
-import { compress as lz4CompressRaw, decompress as lz4DecompressRaw } from "./vendor/lz4/lz4.js";
 
 // Build-time constant set by esbuild --define
 // When bundled: replaced with true/false literal, enabling dead-code elimination
 // When unbundled (dev): undefined, so we default to true
 declare const BUILD_WITH_ZSTD: boolean | undefined;
 
-// Conditional ZSTD imports - tree-shaken when BUILD_WITH_ZSTD=false
+// Lazy-loaded compression functions - initialized by init()
+let lz4CompressFn: ((source: Uint8Array) => Uint8Array) | undefined;
+let lz4DecompressFn: ((source: Uint8Array) => Uint8Array) | undefined;
 let zstdCompressFn: ((source: Uint8Array, level: number) => Uint8Array) | undefined;
 let zstdDecompressFn: ((source: Uint8Array) => Uint8Array) | undefined;
 
@@ -15,6 +16,12 @@ let initialized = false;
 
 /** True if using native zstd-napi, false if using WASM */
 export let usingNativeZstd = false;
+
+async function initLz4(): Promise<void> {
+  const lz4 = await import("./vendor/lz4/lz4.js");
+  lz4CompressFn = lz4.compress;
+  lz4DecompressFn = lz4.decompress;
+}
 
 async function initZstd(): Promise<void> {
   // Try native zstd-napi first in Node.js
@@ -39,6 +46,9 @@ async function initZstd(): Promise<void> {
 
 export async function init(): Promise<void> {
   if (initialized) return;
+
+  // Initialize LZ4 (always needed)
+  await initLz4();
 
   // Use BUILD_WITH_ZSTD directly for tree-shaking, fallback to true for dev
   if (typeof BUILD_WITH_ZSTD === "undefined" || BUILD_WITH_ZSTD) {
@@ -100,16 +110,22 @@ export function cityHash128LE(bytes: Uint8Array): Uint8Array {
 }
 
 function lz4Compress(raw: Uint8Array): Uint8Array {
+  if (!lz4CompressFn) {
+    throw new Error("LZ4 not initialized - call init() first");
+  }
   // @nick/lz4 prepends 4-byte uncompressed size, but ClickHouse expects raw block data
-  const withPrefix = lz4CompressRaw(raw);
+  const withPrefix = lz4CompressFn(raw);
   return withPrefix.subarray(4);
 }
 
 function lz4Decompress(compressed: Uint8Array, uncompressedSize: number): Uint8Array {
+  if (!lz4DecompressFn) {
+    throw new Error("LZ4 not initialized - call init() first");
+  }
   // @nick/lz4 expects 4-byte uncompressed size prefix
   const prefix = new Uint8Array(4);
   writeUInt32LE(prefix, uncompressedSize, 0);
-  return lz4DecompressRaw(concat([prefix, compressed]));
+  return lz4DecompressFn(concat([prefix, compressed]));
 }
 
 function zstdCompress(raw: Uint8Array, level = 3): Uint8Array {
