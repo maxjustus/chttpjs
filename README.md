@@ -61,6 +61,28 @@ await insert(
 );
 ```
 
+## Timeout and Cancellation
+
+Configure with `timeout` (ms) or provide an `AbortSignal` for manual cancellation:
+
+```ts
+// Custom timeout
+await insert(query, data, sessionId, { timeout: 60_000 });
+
+// Manual cancellation
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 5000);
+await insert(query, data, sessionId, { signal: controller.signal });
+
+// Both (whichever triggers first)
+await insert(query, data, sessionId, {
+  signal: controller.signal,
+  timeout: 60_000
+});
+```
+
+Requires Node.js 20+ or modern browsers (Chrome 116+, Firefox 124+, Safari 17.4+) for `AbortSignal.any()`.
+
 ## Compression
 
 Set `compression` in options:

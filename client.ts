@@ -8,6 +8,18 @@ import {
 
 export type Compression = "lz4" | "zstd" | "none";
 
+// AbortSignal.any() added in Node 20+, ES2024
+const AbortSignalAny = AbortSignal as typeof AbortSignal & {
+  any(signals: AbortSignal[]): AbortSignal;
+};
+
+function createSignal(signal?: AbortSignal, timeout?: number): AbortSignal | undefined {
+  if (!signal && !timeout) return undefined;
+  if (signal && !timeout) return signal;
+  if (!signal && timeout) return AbortSignal.timeout(timeout);
+  return AbortSignalAny.any([signal!, AbortSignal.timeout(timeout!)]);
+}
+
 function compressionToMethod(compression: Compression): MethodCode {
   switch (compression) {
     case "lz4": return Method.LZ4;
@@ -79,6 +91,10 @@ interface InsertOptions {
   threshold?: number;
   onProgress?: (progress: ProgressInfo) => void;
   auth?: AuthConfig;
+  /** AbortSignal for manual cancellation */
+  signal?: AbortSignal;
+  /** Request timeout in milliseconds */
+  timeout?: number;
 }
 
 async function insert(
@@ -124,6 +140,7 @@ async function insert(
         "Content-Type": "application/octet-stream",
       },
       body: compressed,
+      signal: createSignal(options.signal, options.timeout),
     });
 
     const body = await response.text();
@@ -216,6 +233,7 @@ async function insert(
       "Content-Type": "application/octet-stream",
     },
     body: allData,
+    signal: createSignal(options.signal, options.timeout),
   });
 
   const body = await response.text();
@@ -231,6 +249,10 @@ interface QueryOptions {
   auth?: AuthConfig;
   /** Compression method for response: "lz4" (default), "zstd", or "none" */
   compression?: Compression;
+  /** AbortSignal for manual cancellation */
+  signal?: AbortSignal;
+  /** Request timeout in milliseconds */
+  timeout?: number;
 }
 
 async function* query(
@@ -256,6 +278,7 @@ async function* query(
   const response = await fetch(url.toString(), {
     method: "POST",
     body: query,
+    signal: createSignal(options.signal, options.timeout),
   });
 
   if (!response.ok) {
