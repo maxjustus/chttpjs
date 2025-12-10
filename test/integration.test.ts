@@ -580,4 +580,161 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.ok(blocksDetected >= 1, "Should process at least one block");
     });
   });
+
+  describe("JSONColumns format", () => {
+    it("should insert with JSONColumns format (array)", async () => {
+      // Create table
+      for await (const chunk of query(
+        "CREATE TABLE IF NOT EXISTS test_json_columns (id UInt32, name String) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+
+      const data = [
+        { id: 1, name: "Alice" },
+        { id: 2, name: "Bob" },
+        { id: 3, name: "Charlie" },
+      ];
+
+      await insert(
+        "INSERT INTO test_json_columns FORMAT JSONColumns",
+        data,
+        sessionId,
+        { baseUrl, auth, format: "JSONColumns" },
+      );
+
+      // Verify data
+      let result = "";
+      for await (const chunk of query(
+        "SELECT * FROM test_json_columns ORDER BY id FORMAT JSON",
+        sessionId,
+        { baseUrl, auth },
+      )) {
+        result += chunk;
+      }
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data.length, 3);
+      assert.strictEqual(parsed.data[0].name, "Alice");
+      assert.strictEqual(parsed.data[2].name, "Charlie");
+
+      // Clean up
+      for await (const chunk of query(
+        "DROP TABLE test_json_columns",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+    });
+
+    it("should handle heterogeneous rows with JSONColumns", async () => {
+      // Create table with nullable columns
+      for await (const chunk of query(
+        "CREATE TABLE IF NOT EXISTS test_json_columns_hetero (id UInt32, name Nullable(String), extra Nullable(String)) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+
+      // Rows with different fields - missing fields become null
+      const data = [
+        { id: 1, name: "Alice" },
+        { id: 2, extra: "has_extra" },
+        { id: 3, name: "Charlie", extra: "both" },
+      ];
+
+      await insert(
+        "INSERT INTO test_json_columns_hetero FORMAT JSONColumns",
+        data,
+        sessionId,
+        { baseUrl, auth, format: "JSONColumns" },
+      );
+
+      // Verify data
+      let result = "";
+      for await (const chunk of query(
+        "SELECT * FROM test_json_columns_hetero ORDER BY id FORMAT JSON",
+        sessionId,
+        { baseUrl, auth },
+      )) {
+        result += chunk;
+      }
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data.length, 3);
+      assert.strictEqual(parsed.data[0].name, "Alice");
+      assert.strictEqual(parsed.data[0].extra, null);
+      assert.strictEqual(parsed.data[1].name, null);
+      assert.strictEqual(parsed.data[1].extra, "has_extra");
+      assert.strictEqual(parsed.data[2].name, "Charlie");
+      assert.strictEqual(parsed.data[2].extra, "both");
+
+      // Clean up
+      for await (const chunk of query(
+        "DROP TABLE test_json_columns_hetero",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+    });
+
+    it("should stream with JSONColumns format (generator)", async () => {
+      // Create table
+      for await (const chunk of query(
+        "CREATE TABLE IF NOT EXISTS test_json_columns_stream (id UInt32, value String) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+
+      // Generator that yields batches
+      async function* generateBatches() {
+        for (let batch = 0; batch < 5; batch++) {
+          const batchData = [];
+          for (let i = 0; i < 100; i++) {
+            batchData.push({
+              id: batch * 100 + i,
+              value: `batch_${batch}_item_${i}`,
+            });
+          }
+          yield batchData;
+        }
+      }
+
+      await insert(
+        "INSERT INTO test_json_columns_stream FORMAT JSONColumns",
+        generateBatches(),
+        sessionId,
+        { baseUrl, auth, format: "JSONColumns" },
+      );
+
+      // Verify count
+      let result = "";
+      for await (const chunk of query(
+        "SELECT count(*) as cnt FROM test_json_columns_stream FORMAT JSON",
+        sessionId,
+        { baseUrl, auth },
+      )) {
+        result += chunk;
+      }
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(Number(parsed.data[0].cnt), 500);
+
+      // Clean up
+      for await (const chunk of query(
+        "DROP TABLE test_json_columns_stream",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+    });
+  });
 });

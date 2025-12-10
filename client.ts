@@ -36,6 +36,31 @@ function readUInt32LE(arr: Uint8Array, offset: number): number {
   return arr[offset] | (arr[offset + 1] << 8) | (arr[offset + 2] << 16) | (arr[offset + 3] << 24) >>> 0;
 }
 
+/**
+ * Convert array of row objects to JSONColumns format.
+ * Supports heterogeneous rows - missing fields are filled with null.
+ */
+function rowsToJSONColumns(rows: Record<string, unknown>[]): string {
+  const columns: Record<string, unknown[]> = {};
+  let rowIndex = 0;
+
+  for (const row of rows) {
+    // Add new columns with null backfill for previous rows
+    for (const key of Object.keys(row)) {
+      if (!(key in columns)) {
+        columns[key] = new Array(rowIndex).fill(null);
+      }
+    }
+    // Append values (null for missing keys in this row)
+    for (const key of Object.keys(columns)) {
+      columns[key].push(key in row ? row[key] : null);
+    }
+    rowIndex++;
+  }
+
+  return JSON.stringify(columns);
+}
+
 interface AuthConfig {
   username?: string;
   password?: string;
@@ -70,11 +95,13 @@ interface ProgressInfo {
   complete?: boolean;
 }
 
+export type InsertFormat = "JSONEachRow" | "JSONColumns";
+
 interface InsertOptions {
   baseUrl?: string;
   /** Compression method: "lz4" (default), "zstd", or "none" */
   compression?: Compression;
-  /** Size in bytes for the compression buffer (default: 256KB) */
+  /** Size in bytes for the compression buffer (default: 1MB) */
   bufferSize?: number;
   /** Byte threshold to trigger compression flush (default: bufferSize - 2048) */
   threshold?: number;
@@ -84,6 +111,8 @@ interface InsertOptions {
   signal?: AbortSignal;
   /** Request timeout in milliseconds */
   timeout?: number;
+  /** Data format: "JSONEachRow" (default) or "JSONColumns" */
+  format?: InsertFormat;
 }
 
 async function insert(
@@ -99,6 +128,7 @@ async function insert(
     bufferSize = 1024 * 1024,
     threshold = bufferSize - 2048,
     onProgress = null,
+    format = "JSONEachRow",
   } = options;
   const method = compressionToMethod(compression);
 
@@ -113,9 +143,17 @@ async function insert(
     decompress: "1",
   };
 
+  // Helper to serialize rows based on format
+  function serializeRows(rows: Record<string, unknown>[]): string {
+    if (format === "JSONColumns") {
+      return rowsToJSONColumns(rows);
+    }
+    return rows.map((d) => JSON.stringify(d)).join("\n") + "\n";
+  }
+
   if (!isGenerator) {
     // Array implementation
-    const dataStr = (data as any[]).map((d: any) => JSON.stringify(d)).join("\n") + "\n";
+    const dataStr = serializeRows(data as Record<string, unknown>[]);
     const dataBytes = encoder.encode(dataStr);
     const compressed = encodeBlock(dataBytes, method);
 
@@ -149,62 +187,103 @@ async function insert(
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        let buffer = new Uint8Array(bufferSize);
-        let bufferLen = 0;
+        // For JSONColumns, accumulate rows; for JSONEachRow, accumulate bytes
+        let rowBuffer: Record<string, unknown>[] = [];
+        let byteBuffer = new Uint8Array(bufferSize);
+        let byteBufferLen = 0;
+
+        function flushBuffer() {
+          let dataStr: string;
+          let uncompressedSize: number;
+
+          if (format === "JSONColumns") {
+            dataStr = rowsToJSONColumns(rowBuffer);
+            const dataBytes = encoder.encode(dataStr);
+            uncompressedSize = dataBytes.length;
+            const compressed = encodeBlock(dataBytes, method);
+            controller.enqueue(compressed);
+            totalCompressed += compressed.length;
+            rowBuffer = [];
+          } else {
+            const compressed = encodeBlock(byteBuffer.subarray(0, byteBufferLen), method);
+            controller.enqueue(compressed);
+            uncompressedSize = byteBufferLen;
+            totalCompressed += compressed.length;
+            byteBufferLen = 0;
+          }
+
+          blocksSent++;
+          totalUncompressed += uncompressedSize;
+
+          if (onProgress) {
+            onProgress({
+              blocksSent,
+              bytesCompressed: totalCompressed,
+              bytesUncompressed: uncompressedSize,
+              rowsProcessed: totalRows,
+            });
+          }
+        }
 
         for await (const rows of data) {
           const rowsArray = Array.isArray(rows) ? rows : [rows];
 
           for (const row of rowsArray) {
-            const line = JSON.stringify(row) + "\n";
-
-            // Ensure capacity (line.length * 3 covers worst-case UTF-8 expansion)
-            if (bufferLen + line.length * 3 > buffer.length) {
-              const newSize = Math.max(buffer.length * 2, bufferLen + line.length * 3);
-              const newBuffer = new Uint8Array(newSize);
-              newBuffer.set(buffer.subarray(0, bufferLen));
-              buffer = newBuffer;
-            }
-
-            const { written } = encoder.encodeInto(line, buffer.subarray(bufferLen));
-            bufferLen += written;
             totalRows++;
 
-            if (bufferLen >= threshold) {
-              const compressed = encodeBlock(buffer.subarray(0, bufferLen), method);
+            if (format === "JSONColumns") {
+              rowBuffer.push(row);
+              // Estimate size: ~100 bytes per row as heuristic
+              if (rowBuffer.length * 100 >= threshold) {
+                flushBuffer();
+              }
+            } else {
+              const line = JSON.stringify(row) + "\n";
 
-              controller.enqueue(compressed);
-              blocksSent++;
-              totalCompressed += compressed.length;
-              totalUncompressed += bufferLen;
-
-              if (onProgress) {
-                onProgress({
-                  blocksSent,
-                  bytesCompressed: compressed.length,
-                  bytesUncompressed: bufferLen,
-                  rowsProcessed: totalRows,
-                });
+              // Ensure capacity (line.length * 3 covers worst-case UTF-8 expansion)
+              if (byteBufferLen + line.length * 3 > byteBuffer.length) {
+                const newSize = Math.max(byteBuffer.length * 2, byteBufferLen + line.length * 3);
+                const newBuffer = new Uint8Array(newSize);
+                newBuffer.set(byteBuffer.subarray(0, byteBufferLen));
+                byteBuffer = newBuffer;
               }
 
-              bufferLen = 0;
+              const { written } = encoder.encodeInto(line, byteBuffer.subarray(byteBufferLen));
+              byteBufferLen += written;
+
+              if (byteBufferLen >= threshold) {
+                flushBuffer();
+              }
             }
           }
         }
 
         // Send remaining data
-        if (bufferLen > 0) {
-          const compressed = encodeBlock(buffer.subarray(0, bufferLen), method);
-          controller.enqueue(compressed);
+        const hasRemaining = format === "JSONColumns" ? rowBuffer.length > 0 : byteBufferLen > 0;
+        if (hasRemaining) {
+          let uncompressedSize: number;
+          if (format === "JSONColumns") {
+            const dataStr = rowsToJSONColumns(rowBuffer);
+            const dataBytes = encoder.encode(dataStr);
+            uncompressedSize = dataBytes.length;
+            const compressed = encodeBlock(dataBytes, method);
+            controller.enqueue(compressed);
+            totalCompressed += compressed.length;
+          } else {
+            const compressed = encodeBlock(byteBuffer.subarray(0, byteBufferLen), method);
+            controller.enqueue(compressed);
+            uncompressedSize = byteBufferLen;
+            totalCompressed += compressed.length;
+          }
+
           blocksSent++;
-          totalCompressed += compressed.length;
-          totalUncompressed += bufferLen;
+          totalUncompressed += uncompressedSize;
 
           if (onProgress) {
             onProgress({
               blocksSent,
-              bytesCompressed: compressed.length,
-              bytesUncompressed: bufferLen,
+              bytesCompressed: totalCompressed,
+              bytesUncompressed: uncompressedSize,
               rowsProcessed: totalRows,
               complete: true,
             });
