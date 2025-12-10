@@ -32,17 +32,6 @@ function compressionToMethod(compression: Compression): MethodCode {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-function concat(arrays: Uint8Array[]): Uint8Array {
-  const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const arr of arrays) {
-    result.set(arr, offset);
-    offset += arr.length;
-  }
-  return result;
-}
-
 function readUInt32LE(arr: Uint8Array, offset: number): number {
   return arr[offset] | (arr[offset + 1] << 8) | (arr[offset + 2] << 16) | (arr[offset + 3] << 24) >>> 0;
 }
@@ -107,7 +96,7 @@ async function insert(
   const baseUrl = options.baseUrl || "http://localhost:8123/";
   const {
     compression = "lz4",
-    bufferSize = 256 * 1024,
+    bufferSize = 1024 * 1024,
     threshold = bufferSize - 2048,
     onProgress = null,
   } = options;
@@ -118,21 +107,19 @@ async function insert(
     (typeof (data as any)[Symbol.asyncIterator] === "function" ||
       typeof (data as any)[Symbol.iterator] === "function");
 
+  const params: Record<string, string> = {
+    session_id: sessionId,
+    query: query,
+    decompress: "1",
+  };
+
   if (!isGenerator) {
     // Array implementation
     const dataStr = (data as any[]).map((d: any) => JSON.stringify(d)).join("\n") + "\n";
     const dataBytes = encoder.encode(dataStr);
     const compressed = encodeBlock(dataBytes, method);
 
-    const url = buildReqUrl(
-      baseUrl,
-      {
-        session_id: sessionId,
-        query: query,
-        decompress: "1",
-      },
-      options.auth,
-    );
+    const url = buildReqUrl(baseUrl, params, options.auth);
 
     const response = await fetch(url.toString(), {
       method: "POST",
@@ -151,90 +138,95 @@ async function insert(
   }
 
   // Streaming implementation for generators
-  const url = buildReqUrl(
-    baseUrl,
-    {
-      session_id: sessionId,
-      query: query,
-      decompress: "1",
-    },
-    options.auth,
-  );
+  const url = buildReqUrl(baseUrl, params, options.auth);
 
-  let buffer: string[] = [];
-  let bufferBytes = 0;
   let totalRows = 0;
   let blocksSent = 0;
   let totalCompressed = 0;
   let totalUncompressed = 0;
 
-  // Collect all compressed blocks
-  const blocks: Uint8Array[] = [];
+  // Stream compressed blocks directly to fetch
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        let buffer = new Uint8Array(bufferSize);
+        let bufferLen = 0;
 
-  for await (const rows of data) {
-    const rowsArray = Array.isArray(rows) ? rows : [rows];
+        for await (const rows of data) {
+          const rowsArray = Array.isArray(rows) ? rows : [rows];
 
-    for (const row of rowsArray) {
-      const line = JSON.stringify(row) + "\n";
-      buffer.push(line);
-      bufferBytes += encoder.encode(line).length;
-      totalRows++;
+          for (const row of rowsArray) {
+            const line = JSON.stringify(row) + "\n";
 
-      if (bufferBytes >= threshold) {
-        const dataBytes = encoder.encode(buffer.join(""));
-        const compressed = encodeBlock(dataBytes, method);
+            // Ensure capacity (line.length * 3 covers worst-case UTF-8 expansion)
+            if (bufferLen + line.length * 3 > buffer.length) {
+              const newSize = Math.max(buffer.length * 2, bufferLen + line.length * 3);
+              const newBuffer = new Uint8Array(newSize);
+              newBuffer.set(buffer.subarray(0, bufferLen));
+              buffer = newBuffer;
+            }
 
-        blocks.push(compressed);
-        blocksSent++;
-        totalCompressed += compressed.length;
-        totalUncompressed += bufferBytes;
+            const { written } = encoder.encodeInto(line, buffer.subarray(bufferLen));
+            bufferLen += written;
+            totalRows++;
 
-        if (onProgress) {
-          onProgress({
-            blocksSent,
-            bytesCompressed: compressed.length,
-            bytesUncompressed: bufferBytes,
-            rowsProcessed: totalRows,
-          });
+            if (bufferLen >= threshold) {
+              const compressed = encodeBlock(buffer.subarray(0, bufferLen), method);
+
+              controller.enqueue(compressed);
+              blocksSent++;
+              totalCompressed += compressed.length;
+              totalUncompressed += bufferLen;
+
+              if (onProgress) {
+                onProgress({
+                  blocksSent,
+                  bytesCompressed: compressed.length,
+                  bytesUncompressed: bufferLen,
+                  rowsProcessed: totalRows,
+                });
+              }
+
+              bufferLen = 0;
+            }
+          }
         }
 
-        buffer = [];
-        bufferBytes = 0;
+        // Send remaining data
+        if (bufferLen > 0) {
+          const compressed = encodeBlock(buffer.subarray(0, bufferLen), method);
+          controller.enqueue(compressed);
+          blocksSent++;
+          totalCompressed += compressed.length;
+          totalUncompressed += bufferLen;
+
+          if (onProgress) {
+            onProgress({
+              blocksSent,
+              bytesCompressed: compressed.length,
+              bytesUncompressed: bufferLen,
+              rowsProcessed: totalRows,
+              complete: true,
+            });
+          }
+        }
+
+        controller.close();
+      } catch (err) {
+        controller.error(err);
       }
-    }
-  }
-
-  // Send remaining data
-  if (buffer.length > 0) {
-    const dataBytes = encoder.encode(buffer.join(""));
-    const compressed = encodeBlock(dataBytes, method);
-    blocks.push(compressed);
-    blocksSent++;
-    totalCompressed += compressed.length;
-    totalUncompressed += bufferBytes;
-
-    if (onProgress) {
-      onProgress({
-        blocksSent,
-        bytesCompressed: compressed.length,
-        bytesUncompressed: bufferBytes,
-        rowsProcessed: totalRows,
-        complete: true,
-      });
-    }
-  }
-
-  // Combine all blocks and send
-  const allData = concat(blocks);
+    },
+  });
 
   const response = await fetch(url.toString(), {
     method: "POST",
     headers: {
       "Content-Type": "application/octet-stream",
     },
-    body: allData,
+    body: stream,
+    duplex: "half",
     signal: createSignal(options.signal, options.timeout),
-  });
+  } as RequestInit);
 
   const body = await response.text();
   if (!response.ok) {
@@ -301,26 +293,35 @@ async function* query(
     }
   } else {
     // For compressed, decompress blocks as they arrive
-    let buffer = new Uint8Array(0);
+    // Use growing buffer to avoid O(n²) concat allocations
+    let buffer = new Uint8Array(64 * 1024);
+    let bufferLen = 0;
 
     while (true) {
       const { done, value } = await reader.read();
 
       if (value) {
-        buffer = concat([buffer, value]);
+        // Grow buffer if needed
+        if (bufferLen + value.length > buffer.length) {
+          const newSize = Math.max(buffer.length * 2, bufferLen + value.length);
+          const newBuffer = new Uint8Array(newSize);
+          newBuffer.set(buffer.subarray(0, bufferLen));
+          buffer = newBuffer;
+        }
+        buffer.set(value, bufferLen);
+        bufferLen += value.length;
       }
 
       // Process complete blocks from buffer
-      while (buffer.length >= 25) {
-        if (buffer.length < 17) break;
-
-        const compressedSize = readUInt32LE(buffer, 17);
+      let consumed = 0;
+      while (bufferLen - consumed >= 25) {
+        const compressedSize = readUInt32LE(buffer, consumed + 17);
         const blockSize = 16 + compressedSize;
 
-        if (buffer.length < blockSize) break;
+        if (bufferLen - consumed < blockSize) break;
 
-        const block = buffer.subarray(0, blockSize);
-        buffer = buffer.subarray(blockSize);
+        const block = buffer.subarray(consumed, consumed + blockSize);
+        consumed += blockSize;
 
         try {
           const decompressed = decodeBlock(block);
@@ -331,21 +332,13 @@ async function* query(
         }
       }
 
+      // Shift remaining data to front
+      if (consumed > 0) {
+        buffer.copyWithin(0, consumed, bufferLen);
+        bufferLen -= consumed;
+      }
+
       if (done) break;
-    }
-
-    // Process any remaining complete blocks
-    while (buffer.length >= 25) {
-      if (buffer.length < 17) break;
-      const compressedSize = readUInt32LE(buffer, 17);
-      const blockSize = 16 + compressedSize;
-      if (buffer.length < blockSize) break;
-
-      const block = buffer.subarray(0, blockSize);
-      buffer = buffer.subarray(blockSize);
-
-      const decompressed = decodeBlock(block);
-      yield decoder.decode(decompressed);
     }
   }
 }

@@ -404,6 +404,154 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
     });
   });
 
+  describe("Streaming error scenarios", () => {
+    it("should handle generator that throws mid-stream", async () => {
+      // Create table
+      for await (const chunk of query(
+        "CREATE TABLE IF NOT EXISTS test_stream_error (id UInt32, value String) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+
+      // Generator that throws after some items
+      async function* errorGenerator() {
+        for (let i = 0; i < 100; i++) {
+          yield { id: i, value: `value_${i}` };
+        }
+        throw new Error("Generator error mid-stream");
+      }
+
+      try {
+        await insert(
+          "INSERT INTO test_stream_error FORMAT JSONEachRow",
+          errorGenerator(),
+          sessionId,
+          { baseUrl, auth, bufferSize: 128 },
+        );
+        assert.fail("Should have thrown an error");
+      } catch (err) {
+        const error = err as Error;
+        // Error should be thrown (exact message may vary based on stream error handling)
+        assert.ok(error instanceof Error, "Should throw an error");
+      }
+
+      // Clean up
+      for await (const chunk of query(
+        "DROP TABLE test_stream_error",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+    });
+
+    it("should handle AbortSignal cancellation", async () => {
+      // Create table
+      for await (const chunk of query(
+        "CREATE TABLE IF NOT EXISTS test_abort (id UInt32) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+
+      const controller = new AbortController();
+
+      // Generator that yields many items
+      async function* slowGenerator() {
+        for (let i = 0; i < 100000; i++) {
+          yield { id: i };
+          // Abort after first few items
+          if (i === 10) {
+            controller.abort();
+          }
+        }
+      }
+
+      try {
+        await insert(
+          "INSERT INTO test_abort FORMAT JSONEachRow",
+          slowGenerator(),
+          sessionId,
+          { baseUrl, auth, signal: controller.signal },
+        );
+        assert.fail("Should have aborted");
+      } catch (err) {
+        const error = err as Error;
+        assert.ok(
+          error.name === "AbortError" ||
+          error.message.includes("abort") ||
+          error.message.includes("cancelled")
+        );
+      }
+
+      // Clean up
+      for await (const chunk of query(
+        "DROP TABLE test_abort",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+    });
+
+    it("should fire progress callbacks during compression", async () => {
+      // Create table
+      for await (const chunk of query(
+        "CREATE TABLE IF NOT EXISTS test_progress (id UInt32) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+
+      const progressEvents: any[] = [];
+      let insertComplete = false;
+
+      async function* dataGenerator() {
+        for (let i = 0; i < 1000; i++) {
+          yield { id: i };
+        }
+      }
+
+      const insertPromise = insert(
+        "INSERT INTO test_progress FORMAT JSONEachRow",
+        dataGenerator(),
+        sessionId,
+        {
+          baseUrl,
+          auth,
+          bufferSize: 1024,
+          threshold: 512,
+          onProgress: (progress) => {
+            progressEvents.push({ ...progress, insertComplete });
+          },
+        },
+      );
+
+      await insertPromise;
+      insertComplete = true;
+
+      // Verify progress callbacks were fired
+      assert.ok(progressEvents.length > 0, "Should have progress events");
+
+      // Verify all progress events fired before insert completed
+      const allBeforeComplete = progressEvents.every((e) => !e.insertComplete);
+      assert.ok(allBeforeComplete, "Progress events should fire during compression, not after");
+
+      // Clean up
+      for await (const chunk of query(
+        "DROP TABLE test_progress",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+    });
+  });
+
   describe("Multi-block responses", () => {
     it("should handle multiple compressed blocks in response", async () => {
       // This test verifies our multi-block decompression

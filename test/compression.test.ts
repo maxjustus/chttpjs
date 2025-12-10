@@ -36,7 +36,7 @@ describe("Compression", () => {
     it("should compress and decompress data correctly", () => {
       const data = encoder.encode("Hello, World! This is a test.");
       const compressed = encodeBlock(data, Method.LZ4);
-      const decompressed = decodeBlock(compressed, true);
+      const decompressed = decodeBlock(compressed);
 
       assert.strictEqual(decoder.decode(decompressed), decoder.decode(data));
     });
@@ -44,7 +44,7 @@ describe("Compression", () => {
     it("should handle empty data", () => {
       const data = encoder.encode("");
       const compressed = encodeBlock(data, Method.None);
-      const decompressed = decodeBlock(compressed, true);
+      const decompressed = decodeBlock(compressed);
 
       assert.strictEqual(decoder.decode(decompressed), "");
     });
@@ -52,7 +52,7 @@ describe("Compression", () => {
     it("should handle large repetitive data efficiently", () => {
       const data = encoder.encode("A".repeat(10000));
       const compressed = encodeBlock(data, Method.LZ4);
-      const decompressed = decodeBlock(compressed, true);
+      const decompressed = decodeBlock(compressed);
 
       assert.strictEqual(decoder.decode(decompressed), decoder.decode(data));
     });
@@ -62,7 +62,7 @@ describe("Compression", () => {
     it("should compress and decompress data correctly", () => {
       const data = encoder.encode("Hello, World! This is a ZSTD test.");
       const compressed = encodeBlock(data, Method.ZSTD);
-      const decompressed = decodeBlock(compressed, true);
+      const decompressed = decodeBlock(compressed);
 
       assert.strictEqual(decoder.decode(decompressed), decoder.decode(data));
     });
@@ -73,8 +73,8 @@ describe("Compression", () => {
       const lz4Compressed = encodeBlock(data, Method.LZ4);
       const zstdCompressed = encodeBlock(data, Method.ZSTD);
 
-      const lz4Decompressed = decodeBlock(lz4Compressed, true);
-      const zstdDecompressed = decodeBlock(zstdCompressed, true);
+      const lz4Decompressed = decodeBlock(lz4Compressed);
+      const zstdDecompressed = decodeBlock(zstdCompressed);
 
       assert.strictEqual(decoder.decode(lz4Decompressed), decoder.decode(data));
       assert.strictEqual(decoder.decode(zstdDecompressed), decoder.decode(data));
@@ -97,7 +97,7 @@ describe("Compression", () => {
       const block3 = encodeBlock(data3, Method.LZ4);
 
       const combined = concat([block1, block2, block3]);
-      const decompressed = decodeBlocks(combined, true);
+      const decompressed = decodeBlocks(combined);
 
       const expected = decoder.decode(concat([data1, data2, data3]));
       assert.strictEqual(decoder.decode(decompressed), expected);
@@ -113,7 +113,7 @@ describe("Compression", () => {
       const block3 = encodeBlock(data3, Method.None);
 
       const combined = concat([block1, block2, block3]);
-      const decompressed = decodeBlocks(combined, true);
+      const decompressed = decodeBlocks(combined);
 
       const expected = decoder.decode(concat([data1, data2, data3]));
       assert.strictEqual(decoder.decode(decompressed), expected);
@@ -144,7 +144,7 @@ describe("Compression", () => {
             const block = buffer.subarray(0, blockSize);
             buffer = buffer.subarray(blockSize);
 
-            const decompressed = decodeBlock(block, true);
+            const decompressed = decodeBlock(block);
             result += decoder.decode(decompressed);
           }
         }

@@ -1,6 +1,6 @@
 {
   "name": "@maxjustus/chttp",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "ClickHouse HTTP client with native compression (LZ4/ZSTD)",
   "type": "module",
   "main": "./dist/chttp.js",
@@ -25,6 +25,7 @@
     "test:integration": "node --experimental-strip-types --test test/integration.test.ts",
     "test:dist": "npm run build && node test/test-dist.mjs",
     "bench": "node --experimental-strip-types bench/compression.ts",
+    "bench:insert": "node --experimental-strip-types bench/insert.ts",
     "vendor:lz4": "npx jsr add @nick/lz4 && cp node_modules/@nick/lz4/lib/lz4.js node_modules/@nick/lz4/lib/lz4.internal.js vendor/lz4/ && rm -rf node_modules/@nick"
   },
   "author": "maxjustus",
@@ -37,6 +38,7 @@
     "zstd-napi": "^0.0.12"
   },
   "devDependencies": {
+    "@clickhouse/client": "^1.14.0",
     "@dweb-browser/zstd-wasm": "^1.2.1",
     "@hpcc-js/wasm-zstd": "^1.8.0",
     "@lichtblick/wasm-zstd": "^1.0.0",
@@ -44,6 +46,8 @@
     "@oneidentity/zstd-js": "^1.0.3",
     "@testcontainers/clickhouse": "^11.5.1",
     "esbuild": "^0.27.0",
+    "fast-json-stringify": "^6.1.1",
+    "flatstr": "^1.0.12",
     "lz4-napi": "^2.9.0",
     "testcontainers": "^11.5.1",
     "zstd-wasm-decoder": "^0.2.2"

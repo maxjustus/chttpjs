@@ -143,9 +143,23 @@ function zstdDecompress(compressed: Uint8Array): Uint8Array {
   return zstdDecompressFn(compressed);
 }
 
+// LZ4 worst-case: input + (input / 255) + 16
+// We add some margin for safety
+function lz4MaxCompressedSize(inputSize: number): number {
+  return inputSize + Math.ceil(inputSize / 255) + 16;
+}
+
+/**
+ * Encode a block with ClickHouse native compression format.
+ * @param raw - Uncompressed data
+ * @param mode - Compression method
+ * @param outputBuffer - Optional pre-allocated buffer to write into (must be large enough)
+ * @returns Compressed block (subarray of outputBuffer if provided, otherwise new array)
+ */
 export function encodeBlock(
   raw: Uint8Array,
   mode: MethodCode = Method.LZ4,
+  outputBuffer?: Uint8Array,
 ): Uint8Array {
   let compressed: Uint8Array;
 
@@ -165,32 +179,52 @@ export function encodeBlock(
     }
   }
 
-  const metadata = new Uint8Array(HEADER_SIZE);
-  metadata[MAGIC_OFFSET] = mode;
-  writeUInt32LE(metadata, HEADER_SIZE + compressed.length, COMPRESSED_SIZE_OFFSET);
-  writeUInt32LE(metadata, raw.length, UNCOMPRESSED_SIZE_OFFSET);
+  const totalSize = CHECKSUM_SIZE + HEADER_SIZE + compressed.length;
 
-  const checksum = cityHash128LE(concat([metadata, compressed]));
-  return concat([checksum, metadata, compressed]);
+  // Use provided buffer or allocate new one
+  const output = outputBuffer && outputBuffer.length >= totalSize
+    ? outputBuffer
+    : new Uint8Array(totalSize);
+
+  // Write header at offset 16 (after checksum)
+  const headerOffset = CHECKSUM_SIZE;
+  output[headerOffset + MAGIC_OFFSET] = mode;
+  writeUInt32LE(output, HEADER_SIZE + compressed.length, headerOffset + COMPRESSED_SIZE_OFFSET);
+  writeUInt32LE(output, raw.length, headerOffset + UNCOMPRESSED_SIZE_OFFSET);
+
+  // Copy compressed data at offset 25
+  const dataOffset = CHECKSUM_SIZE + HEADER_SIZE;
+  output.set(compressed, dataOffset);
+
+  // Calculate checksum over header + compressed data
+  const checksum = cityHash128LE(output.subarray(headerOffset, dataOffset + compressed.length));
+  output.set(checksum, 0);
+
+  return output.subarray(0, totalSize);
 }
 
-export function decodeBlock(
-  block: Uint8Array,
-  skipChecksumVerification = false,
-): Uint8Array {
+/** Calculate required buffer size for encodeBlock output */
+export function encodeBlockBufferSize(inputSize: number, mode: MethodCode = Method.LZ4): number {
+  const maxCompressed = mode === Method.LZ4
+    ? lz4MaxCompressedSize(inputSize)
+    : inputSize + 1024; // ZSTD can expand slightly on incompressible data
+  return CHECKSUM_SIZE + HEADER_SIZE + maxCompressed;
+}
+
+export function decodeBlock(block: Uint8Array): Uint8Array {
   if (block.length < CHECKSUM_SIZE + HEADER_SIZE) {
     throw new Error("block too small");
   }
 
   const checksum = block.subarray(0, CHECKSUM_SIZE);
-  const metadata = block.subarray(CHECKSUM_SIZE, CHECKSUM_SIZE + HEADER_SIZE);
-  const compressed = block.subarray(CHECKSUM_SIZE + HEADER_SIZE);
+  const payloadStart = CHECKSUM_SIZE;
+  const metadata = block.subarray(payloadStart, payloadStart + HEADER_SIZE);
+  const compressed = block.subarray(payloadStart + HEADER_SIZE);
 
-  if (!skipChecksumVerification) {
-    const expected = cityHash128LE(concat([metadata, compressed]));
-    if (!equals(checksum, expected)) {
-      throw new Error("checksum mismatch");
-    }
+  // Verify checksum over header + compressed data (no allocation - use subarray)
+  const expected = cityHash128LE(block.subarray(payloadStart));
+  if (!equals(checksum, expected)) {
+    throw new Error("checksum mismatch");
   }
 
   const mode = metadata[MAGIC_OFFSET] as MethodCode;
@@ -217,10 +251,7 @@ export function decodeBlock(
   }
 }
 
-export function decodeBlocks(
-  data: Uint8Array,
-  skipChecksumVerification = false,
-): Uint8Array {
+export function decodeBlocks(data: Uint8Array): Uint8Array {
   const blocks: Uint8Array[] = [];
   let offset = 0;
 
@@ -234,7 +265,7 @@ export function decodeBlocks(
     }
 
     const block = data.subarray(offset, offset + blockSize);
-    const decompressed = decodeBlock(block, skipChecksumVerification);
+    const decompressed = decodeBlock(block);
     blocks.push(decompressed);
 
     offset += blockSize;
