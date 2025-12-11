@@ -18,8 +18,8 @@
   "scripts": {
     "prepublishOnly": "npm run build",
     "build": "npm run build:full && npm run build:lz4",
-    "build:full": "esbuild index.ts --bundle --format=esm --outfile=dist/chttp.js --platform=browser --target=es2022 --minify --define:BUILD_WITH_ZSTD=true --external:zstd-napi",
-    "build:lz4": "esbuild index.ts --bundle --format=esm --outfile=dist/chttp-lz4.js --platform=browser --target=es2022 --minify --define:BUILD_WITH_ZSTD=false --external:zstd-napi",
+    "build:full": "esbuild index.ts --bundle --format=esm --outfile=dist/chttp.js --platform=browser --target=es2022 --minify --define:BUILD_WITH_ZSTD=true --external:zstd-napi --external:lz4-napi",
+    "build:lz4": "esbuild index.ts --bundle --format=esm --outfile=dist/chttp-lz4.js --platform=browser --target=es2022 --minify --define:BUILD_WITH_ZSTD=false --external:zstd-napi --external:lz4-napi",
     "test": "tsc --noEmit && node --experimental-strip-types --test test/*.test.ts",
     "test:compression": "node --experimental-strip-types --test test/compression.test.ts",
     "test:integration": "node --experimental-strip-types --test test/integration.test.ts",
@@ -35,6 +35,7 @@
     "ch-city-wasm": "^0.1.1"
   },
   "optionalDependencies": {
+    "lz4-napi": "^2.9.0",
     "zstd-napi": "^0.0.12"
   },
   "devDependencies": {
@@ -48,7 +49,6 @@
     "esbuild": "^0.27.0",
     "fast-json-stringify": "^6.1.1",
     "flatstr": "^1.0.12",
-    "lz4-napi": "^2.9.0",
     "testcontainers": "^11.5.1",
     "zstd-wasm-decoder": "^0.2.2"
   }

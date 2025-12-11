@@ -16,19 +16,29 @@ import { ... } from "@maxjustus/chttp/lz4";
 ## Quick Start
 
 ```ts
-import { insert, query } from "@maxjustus/chttp";
+import { insert, query, streamJsonEachRow } from "@maxjustus/chttp";
 
 const config = {
   baseUrl: "http://localhost:8123/",
   auth: { username: "default", password: "" }
 };
 
-// Insert with compression
+// Insert with JSON data (using streamJsonEachRow helper)
 await insert(
   "INSERT INTO table FORMAT JSONEachRow",
-  [{ id: 1, name: "test" }],
+  streamJsonEachRow([{ id: 1, name: "test" }]),
   "session123",
   config  // compression defaults to "lz4"
+);
+
+// Insert raw bytes (any format)
+const encoder = new TextEncoder();
+const csvData = encoder.encode("1,test\n2,other\n");
+await insert(
+  "INSERT INTO table FORMAT CSV",
+  csvData,
+  "session123",
+  config
 );
 
 // Query (compression enabled by default)
@@ -46,8 +56,11 @@ for await (const _ of query("CREATE TABLE ...", "session123", config)) {}
 
 ## Streaming Large Inserts
 
+The `insert` function accepts `Uint8Array`, `Uint8Array[]`, or `AsyncIterable<Uint8Array>`. Use `streamJsonEachRow` for JSON data:
+
 ```ts
-async function* generateData() {
+// Streaming JSON objects
+async function* generateRows() {
   for (let i = 0; i < 1000000; i++) {
     yield { id: i, value: `data_${i}` };
   }
@@ -55,10 +68,58 @@ async function* generateData() {
 
 await insert(
   "INSERT INTO large_table FORMAT JSONEachRow",
-  generateData(),
+  streamJsonEachRow(generateRows()),
   "session123",
-  { compression: "zstd", onProgress: (p) => console.log(`${p.rowsProcessed} rows`) }
+  { compression: "zstd", onProgress: (p) => console.log(`${p.bytesUncompressed} bytes`) }
 );
+
+// Streaming raw bytes (any format)
+async function* generateCsvChunks() {
+  const encoder = new TextEncoder();
+  for (let batch = 0; batch < 1000; batch++) {
+    let chunk = "";
+    for (let i = 0; i < 1000; i++) {
+      chunk += `${batch * 1000 + i},value_${i}\n`;
+    }
+    yield encoder.encode(chunk);
+  }
+}
+
+await insert(
+  "INSERT INTO large_table FORMAT CSV",
+  generateCsvChunks(),
+  "session123",
+  { compression: "lz4" }
+);
+```
+
+## Parsing Query Results
+
+The `query()` function yields decompressed chunks aligned to compression blocks, not rows. Use helpers to parse:
+
+```ts
+import { query, streamLines, streamJsonLines, collectResponse } from "@maxjustus/chttp";
+
+// JSONEachRow - streaming parsed objects
+for await (const row of streamJsonLines(query("SELECT * FROM t FORMAT JSONEachRow", session, config))) {
+  console.log(row.id, row.name);
+}
+
+// CSV/TSV - streaming raw lines
+for await (const line of streamLines(query("SELECT * FROM t FORMAT CSV", session, config))) {
+  const [id, name] = line.split(",");
+}
+
+// JSON format - buffer entire response with helper
+const json = await collectResponse(query("SELECT * FROM t FORMAT JSON", session, config));
+const data = JSON.parse(json);
+
+// Or buffer manually
+let result = "";
+for await (const chunk of query("SELECT * FROM t FORMAT JSON", session, config)) {
+  result += chunk;
+}
+const data2 = JSON.parse(result);
 ```
 
 ## Timeout and Cancellation

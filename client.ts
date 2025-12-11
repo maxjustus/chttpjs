@@ -66,7 +66,6 @@ interface ProgressInfo {
   blocksSent: number;
   bytesCompressed: number;
   bytesUncompressed: number;
-  rowsProcessed: number;
   complete?: boolean;
 }
 
@@ -84,13 +83,13 @@ interface InsertOptions {
   signal?: AbortSignal;
   /** Request timeout in milliseconds */
   timeout?: number;
-  /** Log progress every N rows to console as JSON (0 = disabled, default) */
-  logProgress?: number;
 }
+
+type InsertData = Uint8Array | Uint8Array[] | AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
 
 async function insert(
   query: string,
-  data: any[] | AsyncIterable<any> | Iterable<any>,
+  data: InsertData,
   sessionId: string,
   options: InsertOptions = {},
 ): Promise<string> {
@@ -101,19 +100,8 @@ async function insert(
     bufferSize = 1024 * 1024,
     threshold = bufferSize - 2048,
     onProgress = null,
-    logProgress = 0,
   } = options;
   const method = compressionToMethod(compression);
-
-  // Logging helper
-  const log = logProgress > 0
-    ? (obj: Record<string, unknown>) => console.log(JSON.stringify({ source: "chttp", query, ...obj }))
-    : null;
-
-  const isGenerator =
-    data &&
-    (typeof (data as any)[Symbol.asyncIterator] === "function" ||
-      typeof (data as any)[Symbol.iterator] === "function");
 
   const params: Record<string, string> = {
     session_id: sessionId,
@@ -121,19 +109,23 @@ async function insert(
     decompress: "1",
   };
 
-  if (!isGenerator) {
-    // Array implementation
-    const dataStr = (data as any[]).map((d: any) => JSON.stringify(d)).join("\n") + "\n";
-    const dataBytes = encoder.encode(dataStr);
-    const compressed = encodeBlock(dataBytes, method);
-
+  // Single Uint8Array - compress and send directly
+  if (data instanceof Uint8Array) {
+    const compressed = encodeBlock(data, method);
     const url = buildReqUrl(baseUrl, params, options.auth);
+
+    if (onProgress) {
+      onProgress({
+        blocksSent: 1,
+        bytesCompressed: compressed.length,
+        bytesUncompressed: data.length,
+        complete: true,
+      });
+    }
 
     const response = await fetch(url.toString(), {
       method: "POST",
-      headers: {
-        "Content-Type": "application/octet-stream",
-      },
+      headers: { "Content-Type": "application/octet-stream" },
       body: compressed,
       signal: createSignal(options.signal, options.timeout),
     });
@@ -145,127 +137,110 @@ async function insert(
     return body;
   }
 
-  // Streaming implementation for generators
+  // Array of Uint8Array - concatenate, compress, send
+  if (Array.isArray(data)) {
+    const chunks = data as Uint8Array[];
+    const totalLen = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const combined = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const chunk of chunks) {
+      combined.set(chunk, offset);
+      offset += chunk.length;
+    }
+    const compressed = encodeBlock(combined, method);
+    const url = buildReqUrl(baseUrl, params, options.auth);
+
+    if (onProgress) {
+      onProgress({
+        blocksSent: 1,
+        bytesCompressed: compressed.length,
+        bytesUncompressed: totalLen,
+        complete: true,
+      });
+    }
+
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: compressed,
+      signal: createSignal(options.signal, options.timeout),
+    });
+
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`Insert failed: ${response.status} - ${body}`);
+    }
+    return body;
+  }
+
+  // Streaming: Iterable<Uint8Array> or AsyncIterable<Uint8Array>
   const url = buildReqUrl(baseUrl, params, options.auth);
 
-  let totalRows = 0;
   let blocksSent = 0;
   let totalCompressed = 0;
   let totalUncompressed = 0;
-  const startTime = performance.now();
-  let lastLoggedRows = 0;
 
-  // Stream compressed blocks directly to fetch
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        let buffer = new Uint8Array(bufferSize);
-        let bufferLen = 0;
+        let bufferA = new Uint8Array(bufferSize);
+        let bufferB = new Uint8Array(bufferSize);
+        let fillBuffer = bufferA;
+        let fillLen = 0;
+        let flushPromise: Promise<void> | null = null;
 
-        for await (const rows of data) {
-          const rowsArray = Array.isArray(rows) ? rows : [rows];
-
-          for (const row of rowsArray) {
-            const line = JSON.stringify(row) + "\n";
-
-            // Ensure capacity (line.length * 3 covers worst-case UTF-8 expansion)
-            if (bufferLen + line.length * 3 > buffer.length) {
-              const newSize = Math.max(buffer.length * 2, bufferLen + line.length * 3);
-              const newBuffer = new Uint8Array(newSize);
-              newBuffer.set(buffer.subarray(0, bufferLen));
-              buffer = newBuffer;
-            }
-
-            const { written } = encoder.encodeInto(line, buffer.subarray(bufferLen));
-            bufferLen += written;
-            totalRows++;
-
-            // Log progress every N rows
-            if (log && totalRows - lastLoggedRows >= logProgress) {
-              const elapsedMs = Math.round(performance.now() - startTime);
-              log({
-                event: "progress",
-                rows: totalRows,
-                elapsedMs,
-                rowsPerSec: Math.round(totalRows / (elapsedMs / 1000)),
-              });
-              lastLoggedRows = totalRows;
-            }
-
-            if (bufferLen >= threshold) {
-              const compressed = encodeBlock(buffer.subarray(0, bufferLen), method);
-
-              controller.enqueue(compressed);
-              blocksSent++;
-              totalCompressed += compressed.length;
-              totalUncompressed += bufferLen;
-
-              // Log flush
-              if (log) {
-                log({
-                  event: "flush",
-                  block: blocksSent,
-                  uncompressed: bufferLen,
-                  compressed: compressed.length,
-                  ratio: Math.round((bufferLen / compressed.length) * 10) / 10,
-                  rows: totalRows,
-                });
-              }
-
-              if (onProgress) {
-                onProgress({
-                  blocksSent,
-                  bytesCompressed: compressed.length,
-                  bytesUncompressed: bufferLen,
-                  rowsProcessed: totalRows,
-                });
-              }
-
-              bufferLen = 0;
-            }
-          }
-        }
-
-        // Send remaining data
-        if (bufferLen > 0) {
-          const compressed = encodeBlock(buffer.subarray(0, bufferLen), method);
+        const flush = async (buf: Uint8Array, len: number) => {
+          const compressed = encodeBlock(buf.subarray(0, len), method);
           controller.enqueue(compressed);
           blocksSent++;
           totalCompressed += compressed.length;
-          totalUncompressed += bufferLen;
-
-          // Log final flush
-          if (log) {
-            log({
-              event: "flush",
-              block: blocksSent,
-              uncompressed: bufferLen,
-              compressed: compressed.length,
-              ratio: Math.round((bufferLen / compressed.length) * 10) / 10,
-              rows: totalRows,
-            });
-          }
+          totalUncompressed += len;
 
           if (onProgress) {
             onProgress({
               blocksSent,
               bytesCompressed: compressed.length,
-              bytesUncompressed: bufferLen,
-              rowsProcessed: totalRows,
-              complete: true,
+              bytesUncompressed: len,
             });
+          }
+        };
+
+        for await (const chunk of data as AsyncIterable<Uint8Array>) {
+          let chunkOffset = 0;
+
+          while (chunkOffset < chunk.length) {
+            const spaceAvailable = fillBuffer.length - fillLen;
+            const bytesToCopy = Math.min(spaceAvailable, chunk.length - chunkOffset);
+
+            fillBuffer.set(chunk.subarray(chunkOffset, chunkOffset + bytesToCopy), fillLen);
+            fillLen += bytesToCopy;
+            chunkOffset += bytesToCopy;
+
+            if (fillLen >= threshold) {
+              if (flushPromise) await flushPromise;
+
+              const flushBuf = fillBuffer;
+              const flushLen = fillLen;
+              fillBuffer = fillBuffer === bufferA ? bufferB : bufferA;
+              fillLen = 0;
+
+              flushPromise = flush(flushBuf, flushLen);
+            }
           }
         }
 
-        // Log complete
-        if (log) {
-          const elapsedMs = Math.round(performance.now() - startTime);
-          log({
-            event: "complete",
-            blocks: blocksSent,
-            rows: totalRows,
-            elapsedMs,
-            rowsPerSec: Math.round(totalRows / (elapsedMs / 1000)),
+        if (flushPromise) await flushPromise;
+
+        if (fillLen > 0) {
+          await flush(fillBuffer, fillLen);
+        }
+
+        if (onProgress) {
+          onProgress({
+            blocksSent,
+            bytesCompressed: totalCompressed,
+            bytesUncompressed: totalUncompressed,
+            complete: true,
           });
         }
 
@@ -278,9 +253,7 @@ async function insert(
 
   const response = await fetch(url.toString(), {
     method: "POST",
-    headers: {
-      "Content-Type": "application/octet-stream",
-    },
+    headers: { "Content-Type": "application/octet-stream" },
     body: stream,
     duplex: "half",
     signal: createSignal(options.signal, options.timeout),
@@ -292,6 +265,29 @@ async function insert(
   }
 
   return body;
+}
+
+/**
+ * Convert objects to JSONEachRow format as Uint8Array chunks.
+ * Use with insert() for JSON data.
+ */
+function streamJsonEachRow(data: Iterable<unknown>): Generator<Uint8Array>;
+function streamJsonEachRow(data: AsyncIterable<unknown>): AsyncGenerator<Uint8Array>;
+function streamJsonEachRow(
+  data: Iterable<unknown> | AsyncIterable<unknown>,
+): Generator<Uint8Array> | AsyncGenerator<Uint8Array> {
+  if (Symbol.asyncIterator in data) {
+    return (async function*() {
+      for await (const row of data) {
+        yield encoder.encode(JSON.stringify(row) + "\n");
+      }
+    })();
+  }
+  return (function*() {
+    for (const row of data as Iterable<unknown>) {
+      yield encoder.encode(JSON.stringify(row) + "\n");
+    }
+  })();
 }
 
 interface QueryOptions {
@@ -401,4 +397,60 @@ async function* query(
   }
 }
 
-export { init, insert, query, buildReqUrl };
+/**
+ * Buffer chunks and yield complete lines.
+ *
+ * @example
+ * for await (const line of streamLines(query("SELECT * FROM t FORMAT CSV", session, config))) {
+ *   console.log(line);
+ * }
+ */
+async function* streamLines(
+  chunks: AsyncIterable<string>,
+  delimiter: string = "\n"
+): AsyncGenerator<string> {
+  let buffer = "";
+  for await (const chunk of chunks) {
+    buffer += chunk;
+    const parts = buffer.split(delimiter);
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      if (part) yield part;
+    }
+  }
+  if (buffer) yield buffer;
+}
+
+/**
+ * Buffer chunks, split by newlines, and parse as JSON.
+ * Use with query() for JSONEachRow format.
+ *
+ * @example
+ * for await (const row of streamJsonLines(query("SELECT * FROM t FORMAT JSONEachRow", session, config))) {
+ *   console.log(row.id, row.name);
+ * }
+ */
+async function* streamJsonLines<T = unknown>(
+  chunks: AsyncIterable<string>
+): AsyncGenerator<T> {
+  for await (const line of streamLines(chunks)) {
+    yield JSON.parse(line) as T;
+  }
+}
+
+/**
+ * Buffer all chunks and return as a single string.
+ *
+ * @example
+ * const json = await collectResponse(query("SELECT * FROM t FORMAT JSON", session, config));
+ * const data = JSON.parse(json);
+ */
+async function collectResponse(chunks: AsyncIterable<string>): Promise<string> {
+  let result = "";
+  for await (const chunk of chunks) {
+    result += chunk;
+  }
+  return result;
+}
+
+export { init, insert, query, buildReqUrl, streamJsonEachRow, streamLines, streamJsonLines, collectResponse };

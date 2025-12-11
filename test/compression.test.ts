@@ -7,6 +7,8 @@ import {
   decodeBlock,
   decodeBlocks,
   Method,
+  usingNativeLz4,
+  usingNativeZstd,
 } from "../compression.ts";
 
 const encoder = new TextEncoder();
@@ -183,6 +185,63 @@ describe("Compression", () => {
           `Failed for: ${testCase.name}`,
         );
       }
+    });
+  });
+
+  describe("Native compression backends", () => {
+    it("should report native backend status", () => {
+      console.log(`    LZ4: ${usingNativeLz4 ? "native (lz4-napi)" : "WASM"}`);
+      console.log(`    ZSTD: ${usingNativeZstd ? "native (zstd-napi)" : "WASM"}`);
+      // In Node.js with native deps installed, both should be native
+      if (typeof process !== "undefined" && process.versions?.node) {
+        assert.ok(usingNativeLz4, "Should use native LZ4 in Node.js");
+        assert.ok(usingNativeZstd, "Should use native ZSTD in Node.js");
+      }
+    });
+
+    it("should produce compatible output with large data", () => {
+      // Test with various data sizes to ensure native/WASM compatibility
+      const sizes = [100, 1000, 10000, 100000];
+
+      for (const size of sizes) {
+        const data = encoder.encode("X".repeat(size));
+
+        // LZ4 round-trip
+        const lz4Compressed = encodeBlock(data, Method.LZ4);
+        const lz4Decompressed = decodeBlock(lz4Compressed);
+        assert.strictEqual(lz4Decompressed.length, data.length, `LZ4 size mismatch for ${size} bytes`);
+        assert.deepStrictEqual(lz4Decompressed, data, `LZ4 data mismatch for ${size} bytes`);
+
+        // ZSTD round-trip
+        const zstdCompressed = encodeBlock(data, Method.ZSTD);
+        const zstdDecompressed = decodeBlock(zstdCompressed);
+        assert.strictEqual(zstdDecompressed.length, data.length, `ZSTD size mismatch for ${size} bytes`);
+        assert.deepStrictEqual(zstdDecompressed, data, `ZSTD data mismatch for ${size} bytes`);
+      }
+    });
+
+    it("should produce valid ClickHouse block format", () => {
+      const data = encoder.encode("Test data for ClickHouse");
+      const compressed = encodeBlock(data, Method.LZ4);
+
+      // Verify block structure
+      assert.ok(compressed.length >= 25, "Block should be at least 25 bytes");
+
+      // First 16 bytes: checksum
+      const checksum = compressed.subarray(0, 16);
+      assert.strictEqual(checksum.length, 16, "Checksum should be 16 bytes");
+
+      // Byte 16: method
+      const method = compressed[16];
+      assert.strictEqual(method, Method.LZ4, "Method should be LZ4");
+
+      // Bytes 17-20: compressed size (includes 9-byte header)
+      const compressedSize = readUInt32LE(compressed, 17);
+      assert.strictEqual(compressedSize, compressed.length - 16, "Compressed size should match");
+
+      // Bytes 21-24: uncompressed size
+      const uncompressedSize = readUInt32LE(compressed, 21);
+      assert.strictEqual(uncompressedSize, data.length, "Uncompressed size should match");
     });
   });
 });

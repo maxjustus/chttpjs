@@ -7,21 +7,59 @@ declare const BUILD_WITH_ZSTD: boolean | undefined;
 
 // Lazy-loaded compression functions - initialized by init()
 let lz4CompressFn: ((source: Uint8Array) => Uint8Array) | undefined;
-let lz4DecompressFn: ((source: Uint8Array) => Uint8Array) | undefined;
+let lz4DecompressFn: ((source: Uint8Array, uncompressedSize: number) => Uint8Array) | undefined;
 let zstdCompressFn: ((source: Uint8Array, level: number) => Uint8Array) | undefined;
 let zstdDecompressFn: ((source: Uint8Array) => Uint8Array) | undefined;
 
 // Module state - initialized by init()
 let initialized = false;
 
+/** True if using native lz4-napi, false if using WASM */
+export let usingNativeLz4 = false;
 /** True if using native zstd-napi, false if using WASM */
 export let usingNativeZstd = false;
 
 async function initLz4(): Promise<void> {
+  // Try native lz4-napi first in Node.js
+  if (typeof process !== "undefined" && process.versions?.node) {
+    try {
+      const native = await import("lz4-napi");
+      // lz4-napi compressSync prepends 4-byte size prefix - strip it for raw block output
+      lz4CompressFn = (d) => new Uint8Array(native.compressSync(Buffer.from(d))).subarray(4);
+      // uncompressSync expects 4-byte size prefix - prepend it
+      lz4DecompressFn = (d, size) => {
+        const withPrefix = new Uint8Array(4 + d.length);
+        withPrefix[0] = size & 0xff;
+        withPrefix[1] = (size >> 8) & 0xff;
+        withPrefix[2] = (size >> 16) & 0xff;
+        withPrefix[3] = (size >> 24) & 0xff;
+        withPrefix.set(d, 4);
+        return new Uint8Array(native.uncompressSync(Buffer.from(withPrefix)));
+      };
+      usingNativeLz4 = true;
+      return;
+    } catch {
+      // Native not available, fall through to WASM
+    }
+  }
+
+  // WASM fallback
   const lz4 = await import("./vendor/lz4/lz4.js");
   await lz4.init();
-  lz4CompressFn = lz4.compress;
-  lz4DecompressFn = lz4.decompress;
+  // WASM compress prepends 4-byte size prefix - strip it for raw block output
+  lz4CompressFn = (d) => lz4.compress(d).subarray(4);
+  // WASM decompress expects 4-byte size prefix - prepend it
+  lz4DecompressFn = (d, size) => {
+    const prefix = new Uint8Array(4);
+    prefix[0] = size & 0xff;
+    prefix[1] = (size >> 8) & 0xff;
+    prefix[2] = (size >> 16) & 0xff;
+    prefix[3] = (size >> 24) & 0xff;
+    const withPrefix = new Uint8Array(4 + d.length);
+    withPrefix.set(prefix, 0);
+    withPrefix.set(d, 4);
+    return lz4.decompress(withPrefix);
+  };
 }
 
 async function initZstd(): Promise<void> {
@@ -114,19 +152,14 @@ function lz4Compress(raw: Uint8Array): Uint8Array {
   if (!lz4CompressFn) {
     throw new Error("LZ4 not initialized - call init() first");
   }
-  // @nick/lz4 prepends 4-byte uncompressed size, but ClickHouse expects raw block data
-  const withPrefix = lz4CompressFn(raw);
-  return withPrefix.subarray(4);
+  return lz4CompressFn(raw);
 }
 
 function lz4Decompress(compressed: Uint8Array, uncompressedSize: number): Uint8Array {
   if (!lz4DecompressFn) {
     throw new Error("LZ4 not initialized - call init() first");
   }
-  // @nick/lz4 expects 4-byte uncompressed size prefix
-  const prefix = new Uint8Array(4);
-  writeUInt32LE(prefix, uncompressedSize, 0);
-  return lz4DecompressFn(concat([prefix, compressed]));
+  return lz4DecompressFn(compressed, uncompressedSize);
 }
 
 function zstdCompress(raw: Uint8Array, level = 3): Uint8Array {

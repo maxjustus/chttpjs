@@ -2,7 +2,9 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { init, insert, query } from "../client.ts";
+import { init, insert, query, streamJsonEachRow } from "../client.ts";
+
+const encoder = new TextEncoder();
 
 describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   let clickhouse: Awaited<ReturnType<typeof startClickHouse>>;
@@ -32,7 +34,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         // consume stream
       }
 
-      // Insert data
+      // Insert data using streamJsonEachRow helper
       const data = [
         { id: 1, name: "Alice" },
         { id: 2, name: "Bob" },
@@ -41,7 +43,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       await insert(
         "INSERT INTO test_basic FORMAT JSONEachRow",
-        data,
+        streamJsonEachRow(data),
         sessionId,
         { baseUrl, auth },
       );
@@ -83,9 +85,9 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         // consume stream
       }
 
-      const data = Array.from({ length: 1000 }, (_, i) => ({
-        value: `test_${i}`,
-      }));
+      // Use raw Uint8Array for this test
+      const rows = Array.from({ length: 1000 }, (_, i) => ({ value: `test_${i}` }));
+      const data = encoder.encode(rows.map(r => JSON.stringify(r)).join("\n") + "\n");
 
       await insert(
         "INSERT INTO test_lz4 FORMAT JSONEachRow",
@@ -127,13 +129,12 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         // consume stream
       }
 
-      const data = Array.from({ length: 1000 }, (_, i) => ({
-        value: `test_${i}`,
-      }));
+      // Use streamJsonEachRow helper for ZSTD test
+      const rows = Array.from({ length: 1000 }, (_, i) => ({ value: `test_${i}` }));
 
       await insert(
         "INSERT INTO test_zstd FORMAT JSONEachRow",
-        data,
+        streamJsonEachRow(rows),
         sessionId,
         { baseUrl, auth, compression: "zstd" },
       );
@@ -173,7 +174,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         // consume stream
       }
 
-      // Generator that yields batches
+      // Generator that yields byte batches
       async function* generateBatches() {
         for (let batch = 0; batch < 10; batch++) {
           const batchData = [];
@@ -183,7 +184,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
               value: `batch_${batch}_item_${i}`,
             });
           }
-          yield batchData;
+          yield encoder.encode(batchData.map(r => JSON.stringify(r)).join("\n") + "\n");
         }
       }
 
@@ -198,7 +199,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
           compression: "lz4",
           onProgress: (progress) => {
             progressUpdates++;
-            assert.ok(progress.rowsProcessed > 0);
+            assert.ok(progress.bytesUncompressed > 0);
           },
         },
       );
@@ -238,7 +239,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         // consume stream
       }
 
-      // Generator that yields single rows
+      // Use streamJsonEachRow with async generator
       async function* generateSingle() {
         for (let i = 0; i < 500; i++) {
           yield { id: i };
@@ -247,7 +248,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       await insert(
         "INSERT INTO test_single FORMAT JSONEachRow",
-        generateSingle(),
+        streamJsonEachRow(generateSingle()),
         sessionId,
         { baseUrl, auth, compression: "zstd" },
       );
@@ -288,10 +289,10 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       }
 
       // Insert test data
-      const data = Array.from({ length: 10000 }, (_, i) => ({ id: i }));
+      const rows = Array.from({ length: 10000 }, (_, i) => ({ id: i }));
       await insert(
         "INSERT INTO test_stream FORMAT JSONEachRow",
-        data,
+        streamJsonEachRow(rows),
         sessionId,
         { baseUrl, auth },
       );
@@ -375,7 +376,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       }
 
       // Try to insert wrong data type
-      const invalidData = [{ id: "not_a_number" }];
+      const invalidData = encoder.encode(JSON.stringify({ id: "not_a_number" }) + "\n");
 
       try {
         await insert(
@@ -418,7 +419,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       // Generator that throws after some items
       async function* errorGenerator() {
         for (let i = 0; i < 100; i++) {
-          yield { id: i, value: `value_${i}` };
+          yield encoder.encode(JSON.stringify({ id: i, value: `value_${i}` }) + "\n");
         }
         throw new Error("Generator error mid-stream");
       }
@@ -462,7 +463,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       // Generator that yields many items
       async function* slowGenerator() {
         for (let i = 0; i < 100000; i++) {
-          yield { id: i };
+          yield encoder.encode(JSON.stringify({ id: i }) + "\n");
           // Abort after first few items
           if (i === 10) {
             controller.abort();
@@ -512,7 +513,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       async function* dataGenerator() {
         for (let i = 0; i < 1000; i++) {
-          yield { id: i };
+          yield encoder.encode(JSON.stringify({ id: i }) + "\n");
         }
       }
 
