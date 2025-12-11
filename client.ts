@@ -74,7 +74,7 @@ interface InsertOptions {
   baseUrl?: string;
   /** Compression method: "lz4" (default), "zstd", or "none" */
   compression?: Compression;
-  /** Size in bytes for the compression buffer (default: 256KB) */
+  /** Size in bytes for the compression buffer (default: 1MB) */
   bufferSize?: number;
   /** Byte threshold to trigger compression flush (default: bufferSize - 2048) */
   threshold?: number;
@@ -84,6 +84,8 @@ interface InsertOptions {
   signal?: AbortSignal;
   /** Request timeout in milliseconds */
   timeout?: number;
+  /** Log progress every N rows to console as JSON (0 = disabled, default) */
+  logProgress?: number;
 }
 
 async function insert(
@@ -99,8 +101,14 @@ async function insert(
     bufferSize = 1024 * 1024,
     threshold = bufferSize - 2048,
     onProgress = null,
+    logProgress = 0,
   } = options;
   const method = compressionToMethod(compression);
+
+  // Logging helper
+  const log = logProgress > 0
+    ? (obj: Record<string, unknown>) => console.log(JSON.stringify({ source: "chttp", query, ...obj }))
+    : null;
 
   const isGenerator =
     data &&
@@ -144,6 +152,8 @@ async function insert(
   let blocksSent = 0;
   let totalCompressed = 0;
   let totalUncompressed = 0;
+  const startTime = performance.now();
+  let lastLoggedRows = 0;
 
   // Stream compressed blocks directly to fetch
   const stream = new ReadableStream({
@@ -170,6 +180,18 @@ async function insert(
             bufferLen += written;
             totalRows++;
 
+            // Log progress every N rows
+            if (log && totalRows - lastLoggedRows >= logProgress) {
+              const elapsedMs = Math.round(performance.now() - startTime);
+              log({
+                event: "progress",
+                rows: totalRows,
+                elapsedMs,
+                rowsPerSec: Math.round(totalRows / (elapsedMs / 1000)),
+              });
+              lastLoggedRows = totalRows;
+            }
+
             if (bufferLen >= threshold) {
               const compressed = encodeBlock(buffer.subarray(0, bufferLen), method);
 
@@ -177,6 +199,18 @@ async function insert(
               blocksSent++;
               totalCompressed += compressed.length;
               totalUncompressed += bufferLen;
+
+              // Log flush
+              if (log) {
+                log({
+                  event: "flush",
+                  block: blocksSent,
+                  uncompressed: bufferLen,
+                  compressed: compressed.length,
+                  ratio: Math.round((bufferLen / compressed.length) * 10) / 10,
+                  rows: totalRows,
+                });
+              }
 
               if (onProgress) {
                 onProgress({
@@ -200,6 +234,18 @@ async function insert(
           totalCompressed += compressed.length;
           totalUncompressed += bufferLen;
 
+          // Log final flush
+          if (log) {
+            log({
+              event: "flush",
+              block: blocksSent,
+              uncompressed: bufferLen,
+              compressed: compressed.length,
+              ratio: Math.round((bufferLen / compressed.length) * 10) / 10,
+              rows: totalRows,
+            });
+          }
+
           if (onProgress) {
             onProgress({
               blocksSent,
@@ -209,6 +255,18 @@ async function insert(
               complete: true,
             });
           }
+        }
+
+        // Log complete
+        if (log) {
+          const elapsedMs = Math.round(performance.now() - startTime);
+          log({
+            event: "complete",
+            blocks: blocksSent,
+            rows: totalRows,
+            elapsedMs,
+            rowsPerSec: Math.round(totalRows / (elapsedMs / 1000)),
+          });
         }
 
         controller.close();
