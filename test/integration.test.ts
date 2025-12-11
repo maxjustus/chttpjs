@@ -2,7 +2,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { init, insert, query, streamJsonEachRow } from "../client.ts";
+import { init, insert, query, streamJsonEachRow, streamJsonCompactEachRowWithNames, parseJsonCompactEachRowWithNames, streamText, collectText } from "../client.ts";
 
 const encoder = new TextEncoder();
 
@@ -49,14 +49,11 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       );
 
       // Query data
-      let result = "";
-      for await (const chunk of query(
+      const result = await collectText(query(
         "SELECT * FROM test_basic ORDER BY id FORMAT JSON",
         sessionId,
         { baseUrl, auth },
-      )) {
-        result += chunk;
-      }
+      ));
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 3);
@@ -97,20 +94,17 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       );
 
       // Verify count
-      let result = "";
-      for await (const chunk of query(
+      const result = await collectText(query(
         "SELECT count(*) as cnt FROM test_lz4 FORMAT JSON",
         sessionId,
         { baseUrl, auth },
-      )) {
-        result += chunk;
-      }
+      ));
 
       const parsed = JSON.parse(result);
       assert.strictEqual(Number(parsed.data[0].cnt), 1000);
 
       // Clean up
-      for await (const chunk of query(
+      for await (const _ of query(
         "DROP TABLE test_lz4",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -140,26 +134,158 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       );
 
       // Verify count
-      let result = "";
-      for await (const chunk of query(
+      const result = await collectText(query(
         "SELECT count(*) as cnt FROM test_zstd FORMAT JSON",
         sessionId,
         { baseUrl, auth },
-      )) {
-        result += chunk;
-      }
+      ));
 
       const parsed = JSON.parse(result);
       assert.strictEqual(Number(parsed.data[0].cnt), 1000);
 
       // Clean up
-      for await (const chunk of query(
+      for await (const _ of query(
         "DROP TABLE test_zstd",
         sessionId,
         { baseUrl, auth, compression: "none" },
       )) {
         // consume stream
       }
+    });
+  });
+
+  describe("JSONCompactEachRowWithNames format", () => {
+    it("should insert with JSONCompactEachRowWithNames format", async () => {
+      // Create table
+      for await (const chunk of query(
+        "CREATE TABLE IF NOT EXISTS test_compact (id UInt32, name String, value Float64) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+
+      // Insert using JSONCompactEachRowWithNames (objects auto-converted to arrays)
+      const rows = [
+        { id: 1, name: "alice", value: 1.5 },
+        { id: 2, name: "bob", value: 2.5 },
+        { id: 3, name: "charlie", value: 3.5 },
+      ];
+
+      await insert(
+        "INSERT INTO test_compact FORMAT JSONCompactEachRowWithNames",
+        streamJsonCompactEachRowWithNames(rows),
+        sessionId,
+        { baseUrl, auth },
+      );
+
+      // Verify
+      const result = await collectText(query(
+        "SELECT * FROM test_compact ORDER BY id FORMAT JSON",
+        sessionId,
+        { baseUrl, auth },
+      ));
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data.length, 3);
+      assert.strictEqual(parsed.data[0].name, "alice");
+      assert.strictEqual(parsed.data[1].name, "bob");
+      assert.strictEqual(parsed.data[2].name, "charlie");
+      assert.strictEqual(parsed.data[2].value, 3.5);
+
+      // Cleanup
+      for await (const _ of query(
+        "DROP TABLE test_compact",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+    });
+
+    it("should handle async generator with JSONCompactEachRowWithNames", async () => {
+      // Create table
+      for await (const chunk of query(
+        "CREATE TABLE IF NOT EXISTS test_compact_async (id UInt32, name String) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+
+      // Async generator yielding objects
+      async function* generateRows() {
+        for (let i = 0; i < 100; i++) {
+          yield { id: i, name: `name_${i}` };
+        }
+      }
+
+      await insert(
+        "INSERT INTO test_compact_async FORMAT JSONCompactEachRowWithNames",
+        streamJsonCompactEachRowWithNames(generateRows()),
+        sessionId,
+        { baseUrl, auth },
+      );
+
+      // Verify count
+      const result = await collectText(query(
+        "SELECT count(*) as cnt FROM test_compact_async FORMAT JSON",
+        sessionId,
+        { baseUrl, auth },
+      ));
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(Number(parsed.data[0].cnt), 100);
+
+      // Cleanup
+      for await (const _ of query(
+        "DROP TABLE test_compact_async",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {
+        // consume stream
+      }
+    });
+
+    it("should parse JSONCompactEachRowWithNames query results", async () => {
+      // Create and populate table
+      for await (const _ of query(
+        "CREATE TABLE IF NOT EXISTS test_compact_parse (id UInt32, name String, value Float64) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+
+      await insert(
+        "INSERT INTO test_compact_parse FORMAT JSONEachRow",
+        streamJsonEachRow([
+          { id: 1, name: "alice", value: 1.5 },
+          { id: 2, name: "bob", value: 2.5 },
+          { id: 3, name: "charlie", value: 3.5 },
+        ]),
+        sessionId,
+        { baseUrl, auth },
+      );
+
+      // Query with JSONCompactEachRowWithNames and parse
+      const rows: Array<{ id: number; name: string; value: number }> = [];
+      for await (const row of parseJsonCompactEachRowWithNames<{ id: number; name: string; value: number }>(
+        query("SELECT * FROM test_compact_parse ORDER BY id FORMAT JSONCompactEachRowWithNames", sessionId, { baseUrl, auth, compression: "none" })
+      )) {
+        rows.push(row);
+      }
+
+      assert.strictEqual(rows.length, 3);
+      assert.strictEqual(rows[0].id, 1);
+      assert.strictEqual(rows[0].name, "alice");
+      assert.strictEqual(rows[0].value, 1.5);
+      assert.strictEqual(rows[2].name, "charlie");
+
+      // Cleanup
+      for await (const _ of query(
+        "DROP TABLE test_compact_parse",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
     });
   });
 
@@ -207,20 +333,17 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.ok(progressUpdates > 0, "Should have progress updates");
 
       // Verify count
-      let result = "";
-      for await (const chunk of query(
+      const result = await collectText(query(
         "SELECT count(*) as cnt FROM test_generator FORMAT JSON",
         sessionId,
         { baseUrl, auth },
-      )) {
-        result += chunk;
-      }
+      ));
 
       const parsed = JSON.parse(result);
       assert.strictEqual(Number(parsed.data[0].cnt), 1000);
 
       // Clean up
-      for await (const chunk of query(
+      for await (const _ of query(
         "DROP TABLE test_generator",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -254,20 +377,17 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       );
 
       // Verify
-      let result = "";
-      for await (const chunk of query(
+      const result = await collectText(query(
         "SELECT count(*) as cnt FROM test_single FORMAT JSON",
         sessionId,
         { baseUrl, auth },
-      )) {
-        result += chunk;
-      }
+      ));
 
       const parsed = JSON.parse(result);
       assert.strictEqual(Number(parsed.data[0].cnt), 500);
 
       // Clean up
-      for await (const chunk of query(
+      for await (const _ of query(
         "DROP TABLE test_single",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -301,11 +421,11 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       let chunks = 0;
       let totalRows = 0;
 
-      for await (const chunk of query(
+      for await (const chunk of streamText(query(
         "SELECT * FROM test_stream FORMAT JSONEachRow",
         sessionId,
         { baseUrl, auth },
-      )) {
+      ))) {
         chunks++;
         // Count newlines to estimate rows
         totalRows += (chunk.match(/\n/g) || []).length;
@@ -315,7 +435,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(totalRows, 10000);
 
       // Clean up
-      for await (const chunk of query(
+      for await (const _ of query(
         "DROP TABLE test_stream",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -329,11 +449,11 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       let chunks = 0;
       let totalRows = 0;
 
-      for await (const chunk of query(
+      for await (const chunk of streamText(query(
         "SELECT number FROM system.numbers LIMIT 100000 FORMAT CSV",
         sessionId,
         { baseUrl, auth },
-      )) {
+      ))) {
         chunks++;
         // Count actual data rows (CSV format, one number per line)
         const lines = chunk.split("\n").filter((line) => line.trim() !== "");

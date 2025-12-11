@@ -41,14 +41,24 @@ await insert(
   config
 );
 
-// Query (compression enabled by default)
-for await (const chunk of query(
+// Query (yields Uint8Array, compression enabled by default)
+import { query, streamText, collectText } from "@maxjustus/chttp";
+
+// Stream text chunks
+for await (const text of streamText(query(
   "SELECT * FROM table FORMAT JSON",
   "session123",
   config,
-)) {
-  console.log(chunk);
+))) {
+  console.log(text);
 }
+
+// Or collect entire response
+const json = await collectText(query(
+  "SELECT * FROM table FORMAT JSON",
+  "session123",
+  config,
+));
 
 // DDL statements (consume the iterator)
 for await (const _ of query("CREATE TABLE ...", "session123", config)) {}
@@ -95,10 +105,10 @@ await insert(
 
 ## Parsing Query Results
 
-The `query()` function yields decompressed chunks aligned to compression blocks, not rows. Use helpers to parse:
+The `query()` function yields raw `Uint8Array` chunks aligned to compression blocks, not rows. Use helpers to parse:
 
 ```ts
-import { query, streamLines, streamJsonLines, collectResponse } from "@maxjustus/chttp";
+import { query, streamText, streamLines, streamJsonLines, collectText, collectBytes } from "@maxjustus/chttp";
 
 // JSONEachRow - streaming parsed objects
 for await (const row of streamJsonLines(query("SELECT * FROM t FORMAT JSONEachRow", session, config))) {
@@ -110,17 +120,105 @@ for await (const line of streamLines(query("SELECT * FROM t FORMAT CSV", session
   const [id, name] = line.split(",");
 }
 
-// JSON format - buffer entire response with helper
-const json = await collectResponse(query("SELECT * FROM t FORMAT JSON", session, config));
+// JSON format - buffer entire response
+const json = await collectText(query("SELECT * FROM t FORMAT JSON", session, config));
 const data = JSON.parse(json);
 
-// Or buffer manually
-let result = "";
-for await (const chunk of query("SELECT * FROM t FORMAT JSON", session, config)) {
-  result += chunk;
-}
-const data2 = JSON.parse(result);
+// Binary formats (RowBinary, etc.)
+const bytes = await collectBytes(query("SELECT * FROM t FORMAT RowBinaryWithNamesAndTypes", session, config));
 ```
+
+## RowBinary Format
+
+For high-performance inserts, use the binary `RowBinaryWithNames` format instead of JSON:
+
+```ts
+import { insert, encodeRowBinaryWithNames, type ColumnDef } from "@maxjustus/chttp";
+
+const columns: ColumnDef[] = [
+  { name: "id", type: "UInt32" },
+  { name: "name", type: "String" },
+  { name: "value", type: "Float64" },
+];
+
+const rows = [
+  [1, "alice", 1.5],
+  [2, "bob", 2.5],
+];
+
+const data = encodeRowBinaryWithNames(columns, rows);
+
+await insert(
+  "INSERT INTO table FORMAT RowBinaryWithNames",
+  data,
+  "session123",
+  config
+);
+```
+
+Supported types:
+- Integers: `Int8`-`Int64`, `UInt8`-`UInt64`, `Int128`, `UInt128`, `Int256`, `UInt256`
+- Floats: `Float32`, `Float64`
+- Decimals: `Decimal32(P,S)`, `Decimal64(P,S)`, `Decimal128(P,S)`, `Decimal256(P,S)`
+- Strings: `String`, `FixedString(N)`
+- Date/Time: `Date`, `Date32`, `DateTime`, `DateTime64(precision)`
+- Other: `Bool`, `UUID`, `IPv4`, `IPv6`, `Enum8(...)`, `Enum16(...)`
+- Containers: `Nullable(T)`, `Array(T)`, `Tuple(T1, T2, ...)`, `Map(K, V)`, `Variant(T1, T2, ...)`
+- JSON: `JSON`, `Object('json')` (string mode - requires ClickHouse setting)
+
+Types can be arbitrarily nested: `Tuple(String, Array(Int32), Map(String, Float64))`.
+
+Typed arrays (`Int32Array`, `Float64Array`, etc.) are supported for array columns. Maps accept JS objects or `Map` instances. BigInt values are used for `Int128`/`UInt128`/`Int256`/`UInt256`. Decimal types return strings for precision preservation.
+
+### Decoding Query Results
+
+Use `collectBytes` with `RowBinaryWithNamesAndTypes` format to decode query results:
+
+```ts
+import { query, collectBytes, decodeRowBinaryWithNamesAndTypes } from "@maxjustus/chttp";
+
+const data = await collectBytes(query(
+  "SELECT * FROM table FORMAT RowBinaryWithNamesAndTypes",
+  "session123",
+  config
+));
+
+const { columns, rows } = decodeRowBinaryWithNamesAndTypes(data);
+// columns: [{ name: "id", type: "UInt32" }, { name: "name", type: "String" }, ...]
+// rows: [[1, "alice"], [2, "bob"], ...]
+```
+
+The `decodeRowBinaryWithNamesAndTypes` function returns column names, types, and row data. For `RowBinaryWithNames` format (types not included), use `decodeRowBinaryWithNames(data, types)` and provide column types.
+
+## JSONCompactEachRowWithNames Format
+
+Compact JSON format where the first row contains column names and subsequent rows are value arrays:
+
+```ts
+import { insert, query, streamJsonCompactEachRowWithNames, parseJsonCompactEachRowWithNames } from "@maxjustus/chttp";
+
+// Insert - objects are automatically converted to compact arrays
+const rows = [
+  { id: 1, name: "alice", value: 1.5 },
+  { id: 2, name: "bob", value: 2.5 },
+];
+
+await insert(
+  "INSERT INTO table FORMAT JSONCompactEachRowWithNames",
+  streamJsonCompactEachRowWithNames(rows),  // columns extracted from first object
+  "session123",
+  config
+);
+
+// Query - parse compact format back to objects
+for await (const row of parseJsonCompactEachRowWithNames(
+  query("SELECT * FROM table FORMAT JSONCompactEachRowWithNames", "session123", config)
+)) {
+  console.log(row.id, row.name);
+}
+```
+
+Optionally specify column order: `streamJsonCompactEachRowWithNames(rows, ["name", "id"])`.
 
 ## Timeout and Cancellation
 

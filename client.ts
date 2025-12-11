@@ -6,6 +6,16 @@ import {
   type MethodCode,
 } from "./compression.ts";
 
+export {
+  encodeRowBinaryWithNames,
+  decodeRowBinaryWithNames,
+  decodeRowBinaryWithNamesAndTypes,
+  type ColumnDef,
+  type ScalarType,
+  type ColumnType,
+  type DecodeResult,
+} from "./rowbinary.ts";
+
 export type Compression = "lz4" | "zstd" | "none";
 
 // AbortSignal.any() added in Node 20+, ES2024
@@ -107,6 +117,8 @@ async function insert(
     session_id: sessionId,
     query: query,
     decompress: "1",
+    // Enable JSON as string for RowBinary format compatibility
+    input_format_binary_read_json_as_string: "1",
   };
 
   // Single Uint8Array - compress and send directly
@@ -290,6 +302,88 @@ function streamJsonEachRow(
   })();
 }
 
+/**
+ * Convert objects to JSONCompactEachRowWithNames format.
+ * First yields column names header, then each row as a JSON array.
+ *
+ * @param data - Iterable of objects to encode
+ * @param columns - Column names (if omitted, extracted from first object's keys)
+ *
+ * @example
+ * const rows = [{ id: 1, name: "foo" }, { id: 2, name: "bar" }];
+ * await insert(
+ *   "INSERT INTO t FORMAT JSONCompactEachRowWithNames",
+ *   streamJsonCompactEachRowWithNames(rows),
+ *   sessionId
+ * );
+ */
+function streamJsonCompactEachRowWithNames(
+  data: Iterable<Record<string, unknown>>,
+  columns?: string[]
+): Generator<Uint8Array>;
+function streamJsonCompactEachRowWithNames(
+  data: AsyncIterable<Record<string, unknown>>,
+  columns?: string[]
+): AsyncGenerator<Uint8Array>;
+function streamJsonCompactEachRowWithNames(
+  data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>,
+  columns?: string[],
+): Generator<Uint8Array> | AsyncGenerator<Uint8Array> {
+  if (Symbol.asyncIterator in data) {
+    return (async function*() {
+      let cols = columns;
+      for await (const row of data) {
+        if (!cols) {
+          cols = Object.keys(row);
+          yield encoder.encode(JSON.stringify(cols) + "\n");
+        } else if (cols === columns) {
+          yield encoder.encode(JSON.stringify(cols) + "\n");
+        }
+        yield encoder.encode(JSON.stringify(cols.map(k => row[k])) + "\n");
+      }
+    })();
+  }
+  return (function*() {
+    let cols = columns;
+    for (const row of data as Iterable<Record<string, unknown>>) {
+      if (!cols) {
+        cols = Object.keys(row);
+        yield encoder.encode(JSON.stringify(cols) + "\n");
+      } else if (cols === columns) {
+        yield encoder.encode(JSON.stringify(cols) + "\n");
+      }
+      yield encoder.encode(JSON.stringify(cols.map(k => row[k])) + "\n");
+    }
+  })();
+}
+
+/**
+ * Parse JSONCompactEachRowWithNames format into objects.
+ * First line is column names, subsequent lines are value arrays.
+ *
+ * @example
+ * for await (const row of parseJsonCompactEachRowWithNames(query("SELECT * FROM t FORMAT JSONCompactEachRowWithNames", session, config))) {
+ *   console.log(row.id, row.name);
+ * }
+ */
+async function* parseJsonCompactEachRowWithNames<T = Record<string, unknown>>(
+  chunks: AsyncIterable<Uint8Array>
+): AsyncGenerator<T> {
+  let columns: string[] | null = null;
+  for await (const line of streamLines(chunks)) {
+    const parsed = JSON.parse(line) as unknown[];
+    if (!columns) {
+      columns = parsed as string[];
+      continue;
+    }
+    const obj: Record<string, unknown> = {};
+    for (let i = 0; i < columns.length; i++) {
+      obj[columns[i]] = parsed[i];
+    }
+    yield obj as T;
+  }
+}
+
 interface QueryOptions {
   baseUrl?: string;
   auth?: AuthConfig;
@@ -305,7 +399,7 @@ async function* query(
   query: string,
   sessionId: string,
   options: QueryOptions = {},
-): AsyncGenerator<string, void, unknown> {
+): AsyncGenerator<Uint8Array, void, unknown> {
   await init();
   const baseUrl = options.baseUrl || "http://localhost:8123/";
   const compression = options.compression ?? "lz4";
@@ -313,6 +407,8 @@ async function* query(
   const params: Record<string, string> = {
     session_id: sessionId,
     default_format: "JSONEachRowWithProgress",
+    // Enable JSON as string for RowBinary format compatibility
+    output_format_binary_write_json_as_string: "1",
   };
 
   if (compressed) {
@@ -343,7 +439,7 @@ async function* query(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      yield decoder.decode(value, { stream: true });
+      yield value;
     }
   } else {
     // For compressed, decompress blocks as they arrive
@@ -379,7 +475,7 @@ async function* query(
 
         try {
           const decompressed = decodeBlock(block);
-          yield decoder.decode(decompressed);
+          yield decompressed;
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           throw new Error(`Block decompression failed: ${message}`);
@@ -398,7 +494,7 @@ async function* query(
 }
 
 /**
- * Buffer chunks and yield complete lines.
+ * Buffer byte chunks, decode to text, and yield complete lines.
  *
  * @example
  * for await (const line of streamLines(query("SELECT * FROM t FORMAT CSV", session, config))) {
@@ -406,12 +502,12 @@ async function* query(
  * }
  */
 async function* streamLines(
-  chunks: AsyncIterable<string>,
+  chunks: AsyncIterable<Uint8Array>,
   delimiter: string = "\n"
 ): AsyncGenerator<string> {
   let buffer = "";
-  for await (const chunk of chunks) {
-    buffer += chunk;
+  for await (const text of streamText(chunks)) {
+    buffer += text;
     const parts = buffer.split(delimiter);
     buffer = parts.pop() ?? "";
     for (const part of parts) {
@@ -422,7 +518,7 @@ async function* streamLines(
 }
 
 /**
- * Buffer chunks, split by newlines, and parse as JSON.
+ * Buffer byte chunks, split by newlines, and parse as JSON.
  * Use with query() for JSONEachRow format.
  *
  * @example
@@ -431,7 +527,7 @@ async function* streamLines(
  * }
  */
 async function* streamJsonLines<T = unknown>(
-  chunks: AsyncIterable<string>
+  chunks: AsyncIterable<Uint8Array>
 ): AsyncGenerator<T> {
   for await (const line of streamLines(chunks)) {
     yield JSON.parse(line) as T;
@@ -439,18 +535,61 @@ async function* streamJsonLines<T = unknown>(
 }
 
 /**
- * Buffer all chunks and return as a single string.
+ * Decode bytes to text strings with streaming support.
  *
  * @example
- * const json = await collectResponse(query("SELECT * FROM t FORMAT JSON", session, config));
- * const data = JSON.parse(json);
+ * for await (const text of streamText(query("SELECT * FROM t FORMAT JSON", session, config))) {
+ *   console.log(text);
+ * }
  */
-async function collectResponse(chunks: AsyncIterable<string>): Promise<string> {
-  let result = "";
+async function* streamText(
+  chunks: AsyncIterable<Uint8Array>
+): AsyncGenerator<string> {
+  const decoder = new TextDecoder();
   for await (const chunk of chunks) {
-    result += chunk;
+    yield decoder.decode(chunk, { stream: true });
+  }
+  // Flush any remaining bytes
+  const final = decoder.decode();
+  if (final) yield final;
+}
+
+/**
+ * Collect all chunks into a single Uint8Array.
+ *
+ * @example
+ * const data = await collectBytes(query("SELECT * FROM t FORMAT RowBinaryWithNamesAndTypes", session, config));
+ * const result = decodeRowBinaryWithNamesAndTypes(data);
+ */
+async function collectBytes(chunks: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
+  const parts: Uint8Array[] = [];
+  let totalLen = 0;
+  for await (const chunk of chunks) {
+    parts.push(chunk);
+    totalLen += chunk.length;
+  }
+  const result = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
   }
   return result;
 }
 
-export { init, insert, query, buildReqUrl, streamJsonEachRow, streamLines, streamJsonLines, collectResponse };
+/**
+ * Collect all bytes and decode to a single string.
+ *
+ * @example
+ * const json = await collectText(query("SELECT * FROM t FORMAT JSON", session, config));
+ * const data = JSON.parse(json);
+ */
+async function collectText(chunks: AsyncIterable<Uint8Array>): Promise<string> {
+  let result = "";
+  for await (const text of streamText(chunks)) {
+    result += text;
+  }
+  return result;
+}
+
+export { init, insert, query, buildReqUrl, streamJsonEachRow, streamJsonCompactEachRowWithNames, parseJsonCompactEachRowWithNames, streamText, streamLines, streamJsonLines, collectBytes, collectText };
