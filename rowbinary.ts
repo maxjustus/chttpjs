@@ -160,19 +160,27 @@ export class RowBinaryEncoder {
 
   // LEB128 for uint32 values (max 5 bytes)
   leb128(value: number) {
-    // fast path for single-byte values
+    this.ensure(5); // ensure at least 5 bytes of capacity for worst case
+
+    this.offset += this.leb128At(value, this.offset);
+  }
+
+  // returns number of bytes written
+  private leb128At(value: number, bytePosition: number): number {
     if (value < 128) {
-      this.ensure(1);
-      this.buffer[this.offset++] = value;
-      return;
+      this.buffer[bytePosition] = value;
+      return 1;
     }
 
-    this.ensure(5);
+    const start = bytePosition;
+
     do {
-      const more = value > 0x7f ? 0x80 : 0;
-      this.buffer[this.offset++] = (value & 0x7f) | more;
+      const more = value > 0x7f ? 0x80 : 0; // continuation bit signalling that there are more bytes to write after this one
+      this.buffer[bytePosition++] = (value & 0x7f) | more;
       value >>>= 7;
     } while (value !== 0);
+
+    return bytePosition - start;
   }
 
   string(value: string | Uint8Array) {
@@ -208,17 +216,9 @@ export class RowBinaryEncoder {
         );
       }
 
-      // Write length
-      let len = written!;
-      let pos = lenOffset;
-      do {
-        let byte = len & 0x7f;
-        len >>>= 7;
-        if (len !== 0) byte |= 0x80;
-        this.buffer[pos++] = byte;
-      } while (len !== 0);
+      const bytesWrittenForLen = this.leb128At(written!, lenOffset);
 
-      this.offset = lenOffset + lenBytes + written!;
+      this.offset = lenOffset + bytesWrittenForLen + written!;
     }
   }
 
