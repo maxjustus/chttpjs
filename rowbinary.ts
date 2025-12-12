@@ -20,6 +20,24 @@ export interface ColumnDef {
   type: ColumnType
 }
 
+// Little-endian DataView wrappers (ClickHouse uses LE for all binary formats)
+const getInt16LE = (v: DataView, o: number) => v.getInt16(o, true)
+const getInt32LE = (v: DataView, o: number) => v.getInt32(o, true)
+const getUint16LE = (v: DataView, o: number) => v.getUint16(o, true)
+const getUint32LE = (v: DataView, o: number) => v.getUint32(o, true)
+const getFloat32LE = (v: DataView, o: number) => v.getFloat32(o, true)
+const getFloat64LE = (v: DataView, o: number) => v.getFloat64(o, true)
+const getBigInt64LE = (v: DataView, o: number) => v.getBigInt64(o, true)
+const getBigUint64LE = (v: DataView, o: number) => v.getBigUint64(o, true)
+const setInt16LE = (v: DataView, o: number, val: number) => v.setInt16(o, val, true)
+const setInt32LE = (v: DataView, o: number, val: number) => v.setInt32(o, val, true)
+const setUint16LE = (v: DataView, o: number, val: number) => v.setUint16(o, val, true)
+const setUint32LE = (v: DataView, o: number, val: number) => v.setUint32(o, val, true)
+const setFloat32LE = (v: DataView, o: number, val: number) => v.setFloat32(o, val, true)
+const setFloat64LE = (v: DataView, o: number, val: number) => v.setFloat64(o, val, true)
+const setBigInt64LE = (v: DataView, o: number, val: bigint) => v.setBigInt64(o, val, true)
+const setBigUint64LE = (v: DataView, o: number, val: bigint) => v.setBigUint64(o, val, true)
+
 // LEB128 encoding (unsigned)
 function leb128Size(value: number): number {
   let size = 0
@@ -28,6 +46,77 @@ function leb128Size(value: number): number {
     size++
   } while (value !== 0)
   return size
+}
+
+// 128-bit BigInt read/write helpers (LE, low word first)
+function read128(view: DataView, offset: number, signed: boolean): bigint {
+  const low = getBigUint64LE(view, offset)
+  const high = signed ? getBigInt64LE(view, offset + 8) : getBigUint64LE(view, offset + 8)
+  return (high << 64n) | low
+}
+
+function write128(view: DataView, offset: number, value: bigint, signed: boolean): void {
+  const low = value & 0xffffffffffffffffn
+  const high = value >> 64n
+  setBigUint64LE(view, offset, low)
+  if (signed) setBigInt64LE(view, offset + 8, high)
+  else setBigUint64LE(view, offset + 8, high)
+}
+
+// 256-bit BigInt read/write helpers (LE, low word first)
+function read256(view: DataView, offset: number, signed: boolean): bigint {
+  let val = signed ? getBigInt64LE(view, offset + 24) : getBigUint64LE(view, offset + 24)
+  for (let i = 2; i >= 0; i--) {
+    val = (val << 64n) | getBigUint64LE(view, offset + i * 8)
+  }
+  return val
+}
+
+function write256(view: DataView, offset: number, value: bigint, signed: boolean): void {
+  for (let i = 0; i < 3; i++) {
+    setBigUint64LE(view, offset + i * 8, value & 0xffffffffffffffffn)
+    value >>= 64n
+  }
+  if (signed) setBigInt64LE(view, offset + 24, value)
+  else setBigUint64LE(view, offset + 24, value)
+}
+
+// Decimal type byte size from type name or precision
+function decimalByteSize(type: string): 4 | 8 | 16 | 32 {
+  if (type.startsWith('Decimal32')) return 4
+  if (type.startsWith('Decimal64')) return 8
+  if (type.startsWith('Decimal128')) return 16
+  if (type.startsWith('Decimal256')) return 32
+  // Generic Decimal(P, S) - determine from precision
+  const match = type.match(/Decimal\((\d+),/)
+  if (match) {
+    const precision = parseInt(match[1], 10)
+    if (precision <= 9) return 4
+    if (precision <= 18) return 8
+    if (precision <= 38) return 16
+    return 32
+  }
+  return 16 // default fallback
+}
+
+// Write scaled bigint in specified byte size
+function writeScaledInt(view: DataView, offset: number, scaled: bigint, byteSize: 4 | 8 | 16 | 32): void {
+  switch (byteSize) {
+    case 4: setInt32LE(view, offset, Number(scaled)); break
+    case 8: setBigInt64LE(view, offset, scaled); break
+    case 16: write128(view, offset, scaled, true); break
+    case 32: write256(view, offset, scaled, true); break
+  }
+}
+
+// Read scaled bigint from specified byte size
+function readScaledInt(view: DataView, offset: number, byteSize: 4 | 8 | 16 | 32): bigint {
+  switch (byteSize) {
+    case 4: return BigInt(getInt32LE(view, offset))
+    case 8: return getBigInt64LE(view, offset)
+    case 16: return read128(view, offset, true)
+    case 32: return read256(view, offset, true)
+  }
 }
 
 // Parse decimal string to scaled BigInt
@@ -342,7 +431,7 @@ function encodeVarUint(value: number): number[] {
 }
 
 // Decode a type from binary format, returns [type, bytesRead]
-function decodeTypeBinary(data: Uint8Array, offset: number): [string, number] {
+function decodeTypeBinary(data: Uint8Array, offset: number): [type: string, bytesRead: number] {
   const code = data[offset]
   offset++
 
@@ -503,21 +592,36 @@ function inferType(value: unknown): string {
   throw new Error(`Cannot infer Dynamic type for value: ${typeof value}`)
 }
 
-// Fast path codecs for numeric array elements
-// Avoids switch statement overhead in encode/decode loops
-interface NumericArrayCodec {
+// Scalar type codecs - unified encode/decode definitions
+// Used by array fast paths and scalar decoders
+interface ScalarCodec {
   size: number
-  encode: (view: DataView, offset: number, value: number | bigint) => void
-  decode: (view: DataView, offset: number) => number | bigint
+  encode: (view: DataView, offset: number, value: unknown) => void
+  decode: (view: DataView, offset: number) => unknown
 }
 
-const NUMERIC_ARRAY_CODECS: Record<string, NumericArrayCodec> = {
-  Int32:   { size: 4, encode: (v, o, val) => v.setInt32(o, val as number, true),        decode: (v, o) => v.getInt32(o, true) },
-  UInt32:  { size: 4, encode: (v, o, val) => v.setUint32(o, val as number, true),       decode: (v, o) => v.getUint32(o, true) },
-  Int64:   { size: 8, encode: (v, o, val) => v.setBigInt64(o, BigInt(val), true),       decode: (v, o) => v.getBigInt64(o, true) },
-  UInt64:  { size: 8, encode: (v, o, val) => v.setBigUint64(o, BigInt(val), true),      decode: (v, o) => v.getBigUint64(o, true) },
-  Float32: { size: 4, encode: (v, o, val) => v.setFloat32(o, val as number, true),      decode: (v, o) => v.getFloat32(o, true) },
-  Float64: { size: 8, encode: (v, o, val) => v.setFloat64(o, val as number, true),      decode: (v, o) => v.getFloat64(o, true) },
+const SCALAR_CODECS: Record<string, ScalarCodec> = {
+  Int8: { size: 1, encode: (v, o, val) => v.setInt8(o, val as number), decode: (v, o) => v.getInt8(o) },
+  Int16: { size: 2, encode: (v, o, val) => setInt16LE(v, o, val as number), decode: (v, o) => getInt16LE(v, o) },
+  Int32: { size: 4, encode: (v, o, val) => setInt32LE(v, o, val as number), decode: (v, o) => getInt32LE(v, o) },
+  Int64: { size: 8, encode: (v, o, val) => setBigInt64LE(v, o, BigInt(val as number | bigint)), decode: (v, o) => getBigInt64LE(v, o) },
+  UInt8: { size: 1, encode: (v, o, val) => v.setUint8(o, val as number), decode: (v, o) => v.getUint8(o) },
+  UInt16: { size: 2, encode: (v, o, val) => setUint16LE(v, o, val as number), decode: (v, o) => getUint16LE(v, o) },
+  UInt32: { size: 4, encode: (v, o, val) => setUint32LE(v, o, val as number), decode: (v, o) => getUint32LE(v, o) },
+  UInt64: { size: 8, encode: (v, o, val) => setBigUint64LE(v, o, BigInt(val as number | bigint)), decode: (v, o) => getBigUint64LE(v, o) },
+  Float32: { size: 4, encode: (v, o, val) => setFloat32LE(v, o, val as number), decode: (v, o) => getFloat32LE(v, o) },
+  Float64: { size: 8, encode: (v, o, val) => setFloat64LE(v, o, val as number), decode: (v, o) => getFloat64LE(v, o) },
+  Bool: { size: 1, encode: (v, o, val) => v.setUint8(o, val ? 1 : 0), decode: (v, o) => v.getUint8(o) !== 0 },
+}
+
+// Numeric array codecs (subset of SCALAR_CODECS for typed array operations)
+const NUMERIC_ARRAY_CODECS: Record<string, ScalarCodec> = {
+  Int32: SCALAR_CODECS.Int32,
+  UInt32: SCALAR_CODECS.UInt32,
+  Int64: SCALAR_CODECS.Int64,
+  UInt64: SCALAR_CODECS.UInt64,
+  Float32: SCALAR_CODECS.Float32,
+  Float64: SCALAR_CODECS.Float64,
 }
 
 // TypedArray constructors for fast array decoding (returns view into buffer)
@@ -526,7 +630,7 @@ type TypedArrayConstructor =
   | typeof BigInt64Array | typeof BigUint64Array
   | typeof Float32Array | typeof Float64Array
 
-const TYPED_ARRAY_CTORS: Record<string, TypedArrayConstructor> = {
+const TYPED_ARRAYS: Record<string, TypedArrayConstructor> = {
   Int32: Int32Array,
   UInt32: Uint32Array,
   Int64: BigInt64Array,
@@ -627,17 +731,17 @@ class RowBinaryEncoder {
         return
       case 'UInt16':
         this.ensure(2)
-        this.view.setUint16(this.offset, value as number, true)
+        setUint16LE(this.view, this.offset, value as number)
         this.offset += 2
         return
       case 'UInt32':
         this.ensure(4)
-        this.view.setUint32(this.offset, value as number, true)
+        setUint32LE(this.view, this.offset, value as number)
         this.offset += 4
         return
       case 'UInt64':
         this.ensure(8)
-        this.view.setBigUint64(this.offset, BigInt(value as number | bigint), true)
+        setBigUint64LE(this.view, this.offset, BigInt(value as number | bigint))
         this.offset += 8
         return
       case 'Int8':
@@ -646,27 +750,27 @@ class RowBinaryEncoder {
         return
       case 'Int16':
         this.ensure(2)
-        this.view.setInt16(this.offset, value as number, true)
+        setInt16LE(this.view, this.offset, value as number)
         this.offset += 2
         return
       case 'Int32':
         this.ensure(4)
-        this.view.setInt32(this.offset, value as number, true)
+        setInt32LE(this.view, this.offset, value as number)
         this.offset += 4
         return
       case 'Int64':
         this.ensure(8)
-        this.view.setBigInt64(this.offset, BigInt(value as number | bigint), true)
+        setBigInt64LE(this.view, this.offset, BigInt(value as number | bigint))
         this.offset += 8
         return
       case 'Float32':
         this.ensure(4)
-        this.view.setFloat32(this.offset, value as number, true)
+        setFloat32LE(this.view, this.offset, value as number)
         this.offset += 4
         return
       case 'Float64':
         this.ensure(8)
-        this.view.setFloat64(this.offset, value as number, true)
+        setFloat64LE(this.view, this.offset, value as number)
         this.offset += 8
         return
       case 'Bool':
@@ -679,14 +783,14 @@ class RowBinaryEncoder {
       case 'Date': {
         this.ensure(2)
         const days = Math.floor((value as Date).getTime() / 86400000)
-        this.view.setUint16(this.offset, days, true)
+        setUint16LE(this.view, this.offset, days)
         this.offset += 2
         return
       }
       case 'DateTime': {
         this.ensure(4)
         const seconds = Math.floor((value as Date).getTime() / 1000)
-        this.view.setUint32(this.offset, seconds, true)
+        setUint32LE(this.view, this.offset, seconds)
         this.offset += 4
         return
       }
@@ -805,7 +909,7 @@ class RowBinaryEncoder {
       const ticks = precision >= 3
         ? ms * (10n ** BigInt(precision - 3))
         : ms / (10n ** BigInt(3 - precision))
-      this.view.setBigInt64(this.offset, ticks, true)
+      setBigInt64LE(this.view, this.offset, ticks)
       this.offset += 8
       return
     }
@@ -814,7 +918,7 @@ class RowBinaryEncoder {
     if (type === 'Date32') {
       this.ensure(4)
       const days = Math.floor((value as Date).getTime() / 86400000)
-      this.view.setInt32(this.offset, days, true)
+      setInt32LE(this.view, this.offset, days)
       this.offset += 4
       return
     }
@@ -833,7 +937,7 @@ class RowBinaryEncoder {
       this.ensure(4)
       const parts = (value as string).split('.').map(Number)
       const num = ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0
-      this.view.setUint32(this.offset, num, true)
+      setUint32LE(this.view, this.offset, num)
       this.offset += 4
       return
     }
@@ -852,152 +956,41 @@ class RowBinaryEncoder {
       return
     }
 
-    // Int128
-    if (type === 'Int128') {
+    // Int128/UInt128
+    if (type === 'Int128' || type === 'UInt128') {
       this.ensure(16)
-      const val = BigInt(value as bigint | number | string)
-      const low = val & 0xffffffffffffffffn
-      const high = val >> 64n
-      this.view.setBigUint64(this.offset, low, true)
-      this.view.setBigInt64(this.offset + 8, high, true)
+      write128(this.view, this.offset, BigInt(value as bigint | number | string), type === 'Int128')
       this.offset += 16
       return
     }
 
-    // UInt128
-    if (type === 'UInt128') {
-      this.ensure(16)
-      const val = BigInt(value as bigint | number | string)
-      const low = val & 0xffffffffffffffffn
-      const high = val >> 64n
-      this.view.setBigUint64(this.offset, low, true)
-      this.view.setBigUint64(this.offset + 8, high, true)
-      this.offset += 16
-      return
-    }
-
-    // Int256
-    if (type === 'Int256') {
+    // Int256/UInt256
+    if (type === 'Int256' || type === 'UInt256') {
       this.ensure(32)
-      let val = BigInt(value as bigint | number | string)
-      for (let i = 0; i < 3; i++) {
-        this.view.setBigUint64(this.offset + i * 8, val & 0xffffffffffffffffn, true)
-        val >>= 64n
-      }
-      this.view.setBigInt64(this.offset + 24, val, true)
+      write256(this.view, this.offset, BigInt(value as bigint | number | string), type === 'Int256')
       this.offset += 32
       return
     }
 
-    // UInt256
-    if (type === 'UInt256') {
-      this.ensure(32)
-      let val = BigInt(value as bigint | number | string)
-      for (let i = 0; i < 4; i++) {
-        this.view.setBigUint64(this.offset + i * 8, val & 0xffffffffffffffffn, true)
-        val >>= 64n
-      }
-      this.offset += 32
+    // Enum8/Enum16 - stored as Int8/Int16
+    if (type.startsWith('Enum8') || type.startsWith('Enum16')) {
+      const codec = type.startsWith('Enum8') ? SCALAR_CODECS.Int8 : SCALAR_CODECS.Int16
+      this.ensure(codec.size)
+      codec.encode(this.view, this.offset, value)
+      this.offset += codec.size
       return
     }
 
-    // Enum8
-    if (type.startsWith('Enum8')) {
-      this.ensure(1)
-      this.view.setInt8(this.offset++, value as number)
-      return
-    }
-
-    // Enum16
-    if (type.startsWith('Enum16')) {
-      this.ensure(2)
-      this.view.setInt16(this.offset, value as number, true)
-      this.offset += 2
-      return
-    }
-
-    // Decimal types
-    if (type.startsWith('Decimal32')) {
-      this.ensure(4)
-      const scale = extractDecimalScale(type)
-      const scaled = Math.round((value as number) * Math.pow(10, scale))
-      this.view.setInt32(this.offset, scaled, true)
-      this.offset += 4
-      return
-    }
-
-    if (type.startsWith('Decimal64')) {
-      this.ensure(8)
-      const scale = extractDecimalScale(type)
-      const scaled = BigInt(Math.round((value as number) * Math.pow(10, scale)))
-      this.view.setBigInt64(this.offset, scaled, true)
-      this.offset += 8
-      return
-    }
-
-    if (type.startsWith('Decimal128')) {
-      this.ensure(16)
+    // All Decimal types: Decimal32, Decimal64, Decimal128, Decimal256, Decimal(P, S)
+    if (type.startsWith('Decimal')) {
+      const byteSize = decimalByteSize(type)
+      this.ensure(byteSize)
       const scale = extractDecimalScale(type)
       const strVal = typeof value === 'string' ? value : String(value)
       const scaled = parseDecimalToScaledBigInt(strVal, scale)
-      const low = scaled & 0xffffffffffffffffn
-      const high = scaled >> 64n
-      this.view.setBigUint64(this.offset, low, true)
-      this.view.setBigInt64(this.offset + 8, high, true)
-      this.offset += 16
+      writeScaledInt(this.view, this.offset, scaled, byteSize)
+      this.offset += byteSize
       return
-    }
-
-    if (type.startsWith('Decimal256')) {
-      this.ensure(32)
-      const scale = extractDecimalScale(type)
-      const strVal = typeof value === 'string' ? value : String(value)
-      let scaled = parseDecimalToScaledBigInt(strVal, scale)
-      for (let i = 0; i < 3; i++) {
-        this.view.setBigUint64(this.offset + i * 8, scaled & 0xffffffffffffffffn, true)
-        scaled >>= 64n
-      }
-      this.view.setBigInt64(this.offset + 24, scaled, true)
-      this.offset += 32
-      return
-    }
-
-    // Generic Decimal(P, S)
-    if (type.startsWith('Decimal(')) {
-      const match = type.match(/Decimal\((\d+),\s*(\d+)\)/)
-      if (match) {
-        const precision = parseInt(match[1], 10)
-        const scale = parseInt(match[2], 10)
-        const strVal = typeof value === 'string' ? value : String(value)
-        const scaled = parseDecimalToScaledBigInt(strVal, scale)
-
-        if (precision <= 9) {
-          this.ensure(4)
-          this.view.setInt32(this.offset, Number(scaled), true)
-          this.offset += 4
-        } else if (precision <= 18) {
-          this.ensure(8)
-          this.view.setBigInt64(this.offset, scaled, true)
-          this.offset += 8
-        } else if (precision <= 38) {
-          this.ensure(16)
-          const low = scaled & 0xffffffffffffffffn
-          const high = scaled >> 64n
-          this.view.setBigUint64(this.offset, low, true)
-          this.view.setBigInt64(this.offset + 8, high, true)
-          this.offset += 16
-        } else {
-          this.ensure(32)
-          let s = scaled
-          for (let i = 0; i < 3; i++) {
-            this.view.setBigUint64(this.offset + i * 8, s & 0xffffffffffffffffn, true)
-            s >>= 64n
-          }
-          this.view.setBigInt64(this.offset + 24, s, true)
-          this.offset += 32
-        }
-        return
-      }
     }
 
     // Variant
@@ -1120,7 +1113,7 @@ function utf8DecodeSmall(data: Uint8Array, start: number, end: number): string {
     } else {
       // 4-byte sequence (surrogate pair)
       const cp = ((byte & 0x07) << 18) | ((data[i++] & 0x3f) << 12) |
-                 ((data[i++] & 0x3f) << 6) | (data[i++] & 0x3f)
+        ((data[i++] & 0x3f) << 6) | (data[i++] & 0x3f)
       result += String.fromCharCode(
         0xd800 + ((cp - 0x10000) >> 10),
         0xdc00 + ((cp - 0x10000) & 0x3ff)
@@ -1144,28 +1137,28 @@ function readString(data: Uint8Array, offset: number): [string, number] {
 }
 
 // Decoder functions - read value at offset, return [value, newOffset]
+// Built from SCALAR_CODECS where possible, with special handling for Date/DateTime/String
 type Decoder = (view: DataView, data: Uint8Array, offset: number) => [unknown, number]
 
+// Helper to wrap SCALAR_CODECS for decoder interface
+const wrapCodec = (codec: ScalarCodec): Decoder =>
+  (view, _, offset) => [codec.decode(view, offset), offset + codec.size]
+
 const scalarDecoders: Record<ScalarType, Decoder> = {
-  Int8: (view, _, offset) => [view.getInt8(offset), offset + 1],
-  Int16: (view, _, offset) => [view.getInt16(offset, true), offset + 2],
-  Int32: (view, _, offset) => [view.getInt32(offset, true), offset + 4],
-  Int64: (view, _, offset) => [view.getBigInt64(offset, true), offset + 8],
-  UInt8: (view, _, offset) => [view.getUint8(offset), offset + 1],
-  UInt16: (view, _, offset) => [view.getUint16(offset, true), offset + 2],
-  UInt32: (view, _, offset) => [view.getUint32(offset, true), offset + 4],
-  UInt64: (view, _, offset) => [view.getBigUint64(offset, true), offset + 8],
-  Float32: (view, _, offset) => [view.getFloat32(offset, true), offset + 4],
-  Float64: (view, _, offset) => [view.getFloat64(offset, true), offset + 8],
-  Bool: (view, _, offset) => [view.getUint8(offset) !== 0, offset + 1],
-  Date: (view, _, offset) => {
-    const days = view.getUint16(offset, true)
-    return [new Date(days * 86400000), offset + 2]
-  },
-  DateTime: (view, _, offset) => {
-    const seconds = view.getUint32(offset, true)
-    return [new Date(seconds * 1000), offset + 4]
-  },
+  Int8: wrapCodec(SCALAR_CODECS.Int8),
+  Int16: wrapCodec(SCALAR_CODECS.Int16),
+  Int32: wrapCodec(SCALAR_CODECS.Int32),
+  Int64: wrapCodec(SCALAR_CODECS.Int64),
+  UInt8: wrapCodec(SCALAR_CODECS.UInt8),
+  UInt16: wrapCodec(SCALAR_CODECS.UInt16),
+  UInt32: wrapCodec(SCALAR_CODECS.UInt32),
+  UInt64: wrapCodec(SCALAR_CODECS.UInt64),
+  Float32: wrapCodec(SCALAR_CODECS.Float32),
+  Float64: wrapCodec(SCALAR_CODECS.Float64),
+  Bool: wrapCodec(SCALAR_CODECS.Bool),
+  // Special types with value transformations
+  Date: (view, _, offset) => [new Date(getUint16LE(view, offset) * 86400000), offset + 2],
+  DateTime: (view, _, offset) => [new Date(getUint32LE(view, offset) * 1000), offset + 4],
   String: (_, data, offset) => readString(data, offset),
 }
 
@@ -1182,7 +1175,7 @@ function decodeValue(view: DataView, data: Uint8Array, offset: number, type: str
 
   // Date32 - Int32 LE (signed days since epoch)
   if (type === 'Date32') {
-    const days = view.getInt32(offset, true)
+    const days = getInt32LE(view, offset)
     return [new Date(days * 86400000), offset + 4]
   }
 
@@ -1201,14 +1194,10 @@ function decodeValue(view: DataView, data: Uint8Array, offset: number, type: str
     return [textDecoder.decode(bytes.subarray(0, end)), offset + n]
   }
 
-  // Enum8 - Int8 value
-  if (type.startsWith('Enum8')) {
-    return [view.getInt8(offset), offset + 1]
-  }
-
-  // Enum16 - Int16 LE value
-  if (type.startsWith('Enum16')) {
-    return [view.getInt16(offset, true), offset + 2]
+  // Enum8/Enum16 - stored as Int8/Int16
+  if (type.startsWith('Enum8') || type.startsWith('Enum16')) {
+    const codec = type.startsWith('Enum8') ? SCALAR_CODECS.Int8 : SCALAR_CODECS.Int16
+    return [codec.decode(view, offset), offset + codec.size]
   }
 
   // UUID - stored as two UInt64 LE (high part first, each in LE)
@@ -1224,7 +1213,7 @@ function decodeValue(view: DataView, data: Uint8Array, offset: number, type: str
 
   // IPv4 - UInt32 LE to "a.b.c.d" (stored as network-order value in LE)
   if (type === 'IPv4') {
-    const num = view.getUint32(offset, true)
+    const num = getUint32LE(view, offset)
     // Network order: first octet is MSB
     const ip = `${(num >> 24) & 0xff}.${(num >> 16) & 0xff}.${(num >> 8) & 0xff}.${num & 0xff}`
     return [ip, offset + 4]
@@ -1245,7 +1234,7 @@ function decodeValue(view: DataView, data: Uint8Array, offset: number, type: str
   if (type.startsWith('DateTime64')) {
     const match = type.match(/DateTime64\((\d+)/)
     const precision = match ? parseInt(match[1], 10) : 3
-    const ticks = view.getBigInt64(offset, true)
+    const ticks = getBigInt64LE(view, offset)
     // Convert ticks to ms: ticks / 10^(precision - 3)
     const ms = precision >= 3
       ? ticks / (10n ** BigInt(precision - 3))
@@ -1253,97 +1242,22 @@ function decodeValue(view: DataView, data: Uint8Array, offset: number, type: str
     return [new Date(Number(ms)), offset + 8]
   }
 
-  // Int128 - 16 bytes LE (signed)
-  if (type === 'Int128') {
-    const low = view.getBigUint64(offset, true)
-    const high = view.getBigInt64(offset + 8, true)
-    return [(high << 64n) | low, offset + 16]
+  // Int128/UInt128 - 16 bytes LE
+  if (type === 'Int128' || type === 'UInt128') {
+    return [read128(view, offset, type === 'Int128'), offset + 16]
   }
 
-  // UInt128 - 16 bytes LE (unsigned)
-  if (type === 'UInt128') {
-    const low = view.getBigUint64(offset, true)
-    const high = view.getBigUint64(offset + 8, true)
-    return [(high << 64n) | low, offset + 16]
+  // Int256/UInt256 - 32 bytes LE
+  if (type === 'Int256' || type === 'UInt256') {
+    return [read256(view, offset, type === 'Int256'), offset + 32]
   }
 
-  // Int256 - 32 bytes LE (signed)
-  if (type === 'Int256') {
-    let val = view.getBigInt64(offset + 24, true) // top 64 bits signed
-    for (let i = 2; i >= 0; i--) {
-      val = (val << 64n) | view.getBigUint64(offset + i * 8, true)
-    }
-    return [val, offset + 32]
-  }
-
-  // UInt256 - 32 bytes LE (unsigned)
-  if (type === 'UInt256') {
-    let val = 0n
-    for (let i = 3; i >= 0; i--) {
-      val = (val << 64n) | view.getBigUint64(offset + i * 8, true)
-    }
-    return [val, offset + 32]
-  }
-
-  // Decimal32(P, S) - Int32 LE to string
-  if (type.startsWith('Decimal32')) {
+  // All Decimal types: Decimal32, Decimal64, Decimal128, Decimal256, Decimal(P, S)
+  if (type.startsWith('Decimal')) {
+    const byteSize = decimalByteSize(type)
     const scale = extractDecimalScale(type)
-    const val = view.getInt32(offset, true)
-    return [formatScaledBigInt(BigInt(val), scale), offset + 4]
-  }
-
-  // Decimal64(P, S) - Int64 LE to string
-  if (type.startsWith('Decimal64')) {
-    const scale = extractDecimalScale(type)
-    const val = view.getBigInt64(offset, true)
-    return [formatScaledBigInt(val, scale), offset + 8]
-  }
-
-  // Decimal128(S) or Decimal128(P, S) - Int128 LE to string
-  if (type.startsWith('Decimal128')) {
-    const scale = extractDecimalScale(type)
-    const low = view.getBigUint64(offset, true)
-    const high = view.getBigInt64(offset + 8, true)
-    const val = (high << 64n) | low
-    return [formatScaledBigInt(val, scale), offset + 16]
-  }
-
-  // Decimal256(S) or Decimal256(P, S) - Int256 LE to string
-  if (type.startsWith('Decimal256')) {
-    const scale = extractDecimalScale(type)
-    let val = view.getBigInt64(offset + 24, true)
-    for (let i = 2; i >= 0; i--) {
-      val = (val << 64n) | view.getBigUint64(offset + i * 8, true)
-    }
-    return [formatScaledBigInt(val, scale), offset + 32]
-  }
-
-  // Generic Decimal(P, S) - dispatch based on precision
-  if (type.startsWith('Decimal(')) {
-    const match = type.match(/Decimal\((\d+),\s*(\d+)\)/)
-    if (match) {
-      const precision = parseInt(match[1], 10)
-      const scale = parseInt(match[2], 10)
-
-      if (precision <= 9) {
-        const val = BigInt(view.getInt32(offset, true))
-        return [formatScaledBigInt(val, scale), offset + 4]
-      } else if (precision <= 18) {
-        const val = view.getBigInt64(offset, true)
-        return [formatScaledBigInt(val, scale), offset + 8]
-      } else if (precision <= 38) {
-        const low = view.getBigUint64(offset, true)
-        const high = view.getBigInt64(offset + 8, true)
-        const val = (high << 64n) | low
-        return [formatScaledBigInt(val, scale), offset + 16]
-      } else {
-        let val = view.getBigInt64(offset + 24, true)
-        for (let i = 2; i >= 0; i--) {
-          val = (val << 64n) | view.getBigUint64(offset + i * 8, true)
-        }
-        return [formatScaledBigInt(val, scale), offset + 32]
-      }
-    }
+    const val = readScaledInt(view, offset, byteSize)
+    return [formatScaledBigInt(val, scale), offset + byteSize]
   }
 
   // Variant(T1, T2, ...) - UInt8 discriminator + value (0xFF = NULL)
@@ -1446,7 +1360,7 @@ function decodeValue(view: DataView, data: Uint8Array, offset: number, type: str
     }
 
     // Fast path for numeric arrays - return TypedArray view if aligned
-    const Ctor = TYPED_ARRAY_CTORS[innerType]
+    const Ctor = TYPED_ARRAYS[innerType]
     if (Ctor) {
       const codec = NUMERIC_ARRAY_CODECS[innerType]
       const byteLen = count * codec.size
