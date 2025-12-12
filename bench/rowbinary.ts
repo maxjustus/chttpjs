@@ -70,7 +70,31 @@ function generateComplexData(count: number): Array<{
     rows.push({
       id: i,
       tags: [`tag_${i % 5}`, `cat_${i % 3}`, `type_${i % 7}`],
-      scores: [Math.random() * 100, Math.random() * 100, Math.random() * 100],
+      scores: Array.from({ length: 50 }, () => Math.random() * 100),
+      metadata: i % 3 === 0 ? null : `meta_${i}`,
+    });
+  }
+  return rows;
+}
+
+// Data with arrays and nullable (TypedArrays)
+function generateComplexTypedData(count: number): Array<{
+  id: number;
+  tags: string[];
+  scores: Float64Array;
+  metadata: string | null;
+}> {
+  const rows: Array<{
+    id: number;
+    tags: string[];
+    scores: Float64Array;
+    metadata: string | null;
+  }> = [];
+  for (let i = 0; i < count; i++) {
+    rows.push({
+      id: i,
+      tags: [`tag_${i % 5}`, `cat_${i % 3}`, `type_${i % 7}`],
+      scores: new Float64Array(Array.from({ length: 50 }, () => Math.random() * 100)),
       metadata: i % 3 === 0 ? null : `meta_${i}`,
     });
   }
@@ -422,6 +446,112 @@ async function main() {
   );
   console.log(formatResult(rbFullComplex, ROWS));
 
+  // === Complex Data (Typed) ===
+  console.log("\n=== Complex Data (Typed) (arrays as TypedArrays) ===\n");
+
+  const complexTypedData = generateComplexTypedData(ROWS);
+  // Reuse complexColumns definition
+  const complexTypedRowsArray = complexTypedData.map((r) => [
+    r.id,
+    r.tags,
+    r.scores,
+    r.metadata,
+  ]);
+
+  const complexTypedJsonEncoded = encodeJsonEachRow(complexTypedData);
+  const complexTypedRowBinaryEncoded = encodeRowBinaryWithNames(
+    complexColumns,
+    complexTypedRowsArray,
+  );
+
+  console.log(
+    `  Encoded sizes: JSON=${complexTypedJsonEncoded.length} bytes, RowBinary=${complexTypedRowBinaryEncoded.length} bytes (${((complexTypedRowBinaryEncoded.length / complexTypedJsonEncoded.length) * 100).toFixed(1)}%)\n`,
+  );
+
+  console.log("Encoding:");
+  const jsonEncodeComplexTyped = bench(
+    "JSONEachRow encode",
+    () => {
+      encodeJsonEachRow(complexTypedData);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(jsonEncodeComplexTyped, ROWS));
+
+  const rbEncodeComplexTyped = bench(
+    "RowBinary encode",
+    () => {
+      encodeRowBinaryWithNames(complexColumns, complexTypedRowsArray);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(rbEncodeComplexTyped, ROWS));
+
+  console.log("\nDecoding:");
+  const jsonDecodeComplexTyped = bench(
+    "JSONEachRow decode",
+    () => {
+      decodeJsonEachRow(complexTypedJsonEncoded);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(jsonDecodeComplexTyped, ROWS));
+
+  const rbDecodeComplexTyped = bench(
+    "RowBinary decode",
+    () => {
+      decodeRowBinaryWithNames(
+        complexTypedRowBinaryEncoded,
+        complexColumns.map((c) => c.type),
+      );
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(rbDecodeComplexTyped, ROWS));
+
+  // Full path with compression
+  const complexTypedJsonCompressed = encodeBlock(
+    complexTypedJsonEncoded,
+    Method.LZ4,
+  );
+  const complexTypedRbCompressed = encodeBlock(
+    complexTypedRowBinaryEncoded,
+    Method.LZ4,
+  );
+  console.log(
+    `\nCompressed sizes: JSON+LZ4=${complexTypedJsonCompressed.length} bytes, RowBinary+LZ4=${complexTypedRbCompressed.length} bytes (${((complexTypedRbCompressed.length / complexTypedJsonCompressed.length) * 100).toFixed(1)}%)`,
+  );
+
+  console.log("\nFull path (encode + LZ4 compress):");
+  const jsonFullComplexTyped = bench(
+    "JSONEachRow + LZ4",
+    () => {
+      const data = encodeJsonEachRow(complexTypedData);
+      encodeBlock(data, Method.LZ4);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(jsonFullComplexTyped, ROWS));
+
+  const rbFullComplexTyped = bench(
+    "RowBinary + LZ4",
+    () => {
+      const data = encodeRowBinaryWithNames(
+        complexColumns,
+        complexTypedRowsArray,
+      );
+      encodeBlock(data, Method.LZ4);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(rbFullComplexTyped, ROWS));
+
   // === Summary ===
   console.log("\n=== Summary ===\n");
   console.log("Simple data:");
@@ -470,6 +600,23 @@ async function main() {
   );
   console.log(
     `  Full path: RowBinary+LZ4 is ${(jsonFullComplex.ms / rbFullComplex.ms).toFixed(2)}x ${rbFullComplex.ms < jsonFullComplex.ms ? "faster" : "slower"}`,
+  );
+
+  console.log("\nComplex data (Typed):");
+  console.log(
+    `  Encode: RowBinary is ${(jsonEncodeComplexTyped.ms / rbEncodeComplexTyped.ms).toFixed(2)}x ${rbEncodeComplexTyped.ms < jsonEncodeComplexTyped.ms ? "faster" : "slower"}`,
+  );
+  console.log(
+    `  Decode: RowBinary is ${(jsonDecodeComplexTyped.ms / rbDecodeComplexTyped.ms).toFixed(2)}x ${rbDecodeComplexTyped.ms < jsonDecodeComplexTyped.ms ? "faster" : "slower"}`,
+  );
+  console.log(
+    `  Size: RowBinary is ${(complexTypedJsonEncoded.length / complexTypedRowBinaryEncoded.length).toFixed(2)}x smaller`,
+  );
+  console.log(
+    `  Size+LZ4: RowBinary is ${(complexTypedJsonCompressed.length / complexTypedRbCompressed.length).toFixed(2)}x smaller`,
+  );
+  console.log(
+    `  Full path: RowBinary+LZ4 is ${(jsonFullComplexTyped.ms / rbFullComplexTyped.ms).toFixed(2)}x ${rbFullComplexTyped.ms < jsonFullComplexTyped.ms ? "faster" : "slower"}`,
   );
 }
 

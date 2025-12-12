@@ -467,8 +467,8 @@ const SCALAR_CODECS: Record<string, Codec> = {
 // --- Complex Codecs ---
 
 class NothingCodec implements Codec {
-  encode(e: RowBinaryEncoder, v: unknown) { }
-  decode(v: DataView, b: Uint8Array, c: Cursor) {
+  encode(_e: RowBinaryEncoder, _v: unknown) { }
+  decode(_v: DataView, _b: Uint8Array, _c: Cursor) {
     return null;
   }
 }
@@ -529,16 +529,23 @@ class ArrayCodec implements Codec {
 
     // Fast path: aligned TypedArray view
     if (this.TypedArrayCtor) {
-      const byteLen = len * this.TypedArrayCtor.BYTES_PER_ELEMENT;
-      const absoluteOffset = b.byteOffset + c.offset;
+      const byteLen = len * this.TypedArrayCtor.BYTES_PER_ELEMENT
+      const absoluteOffset = b.byteOffset + c.offset
       if (absoluteOffset % this.TypedArrayCtor.BYTES_PER_ELEMENT === 0) {
-        const res = new this.TypedArrayCtor(b.buffer, absoluteOffset, len);
-        c.offset += byteLen;
-        return res;
+        const res = new this.TypedArrayCtor(b.buffer, absoluteOffset, len)
+        c.offset += byteLen
+        return res
       }
+
+      // Unaligned fast path: copy to new aligned buffer
+      // This is still much faster than the element-by-element loop
+      const copy = new Uint8Array(byteLen)
+      copy.set(b.subarray(c.offset, c.offset + byteLen))
+      c.offset += byteLen
+      return new this.TypedArrayCtor(copy.buffer)
     }
 
-    const result = new Array(len);
+    const result = new Array(len)
     for (let i = 0; i < len; i++) result[i] = this.inner.decode(v, b, c);
     return result;
   }
@@ -628,7 +635,7 @@ class FixedStringCodec implements Codec {
     e.offset += this.n;
   }
 
-  decode(v: DataView, b: Uint8Array, c: Cursor) {
+  decode(_v: DataView, b: Uint8Array, c: Cursor) {
     const bytes = b.subarray(c.offset, c.offset + this.n);
     c.offset += this.n;
     // Find first null byte
@@ -647,7 +654,7 @@ class Date32Codec implements Codec {
   encode(e: RowBinaryEncoder, v: unknown) {
     e.i32(Math.floor((v as Date).getTime() / 86400000));
   }
-  decode(v: DataView, b: Uint8Array, c: Cursor) {
+  decode(v: DataView, _b: Uint8Array, c: Cursor) {
     const days = v.getInt32(c.offset, true);
     c.offset += 4;
     return new Date(days * 86400000);
@@ -670,7 +677,7 @@ class DateTime64Codec implements Codec {
     e.i64(ticks);
   }
 
-  decode(v: DataView, b: Uint8Array, c: Cursor) {
+  decode(v: DataView, _b: Uint8Array, c: Cursor) {
     const ticks = v.getBigInt64(c.offset, true);
     c.offset += 8;
     const ms = this.precision >= 3 ? ticks / this.pow : ticks * this.pow;
@@ -695,7 +702,7 @@ class DecimalCodec implements Codec {
     e.offset += this.byteSize;
   }
 
-  decode(v: DataView, b: Uint8Array, c: Cursor) {
+  decode(v: DataView, _b: Uint8Array, c: Cursor) {
     const val = readScaledInt(v, c.offset, this.byteSize);
     c.offset += this.byteSize;
     return formatScaledBigInt(val, this.scale);

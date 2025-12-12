@@ -872,7 +872,7 @@ describe("decodeRowBinaryWithNames", () => {
 
     const tuple = decoded.rows[0][0] as unknown[];
     assert.strictEqual(tuple[0], "outer");
-    assert.deepStrictEqual(tuple[1], [1, 2, 3]);
+    assertArrayEqual(tuple[1] as ArrayLike<number>, [1, 2, 3]);
     assert.deepStrictEqual(tuple[2], { a: 1.5, b: 2.5 });
   });
 
@@ -1226,7 +1226,9 @@ describe("decodeRowBinaryWithNames", () => {
       columns.map((c) => c.type),
     );
 
-    assert.deepStrictEqual(decoded.rows[0][0], { type: 0, value: [1, 2, 3] });
+    const row0 = decoded.rows[0][0] as { type: number; value: unknown };
+    assert.strictEqual(row0.type, 0);
+    assertArrayEqual(row0.value as ArrayLike<number>, [1, 2, 3]);
     assert.deepStrictEqual(decoded.rows[1][0], { type: 1, value: "text" });
   });
 
@@ -1243,11 +1245,17 @@ describe("decodeRowBinaryWithNames", () => {
     );
 
     // Values are decoded with native types (num becomes BigInt via Int64)
-    assert.deepStrictEqual(decoded.rows[0][0], {
-      foo: "bar",
-      num: 42n,
-      arr: [1n, 2n, 3n],
-    });
+    const row0 = decoded.rows[0][0] as Record<string, unknown>;
+    assert.strictEqual(row0.foo, "bar");
+    assert.strictEqual(row0.num, 42n);
+    // JSON arrays are decoded as generic Array(Type) -> TypedArray for numbers
+    // But inferType for [1,2,3] -> Array(Int64) -> BigInt64Array
+    const arr = row0.arr as BigInt64Array;
+    assert.strictEqual(arr.length, 3);
+    assert.strictEqual(arr[0], 1n);
+    assert.strictEqual(arr[1], 2n);
+    assert.strictEqual(arr[2], 3n);
+
     assert.deepStrictEqual(decoded.rows[1][0], { flag: true, nothing: null });
   });
 
@@ -1515,10 +1523,10 @@ describe("decodeRowBinaryWithNames", () => {
       columns.map((c) => c.type),
     );
 
-    assert.deepStrictEqual(decoded.rows[0][0], {
-      type: "Array(Int32)",
-      value: [1, 2, 3],
-    });
+    const row0 = decoded.rows[0][0] as { type: string; value: unknown };
+    assert.strictEqual(row0.type, "Array(Int32)");
+    assertArrayEqual(row0.value as ArrayLike<number>, [1, 2, 3]);
+
     assert.deepStrictEqual(decoded.rows[1][0], {
       type: "Tuple(String, Int32)",
       value: ["hello", 42],
@@ -1637,10 +1645,13 @@ describe("decodeRowBinaryWithNames", () => {
       columns.map((c) => c.type),
     );
 
-    assert.deepStrictEqual(decoded.rows[0][0], {
-      type: "Array(Int64)",
-      value: [1n, 2n, 3n],
-    });
+    const row0 = decoded.rows[0][0] as { type: string; value: BigInt64Array };
+    assert.strictEqual(row0.type, "Array(Int64)");
+    assert.strictEqual(row0.value.length, 3);
+    assert.strictEqual(row0.value[0], 1n);
+    assert.strictEqual(row0.value[1], 2n);
+    assert.strictEqual(row0.value[2], 3n);
+
     assert.deepStrictEqual(decoded.rows[1][0], {
       type: "Array(String)",
       value: ["a", "b"],

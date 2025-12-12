@@ -24,6 +24,7 @@
     "test:compression": "node --experimental-strip-types --test test/compression.test.ts",
     "test:integration": "node --experimental-strip-types --test test/integration.test.ts",
     "test:dist": "npm run build && node test/test-dist.mjs",
+    "test:fuzz": "node --experimental-strip-types --test test/rowbinary-fuzz.test.ts",
     "bench": "node --experimental-strip-types bench/compression.ts",
     "bench:insert": "node --experimental-strip-types bench/insert.ts",
     "vendor:lz4": "npx jsr add @nick/lz4 && cp node_modules/@nick/lz4/lib/lz4.js node_modules/@nick/lz4/lib/lz4.internal.js vendor/lz4/ && rm -rf node_modules/@nick"
