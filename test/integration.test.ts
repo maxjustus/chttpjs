@@ -26,7 +26,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Basic operations", () => {
     it("should create and query a table", async () => {
       // Create table
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_basic (id UInt32, name String) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -61,7 +61,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[2].name, "Charlie");
 
       // Clean up
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "DROP TABLE test_basic",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -74,7 +74,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Compression methods", () => {
     it("should insert with LZ4 compression", async () => {
       // Create table
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_lz4 (value String) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -115,7 +115,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
     it("should insert with ZSTD compression", async () => {
       // Create table
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_zstd (value String) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -157,7 +157,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("JSONCompactEachRowWithNames format", () => {
     it("should insert with JSONCompactEachRowWithNames format", async () => {
       // Create table
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_compact (id UInt32, name String, value Float64) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -205,7 +205,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
     it("should handle async generator with JSONCompactEachRowWithNames", async () => {
       // Create table
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_compact_async (id UInt32, name String) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -292,7 +292,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Streaming inserts with generators", () => {
     it("should handle generator that yields batches", async () => {
       // Create table
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_generator (id UInt32, value String) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -354,7 +354,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
     it("should handle generator that yields single rows", async () => {
       // Create table
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_single (id UInt32) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -400,7 +400,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Streaming queries with compression", () => {
     it("should stream compressed query results", async () => {
       // Setup: Create table with data
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_stream (id UInt32) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -468,7 +468,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Error handling", () => {
     it("should handle invalid queries", async () => {
       try {
-        for await (const chunk of query(
+        for await (const _chunk of query(
           "SELECT * FROM non_existent_table",
           sessionId,
           { baseUrl, auth, compression: "none" },
@@ -487,7 +487,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
     it("should handle insert errors", async () => {
       // Create table with specific schema
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_error (id UInt32) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -515,7 +515,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       }
 
       // Clean up
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "DROP TABLE test_error",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -528,7 +528,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Streaming error scenarios", () => {
     it("should handle generator that throws mid-stream", async () => {
       // Create table
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_stream_error (id UInt32, value String) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -559,7 +559,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       }
 
       // Clean up
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "DROP TABLE test_stream_error",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -570,7 +570,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
     it("should handle AbortSignal cancellation", async () => {
       // Create table
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_abort (id UInt32) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -609,7 +609,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       }
 
       // Clean up
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "DROP TABLE test_abort",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -620,7 +620,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
     it("should fire progress callbacks during compression", async () => {
       // Create table
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "CREATE TABLE IF NOT EXISTS test_progress (id UInt32) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
@@ -663,7 +663,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.ok(allBeforeComplete, "Progress events should fire during compression, not after");
 
       // Clean up
-      for await (const chunk of query(
+      for await (const _chunk of query(
         "DROP TABLE test_progress",
         sessionId,
         { baseUrl, auth, compression: "none" },

@@ -40,7 +40,6 @@ function compressionToMethod(compression: Compression): MethodCode {
 
 // Uint8Array helpers
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 
 function readUInt32LE(arr: Uint8Array, offset: number): number {
   return arr[offset] | (arr[offset + 1] << 8) | (arr[offset + 2] << 16) | (arr[offset + 3] << 24) >>> 0;

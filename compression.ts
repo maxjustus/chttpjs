@@ -207,8 +207,8 @@ export function encodeBlock(
       compressed = raw;
       break;
     default: {
-      const _exhaustive: never = mode;
-      throw new Error(`Unsupported compression method 0x${(mode as number).toString(16)}`);
+      const _: never = mode;
+      throw new Error(`Unsupported compression method 0x${(_ as number).toString(16)}`);
     }
   }
 
@@ -278,8 +278,8 @@ export function decodeBlock(block: Uint8Array): Uint8Array {
     case Method.ZSTD:
       return zstdDecompress(compressed);
     default: {
-      const _exhaustive: never = mode;
-      throw new Error(`Unsupported compression method 0x${(mode as number).toString(16)}`);
+      const _: never = mode;
+      throw new Error(`Unsupported compression method 0x${(_ as number).toString(16)}`);
     }
   }
 }
