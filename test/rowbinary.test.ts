@@ -5,6 +5,8 @@ import {
   decodeRowBinaryWithNames,
   type ColumnDef,
   ClickHouseDateTime64,
+  Float32NaN,
+  Float64NaN,
 } from "../rowbinary.ts";
 
 // Helper to compare arrays (works with TypedArrays too)
@@ -1092,6 +1094,49 @@ describe("decodeRowBinaryWithNames", () => {
     );
   });
 
+  it("ClickHouseDateTime64.toDate() throws on overflow (max)", () => {
+    const dt = new ClickHouseDateTime64(9000000000000000000n, 3);
+    assert.throws(() => dt.toDate(), /overflows JS Date range/);
+  });
+
+  it("ClickHouseDateTime64.toDate() throws on overflow (min)", () => {
+    const dt = new ClickHouseDateTime64(-9000000000000000000n, 3);
+    assert.throws(() => dt.toDate(), /overflows JS Date range/);
+  });
+
+  it("ClickHouseDateTime64.toClosestDate() clamps on overflow (max)", () => {
+    const dt = new ClickHouseDateTime64(9000000000000000000n, 3);
+    const date = dt.toClosestDate();
+    assert.strictEqual(date.getTime(), 8640000000000000);
+  });
+
+  it("ClickHouseDateTime64.toClosestDate() clamps on overflow (min)", () => {
+    const dt = new ClickHouseDateTime64(-9000000000000000000n, 3);
+    const date = dt.toClosestDate();
+    assert.strictEqual(date.getTime(), -8640000000000000);
+  });
+
+  it("ClickHouseDateTime64.toDate() throws on precision loss", () => {
+    const dt = new ClickHouseDateTime64(1234567890123456n, 6);
+    assert.throws(() => dt.toDate(), /Precision loss/);
+  });
+
+  it("inferType preserves ClickHouseDateTime64 precision", () => {
+    const dt = new ClickHouseDateTime64(1234567890123456n, 6);
+    const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
+    const rows = [[dt]];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
+
+    const result = decoded.rows[0][0] as { type: string; value: ClickHouseDateTime64 };
+    assert.strictEqual(result.type, "DateTime64(6)");
+    assert.strictEqual(result.value.ticks, dt.ticks);
+    assert.strictEqual(result.value.precision, 6);
+  });
+
   it("Int128", () => {
     const columns: ColumnDef[] = [{ name: "n", type: "Int128" }];
     const big = 170141183460469231731687303715884105727n; // max Int128
@@ -1801,5 +1846,182 @@ describe("decodeRowBinaryWithNames", () => {
       value: "inferred string",
     });
     assert.deepStrictEqual(decoded.rows[3][0], { type: "Float32", value: 1.5 });
+  });
+});
+
+describe("ClickHouseDateTime64 class", () => {
+  it("constructor sets properties correctly", () => {
+    const dt = new ClickHouseDateTime64(123456789n, 6);
+    assert.strictEqual(dt.ticks, 123456789n);
+    assert.strictEqual(dt.precision, 6);
+  });
+
+  it("toJSON() returns ISO string", () => {
+    const dt = new ClickHouseDateTime64(1705324245123n, 3);
+    const json = dt.toJSON();
+    assert.strictEqual(json, new Date(1705324245123).toJSON());
+  });
+
+  it("toJSON() clamps overflow", () => {
+    const dt = new ClickHouseDateTime64(9000000000000000000n, 3);
+    const json = dt.toJSON();
+    // Should clamp to max safe date (~275760 AD)
+    assert.ok(json.includes("275760"));
+  });
+
+  it("toString() returns date string", () => {
+    const dt = new ClickHouseDateTime64(1705324245123n, 3);
+    const str = dt.toString();
+    const expected = new Date(1705324245123).toString();
+    assert.strictEqual(str, expected);
+  });
+
+  it("toString() clamps overflow without throwing", () => {
+    const dt = new ClickHouseDateTime64(9000000000000000000n, 3);
+    const str = dt.toString();
+    assert.ok(typeof str === "string");
+  });
+
+  it("epoch (0) converts correctly", () => {
+    const dt = new ClickHouseDateTime64(0n, 3);
+    const date = dt.toDate();
+    assert.strictEqual(date.getTime(), 0);
+    assert.strictEqual(date.toISOString(), "1970-01-01T00:00:00.000Z");
+  });
+
+  it("negative dates (pre-1970) convert correctly", () => {
+    const dt = new ClickHouseDateTime64(-1000000n, 3);
+    const date = dt.toDate();
+    assert.strictEqual(date.getTime(), -1000000);
+  });
+
+  it("precision 0 (seconds) scales correctly", () => {
+    const dt = new ClickHouseDateTime64(1705324245n, 0);
+    assert.strictEqual(dt.precision, 0);
+    const date = dt.toClosestDate();
+    assert.strictEqual(date.getTime(), 1705324245000);
+  });
+
+  it("precision 1 (deciseconds) scales correctly", () => {
+    const dt = new ClickHouseDateTime64(17053242450n, 1);
+    assert.strictEqual(dt.toClosestDate().getTime(), 1705324245000);
+  });
+
+  it("precision 2 (centiseconds) scales correctly", () => {
+    const dt = new ClickHouseDateTime64(170532424500n, 2);
+    assert.strictEqual(dt.toClosestDate().getTime(), 1705324245000);
+  });
+
+  it("precision 4 (tenths of milliseconds) scales correctly", () => {
+    const dt = new ClickHouseDateTime64(17053242451230n, 4);
+    assert.strictEqual(dt.toClosestDate().getTime(), 1705324245123);
+  });
+
+  it("precision 6 (microseconds) scales correctly", () => {
+    const dt = new ClickHouseDateTime64(1705324245123000n, 6);
+    assert.strictEqual(dt.toClosestDate().getTime(), 1705324245123);
+  });
+
+  it("precision 9 (nanoseconds) scales correctly", () => {
+    const dt = new ClickHouseDateTime64(1705324245123000000n, 9);
+    assert.strictEqual(dt.toClosestDate().getTime(), 1705324245123);
+  });
+
+  it("toDate() succeeds when microseconds align to millisecond boundary", () => {
+    // Microseconds that evenly divide into milliseconds
+    const dt = new ClickHouseDateTime64(1705324245123000n, 6);
+    const date = dt.toDate(); // Should not throw
+    assert.strictEqual(date.getTime(), 1705324245123);
+  });
+
+  it("round-trip encode/decode preserves ticks and precision", () => {
+    const original = new ClickHouseDateTime64(1234567890123456n, 6);
+    const columns: ColumnDef[] = [{ name: "dt", type: "DateTime64(6)" }];
+    const rows = [[original]];
+
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
+
+    const result = decoded.rows[0][0] as ClickHouseDateTime64;
+    assert.strictEqual(result.ticks, original.ticks);
+    assert.strictEqual(result.precision, original.precision);
+  });
+});
+
+describe("Float NaN Wrappers", () => {
+  it("Float32NaN stores bytes correctly", () => {
+    const bytes = new Uint8Array([0x00, 0x00, 0xc0, 0x7f]); // NaN bit pattern
+    const nan = new Float32NaN(bytes);
+    assert.ok(nan.bytes instanceof Uint8Array);
+    assert.strictEqual(nan.bytes.length, 4);
+    assert.strictEqual(nan.bytes[0], 0x00);
+    assert.strictEqual(nan.bytes[3], 0x7f);
+  });
+
+  it("Float64NaN stores bytes correctly", () => {
+    const bytes = new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0x7f]);
+    const nan = new Float64NaN(bytes);
+    assert.ok(nan.bytes instanceof Uint8Array);
+    assert.strictEqual(nan.bytes.length, 8);
+  });
+
+  it("Float32NaN.valueOf() returns NaN", () => {
+    const nan = new Float32NaN(new Uint8Array(4));
+    assert.ok(Number.isNaN(nan.valueOf()));
+  });
+
+  it("Float64NaN.valueOf() returns NaN", () => {
+    const nan = new Float64NaN(new Uint8Array(8));
+    assert.ok(Number.isNaN(nan.valueOf()));
+  });
+
+  it("Float32NaN.toString() returns 'NaN'", () => {
+    const nan = new Float32NaN(new Uint8Array(4));
+    assert.strictEqual(nan.toString(), "NaN");
+  });
+
+  it("Float64NaN.toString() returns 'NaN'", () => {
+    const nan = new Float64NaN(new Uint8Array(8));
+    assert.strictEqual(nan.toString(), "NaN");
+  });
+
+  it("Float32NaN.toJSON() returns null", () => {
+    const nan = new Float32NaN(new Uint8Array(4));
+    assert.strictEqual(nan.toJSON(), null);
+  });
+
+  it("Float64NaN.toJSON() returns null", () => {
+    const nan = new Float64NaN(new Uint8Array(8));
+    assert.strictEqual(nan.toJSON(), null);
+  });
+
+  it("Float32NaN Symbol.toPrimitive returns NaN", () => {
+    const nan = new Float32NaN(new Uint8Array(4));
+    assert.ok(Number.isNaN(+nan)); // Coerce to number
+    assert.ok(Number.isNaN(Number(nan)));
+  });
+
+  it("Float64NaN Symbol.toPrimitive returns NaN", () => {
+    const nan = new Float64NaN(new Uint8Array(8));
+    assert.ok(Number.isNaN(+nan));
+    assert.ok(Number.isNaN(Number(nan)));
+  });
+
+  it("Float32NaN preserves exact bit pattern", () => {
+    const bytes = new Uint8Array([0x01, 0x02, 0xc0, 0x7f]); // Custom NaN pattern
+    const nan = new Float32NaN(bytes);
+    assert.deepStrictEqual(Array.from(nan.bytes), [0x01, 0x02, 0xc0, 0x7f]);
+  });
+
+  it("Float64NaN preserves exact bit pattern", () => {
+    const bytes = new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0xf8, 0x7f]);
+    const nan = new Float64NaN(bytes);
+    assert.deepStrictEqual(
+      Array.from(nan.bytes),
+      [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0xf8, 0x7f],
+    );
   });
 });

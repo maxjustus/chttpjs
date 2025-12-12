@@ -38,8 +38,14 @@ export interface DecodeResult {
   rows: unknown[][];
 }
 
+export interface DecodeOptions {
+  /** Decode Map types as Array<[K, V]> instead of Map<K, V> to preserve duplicate keys */
+  mapAsArray?: boolean;
+}
+
 export interface Cursor {
   offset: number;
+  options?: DecodeOptions;
 }
 
 const textEncoder = new TextEncoder();
@@ -72,6 +78,37 @@ const TYPED_ARRAYS: Record<
   Float32: Float32Array,
   Float64: Float64Array,
 };
+
+// NaN wrapper classes to preserve IEEE 754 bit patterns during round-trips.
+//
+// Problem: JavaScript's DataView.setFloat32/setFloat64 canonicalize all NaN values to a single
+// "quiet NaN" representation (0x7FC00000 for float32). IEEE 754 defines many valid NaN bit
+// patterns - signaling NaNs have bit 22 clear, quiet NaNs have it set. ClickHouse's
+// generateRandom() produces signaling NaNs, which get silently converted:
+//
+//   Signaling NaN: 0xFF8C0839 (bit 22 = 0)
+//   After JS:      0xFFCC0839 (bit 22 = 1) ← canonicalized to quiet NaN
+//
+// Solution: Detect NaN on decode and store raw bytes. On encode, copy bytes directly instead
+// of using setFloat32/setFloat64. The wrapper provides NaN semantics via valueOf() so
+// arithmetic and comparisons work as expected.
+export class Float32NaN {
+  readonly bytes: Uint8Array;
+  constructor(bytes: Uint8Array) { this.bytes = bytes; }
+  valueOf(): number { return NaN; }
+  toString(): string { return "NaN"; }
+  toJSON(): null { return null; }
+  [Symbol.toPrimitive](): number { return NaN; }
+}
+
+export class Float64NaN {
+  readonly bytes: Uint8Array;
+  constructor(bytes: Uint8Array) { this.bytes = bytes; }
+  valueOf(): number { return NaN; }
+  toString(): string { return "NaN"; }
+  toJSON(): null { return null; }
+  [Symbol.toPrimitive](): number { return NaN; }
+}
 
 // ============================================================================
 // Encoder Class
@@ -352,19 +389,45 @@ const SCALAR_CODECS: Record<string, Codec> = {
     },
   },
   Float32: {
-    encode: (e, v) => e.f32(v as number),
-    decode: (v, _, c) => {
-      const r = v.getFloat32(c.offset, true);
+    encode: (e, v) => {
+      e.ensure(4);
+      if (v instanceof Float32NaN) {
+        e.buffer.set(v.bytes, e.offset);
+      } else {
+        e.view.setFloat32(e.offset, v as number, true);
+      }
+      e.offset += 4;
+    },
+    decode: (_, b, c) => {
+      const bytes = b.subarray(c.offset, c.offset + 4);
+      const view = new DataView(b.buffer, b.byteOffset + c.offset, 4);
+      const val = view.getFloat32(0, true);
       c.offset += 4;
-      return r;
+      if (Number.isNaN(val)) {
+        return new Float32NaN(bytes.slice());
+      }
+      return val;
     },
   },
   Float64: {
-    encode: (e, v) => e.f64(v as number),
-    decode: (v, _, c) => {
-      const r = v.getFloat64(c.offset, true);
+    encode: (e, v) => {
+      e.ensure(8);
+      if (v instanceof Float64NaN) {
+        e.buffer.set(v.bytes, e.offset);
+      } else {
+        e.view.setFloat64(e.offset, v as number, true);
+      }
+      e.offset += 8;
+    },
+    decode: (_, b, c) => {
+      const bytes = b.subarray(c.offset, c.offset + 8);
+      const view = new DataView(b.buffer, b.byteOffset + c.offset, 8);
+      const val = view.getFloat64(0, true);
       c.offset += 8;
-      return r;
+      if (Number.isNaN(val)) {
+        return new Float64NaN(bytes.slice());
+      }
+      return val;
     },
   },
   Bool: {
@@ -594,9 +657,15 @@ class MapCodec implements Codec {
   }
 
   encode(e: RowBinaryEncoder, v: unknown) {
-    const map = v as Map<unknown, unknown> | Record<string, unknown>;
-    const entries =
-      map instanceof Map ? [...map.entries()] : Object.entries(map);
+    // Accept Map, Object, or Array<[K, V]> for flexibility
+    let entries: [unknown, unknown][];
+    if (v instanceof Map) {
+      entries = [...v.entries()];
+    } else if (Array.isArray(v)) {
+      entries = v as [unknown, unknown][];
+    } else {
+      entries = Object.entries(v as Record<string, unknown>);
+    }
     e.leb128(entries.length);
     for (const [k, val] of entries) {
       this.key.encode(e, k);
@@ -606,6 +675,15 @@ class MapCodec implements Codec {
 
   decode(v: DataView, b: Uint8Array, c: Cursor) {
     const [len, _] = readLEB128(b, c)
+    if (c.options?.mapAsArray) {
+      const result: [unknown, unknown][] = []
+      for (let i = 0; i < len; i++) {
+        const key = this.key.decode(v, b, c)
+        const val = this.value.decode(v, b, c)
+        result.push([key, val])
+      }
+      return result
+    }
     const result = new Map()
     for (let i = 0; i < len; i++) {
       const key = this.key.decode(v, b, c)
@@ -662,10 +740,14 @@ export class ClickHouseDateTime64 {
 
   /**
    * Convert to native Date object.
-   * Throws if precision is lost (sub-millisecond components) or if date is invalid.
+   * Throws if value overflows JS Date range or precision is lost (sub-millisecond components).
    */
   toDate(): Date {
     const ms = this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow
+    // Check for overflow (JS Date range: ±8.64e15 ms)
+    if (ms > 8640000000000000n || ms < -8640000000000000n) {
+      throw new RangeError(`DateTime64 value ${ms}ms overflows JS Date range (±8.64e15ms). Use toClosestDate() to clamp.`)
+    }
     // Check for precision loss
     if (this.precision > 3 && this.ticks % this.pow !== 0n) {
       throw new Error(`Precision loss: DateTime64(${this.precision}) value ${this.ticks} cannot be represented as Date without losing precision. Use toClosestDate() or access .ticks directly.`)
@@ -674,10 +756,13 @@ export class ClickHouseDateTime64 {
   }
 
   /**
-   * Convert to native Date object, truncating sub-millisecond precision if necessary.
+   * Convert to native Date object, truncating sub-millisecond precision and clamping to JS Date range.
    */
   toClosestDate(): Date {
-    const ms = this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow
+    let ms = this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow
+    // Clamp to JS Date range
+    if (ms > 8640000000000000n) ms = 8640000000000000n
+    if (ms < -8640000000000000n) ms = -8640000000000000n
     return new Date(Number(ms))
   }
 
@@ -906,8 +991,9 @@ export function decodeRowBinaryWithNames(
 
 export function decodeRowBinaryWithNamesAndTypes(
   data: Uint8Array,
+  options?: DecodeOptions,
 ): DecodeResult {
-  const cursor = { offset: 0 };
+  const cursor: Cursor = { offset: 0, options };
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
 
   const [colCount, _] = readLEB128(data, cursor);
@@ -1238,6 +1324,7 @@ function inferType(value: unknown): string {
     return "Float64";
   }
   if (value instanceof Date) return "DateTime64(3)";
+  if (value instanceof ClickHouseDateTime64) return `DateTime64(${value.precision})`;
   if (Array.isArray(value)) {
     if (value.length === 0) return "Array(Nothing)";
     return `Array(${inferType(value[0])})`;

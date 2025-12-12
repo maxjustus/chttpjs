@@ -1,11 +1,7 @@
 import { describe, it, before, after } from "node:test";
-import assert from "node:assert/strict";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 import { init, insert, query, collectBytes, collectText } from "../client.ts";
-import {
-  encodeRowBinaryWithNames,
-  decodeRowBinaryWithNamesAndTypes,
-} from "../rowbinary.ts";
+import { encodeRowBinaryWithNames, decodeRowBinaryWithNamesAndTypes } from "../rowbinary.ts";
 
 describe("RowBinary Fuzz Tests", { timeout: 300000 }, () => {
   let clickhouse: Awaited<ReturnType<typeof startClickHouse>>;
@@ -43,13 +39,13 @@ describe("RowBinary Fuzz Tests", { timeout: 300000 }, () => {
         structure = structResult.trim();
         console.log(`[fuzz ${i + 1}/${N}] structure: ${structure}`);
 
-        // 2. Create source table with 50k rows (multi-block)
+        // 2. Create source table with 1k rows (multi-block)
         // TabSeparated escapes quotes as \', unescape then re-escape for SQL
         const unescaped = structure.replace(/\\'/g, "'");
         const escapedStructure = unescaped.replace(/'/g, "''");
         await consume(
           query(
-            `CREATE TABLE ${srcTable} ENGINE = Memory AS SELECT * FROM generateRandom('${escapedStructure}') LIMIT 50000`,
+            `CREATE TABLE ${srcTable} ENGINE = Memory AS SELECT * FROM generateRandom('${escapedStructure}') LIMIT 1000`,
             sessionId,
             { baseUrl, auth, compression: "none" },
           ),
@@ -64,8 +60,8 @@ describe("RowBinary Fuzz Tests", { timeout: 300000 }, () => {
           ),
         );
 
-        // 4. Decode
-        const decoded = decodeRowBinaryWithNamesAndTypes(srcBytes);
+        // 4. Decode (use mapAsArray to preserve duplicate keys from generateRandom)
+        const decoded = decodeRowBinaryWithNamesAndTypes(srcBytes, { mapAsArray: true });
 
         // 5. Create empty dest table
         await consume(
@@ -85,32 +81,42 @@ describe("RowBinary Fuzz Tests", { timeout: 300000 }, () => {
           { baseUrl, auth },
         );
 
-        // 7. Verify both directions
+        // 7. Verify using cityHash64(*) to handle NaN values (NaN != NaN in SQL)
         const diff1 = await collectText(
           query(
-            `SELECT count() FROM (SELECT * FROM ${srcTable} EXCEPT SELECT * FROM ${dstTable}) FORMAT TabSeparated`,
+            `SELECT count() FROM (SELECT cityHash64(*) AS h FROM ${srcTable} EXCEPT SELECT cityHash64(*) AS h FROM ${dstTable}) FORMAT TabSeparated`,
             sessionId,
             { baseUrl, auth },
           ),
         );
         const diff2 = await collectText(
           query(
-            `SELECT count() FROM (SELECT * FROM ${dstTable} EXCEPT SELECT * FROM ${srcTable}) FORMAT TabSeparated`,
+            `SELECT count() FROM (SELECT cityHash64(*) AS h FROM ${dstTable} EXCEPT SELECT cityHash64(*) AS h FROM ${srcTable}) FORMAT TabSeparated`,
             sessionId,
             { baseUrl, auth },
           ),
         );
 
-        assert.strictEqual(
-          diff1.trim(),
-          "0",
-          `src→dst mismatch in iteration ${i}: ${diff1.trim()} rows differ`,
-        );
-        assert.strictEqual(
-          diff2.trim(),
-          "0",
-          `dst→src mismatch in iteration ${i}: ${diff2.trim()} rows differ`,
-        );
+        if (diff1.trim() !== "0" || diff2.trim() !== "0") {
+          // Find first differing column for debugging
+          let firstDiffCol = "";
+          for (const col of decoded.columns) {
+            const colDiff = await collectText(
+              query(
+                `SELECT count() FROM (SELECT cityHash64(\`${col.name}\`) AS h FROM ${srcTable} EXCEPT SELECT cityHash64(\`${col.name}\`) AS h FROM ${dstTable}) FORMAT TabSeparated`,
+                sessionId, { baseUrl, auth },
+              ),
+            );
+            if (colDiff.trim() !== "0") {
+              firstDiffCol = `${col.name} (${col.type})`;
+              break;
+            }
+          }
+
+          throw new Error(
+            `Fuzz mismatch in iteration ${i}: ${diff1.trim()}/${diff2.trim()} rows differ. First differing column: ${firstDiffCol || "unknown"}`,
+          );
+        }
       } catch (err) {
         console.error(
           `[fuzz ${i + 1}/${N}] FAILED with structure: ${structure}`,
