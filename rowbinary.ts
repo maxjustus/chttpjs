@@ -237,12 +237,9 @@ export class RowBinaryEncoder {
 }
 
 function leb128Size(value: number): number {
-  let size = 0;
-  do {
-    value >>>= 7;
-    size++;
-  } while (value !== 0);
-  return size;
+  // Math.clz - count leading zeros in binary representation. Optimizes to single instruction on modern CPUs.
+  const bits = 32 - Math.clz32(value | 1);
+  return Math.ceil(bits / 7);
 }
 
 // ============================================================================
