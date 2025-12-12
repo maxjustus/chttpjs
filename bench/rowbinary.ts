@@ -161,6 +161,10 @@ async function main() {
   console.log(formatResult(rbDecodeSimple, ROWS));
 
   // Full path with compression
+  const simpleJsonCompressed = encodeBlock(simpleJsonEncoded, Method.LZ4);
+  const simpleRbCompressed = encodeBlock(simpleRowBinaryEncoded, Method.LZ4);
+  console.log(`\nCompressed sizes: JSON+LZ4=${simpleJsonCompressed.length} bytes, RowBinary+LZ4=${simpleRbCompressed.length} bytes (${(simpleRbCompressed.length / simpleJsonCompressed.length * 100).toFixed(1)}%)`);
+
   console.log('\nFull path (encode + LZ4 compress):');
   const jsonFullSimple = bench('JSONEachRow + LZ4', () => {
     const data = encodeJsonEachRow(simpleData);
@@ -202,6 +206,24 @@ async function main() {
   }, 50, ITERATIONS);
   console.log(formatResult(rbEncodeEscape, ROWS));
 
+  // Full path with compression
+  const escapeJsonCompressed = encodeBlock(escapeJsonEncoded, Method.LZ4);
+  const escapeRbCompressed = encodeBlock(escapeRowBinaryEncoded, Method.LZ4);
+  console.log(`\nCompressed sizes: JSON+LZ4=${escapeJsonCompressed.length} bytes, RowBinary+LZ4=${escapeRbCompressed.length} bytes (${(escapeRbCompressed.length / escapeJsonCompressed.length * 100).toFixed(1)}%)`);
+
+  console.log('\nFull path (encode + LZ4 compress):');
+  const jsonFullEscape = bench('JSONEachRow + LZ4', () => {
+    const data = encodeJsonEachRow(escapeData);
+    encodeBlock(data, Method.LZ4);
+  }, 50, ITERATIONS);
+  console.log(formatResult(jsonFullEscape, ROWS));
+
+  const rbFullEscape = bench('RowBinary + LZ4', () => {
+    const data = encodeRowBinaryWithNames(escapeColumns, escapeRowsArray);
+    encodeBlock(data, Method.LZ4);
+  }, 50, ITERATIONS);
+  console.log(formatResult(rbFullEscape, ROWS));
+
   // === Complex data ===
   console.log('\n=== Complex Data (arrays, nullable) ===\n');
 
@@ -241,21 +263,45 @@ async function main() {
   }, 50, ITERATIONS);
   console.log(formatResult(rbDecodeComplex, ROWS));
 
+  // Full path with compression
+  const complexJsonCompressed = encodeBlock(complexJsonEncoded, Method.LZ4);
+  const complexRbCompressed = encodeBlock(complexRowBinaryEncoded, Method.LZ4);
+  console.log(`\nCompressed sizes: JSON+LZ4=${complexJsonCompressed.length} bytes, RowBinary+LZ4=${complexRbCompressed.length} bytes (${(complexRbCompressed.length / complexJsonCompressed.length * 100).toFixed(1)}%)`);
+
+  console.log('\nFull path (encode + LZ4 compress):');
+  const jsonFullComplex = bench('JSONEachRow + LZ4', () => {
+    const data = encodeJsonEachRow(complexData);
+    encodeBlock(data, Method.LZ4);
+  }, 50, ITERATIONS);
+  console.log(formatResult(jsonFullComplex, ROWS));
+
+  const rbFullComplex = bench('RowBinary + LZ4', () => {
+    const data = encodeRowBinaryWithNames(complexColumns, complexRowsArray);
+    encodeBlock(data, Method.LZ4);
+  }, 50, ITERATIONS);
+  console.log(formatResult(rbFullComplex, ROWS));
+
   // === Summary ===
   console.log('\n=== Summary ===\n');
   console.log('Simple data:');
   console.log(`  Encode: RowBinary is ${(jsonEncodeSimple.ms / rbEncodeSimple.ms).toFixed(2)}x ${rbEncodeSimple.ms < jsonEncodeSimple.ms ? 'faster' : 'slower'}`);
   console.log(`  Decode: RowBinary is ${(jsonDecodeSimple.ms / rbDecodeSimple.ms).toFixed(2)}x ${rbDecodeSimple.ms < jsonDecodeSimple.ms ? 'faster' : 'slower'}`);
   console.log(`  Size: RowBinary is ${(simpleJsonEncoded.length / simpleRowBinaryEncoded.length).toFixed(2)}x smaller`);
+  console.log(`  Size+LZ4: RowBinary is ${(simpleJsonCompressed.length / simpleRbCompressed.length).toFixed(2)}x smaller`);
+  console.log(`  Full path: RowBinary+LZ4 is ${(jsonFullSimple.ms / rbFullSimple.ms).toFixed(2)}x ${rbFullSimple.ms < jsonFullSimple.ms ? 'faster' : 'slower'}`);
 
   console.log('\nEscape data:');
   console.log(`  Encode: RowBinary is ${(jsonEncodeEscape.ms / rbEncodeEscape.ms).toFixed(2)}x ${rbEncodeEscape.ms < jsonEncodeEscape.ms ? 'faster' : 'slower'}`);
   console.log(`  Size: RowBinary is ${(escapeJsonEncoded.length / escapeRowBinaryEncoded.length).toFixed(2)}x smaller`);
+  console.log(`  Size+LZ4: RowBinary is ${(escapeJsonCompressed.length / escapeRbCompressed.length).toFixed(2)}x smaller`);
+  console.log(`  Full path: RowBinary+LZ4 is ${(jsonFullEscape.ms / rbFullEscape.ms).toFixed(2)}x ${rbFullEscape.ms < jsonFullEscape.ms ? 'faster' : 'slower'}`);
 
   console.log('\nComplex data:');
   console.log(`  Encode: RowBinary is ${(jsonEncodeComplex.ms / rbEncodeComplex.ms).toFixed(2)}x ${rbEncodeComplex.ms < jsonEncodeComplex.ms ? 'faster' : 'slower'}`);
   console.log(`  Decode: RowBinary is ${(jsonDecodeComplex.ms / rbDecodeComplex.ms).toFixed(2)}x ${rbDecodeComplex.ms < jsonDecodeComplex.ms ? 'faster' : 'slower'}`);
   console.log(`  Size: RowBinary is ${(complexJsonEncoded.length / complexRowBinaryEncoded.length).toFixed(2)}x smaller`);
+  console.log(`  Size+LZ4: RowBinary is ${(complexJsonCompressed.length / complexRbCompressed.length).toFixed(2)}x smaller`);
+  console.log(`  Full path: RowBinary+LZ4 is ${(jsonFullComplex.ms / rbFullComplex.ms).toFixed(2)}x ${rbFullComplex.ms < jsonFullComplex.ms ? 'faster' : 'slower'}`);
 }
 
 main().catch(console.error);

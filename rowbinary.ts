@@ -541,6 +541,21 @@ const NUMERIC_ARRAY_CODECS: Record<string, NumericArrayCodec> = {
   Float64: { size: 8, encode: (v, o, val) => v.setFloat64(o, val as number, true),      decode: (v, o) => v.getFloat64(o, true) },
 }
 
+// TypedArray constructors for fast array decoding (returns view into buffer)
+type TypedArrayConstructor =
+  | typeof Int32Array | typeof Uint32Array
+  | typeof BigInt64Array | typeof BigUint64Array
+  | typeof Float32Array | typeof Float64Array
+
+const TYPED_ARRAY_CTORS: Record<string, TypedArrayConstructor> = {
+  Int32: Int32Array,
+  UInt32: Uint32Array,
+  Int64: BigInt64Array,
+  UInt64: BigUint64Array,
+  Float32: Float32Array,
+  Float64: Float64Array,
+}
+
 // Encoder functions - write value at offset, return new offset
 type Encoder = (view: DataView, offset: number, value: unknown) => number
 
@@ -1670,11 +1685,44 @@ function readLEB128(data: Uint8Array, offset: number): [number, number] {
   return [value, offset]
 }
 
+// Pure JS UTF-8 decode for small strings (faster than TextDecoder for < 200 bytes)
+function utf8DecodeSmall(data: Uint8Array, start: number, end: number): string {
+  let result = ''
+  let i = start
+  while (i < end) {
+    const byte = data[i++]
+    if (byte < 0x80) {
+      result += String.fromCharCode(byte)
+    } else if (byte < 0xe0) {
+      result += String.fromCharCode(((byte & 0x1f) << 6) | (data[i++] & 0x3f))
+    } else if (byte < 0xf0) {
+      result += String.fromCharCode(
+        ((byte & 0x0f) << 12) | ((data[i++] & 0x3f) << 6) | (data[i++] & 0x3f)
+      )
+    } else {
+      // 4-byte sequence (surrogate pair)
+      const cp = ((byte & 0x07) << 18) | ((data[i++] & 0x3f) << 12) |
+                 ((data[i++] & 0x3f) << 6) | (data[i++] & 0x3f)
+      result += String.fromCharCode(
+        0xd800 + ((cp - 0x10000) >> 10),
+        0xdc00 + ((cp - 0x10000) & 0x3ff)
+      )
+    }
+  }
+  return result
+}
+
+const MIN_TEXT_DECODER_LENGTH = 8  // Pure JS faster below this, TextDecoder wins above
+
 // Read length-prefixed string, returns [string, newOffset]
 function readString(data: Uint8Array, offset: number): [string, number] {
   const [len, pos] = readLEB128(data, offset)
-  const str = textDecoder.decode(data.subarray(pos, pos + len))
-  return [str, pos + len]
+  const end = pos + len
+  // Use pure JS for small strings (avoids TextDecoder bridge overhead)
+  const str = len < MIN_TEXT_DECODER_LENGTH
+    ? utf8DecodeSmall(data, pos, end)
+    : textDecoder.decode(data.subarray(pos, end))
+  return [str, end]
 }
 
 // Decoder functions - read value at offset, return [value, newOffset]
@@ -1979,9 +2027,18 @@ function decodeValue(view: DataView, data: Uint8Array, offset: number, type: str
       return [values, offset]
     }
 
-    // Fast path for numeric arrays
-    const codec = NUMERIC_ARRAY_CODECS[innerType]
-    if (codec) {
+    // Fast path for numeric arrays - return TypedArray view if aligned
+    const Ctor = TYPED_ARRAY_CTORS[innerType]
+    if (Ctor) {
+      const codec = NUMERIC_ARRAY_CODECS[innerType]
+      const byteLen = count * codec.size
+      const absoluteOffset = data.byteOffset + offset
+      // TypedArrays require alignment (e.g., Int32Array needs 4-byte alignment)
+      if (absoluteOffset % codec.size === 0) {
+        const values = new Ctor(data.buffer, absoluteOffset, count)
+        return [values, offset + byteLen]
+      }
+      // Fallback: unaligned data, decode per-element
       const values = new Array(count)
       for (let i = 0; i < count; i++) {
         values[i] = codec.decode(view, offset)

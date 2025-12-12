@@ -6,6 +6,14 @@ import {
   type ColumnDef,
 } from "../rowbinary.ts";
 
+// Helper to compare arrays (works with TypedArrays too)
+function assertArrayEqual(actual: ArrayLike<unknown>, expected: unknown[]): void {
+  assert.strictEqual(actual.length, expected.length, `length mismatch: ${actual.length} vs ${expected.length}`);
+  for (let i = 0; i < expected.length; i++) {
+    assert.strictEqual(actual[i], expected[i], `mismatch at index ${i}`);
+  }
+}
+
 // Helper to read LEB128
 function readLEB128(bytes: Uint8Array, offset: number): [number, number] {
   let value = 0;
@@ -691,9 +699,10 @@ describe("decodeRowBinaryWithNames", () => {
     const encoded = encodeRowBinaryWithNames(columns, rows);
     const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
 
-    assert.deepStrictEqual(decoded.rows[0][0], [1, 2, 3]);
-    assert.deepStrictEqual(decoded.rows[1][0], []);
-    assert.deepStrictEqual(decoded.rows[2][0], [100]);
+    // Note: numeric arrays may return TypedArrays for performance
+    assertArrayEqual(decoded.rows[0][0] as ArrayLike<number>, [1, 2, 3]);
+    assertArrayEqual(decoded.rows[1][0] as ArrayLike<number>, []);
+    assertArrayEqual(decoded.rows[2][0] as ArrayLike<number>, [100]);
   });
 
   it("decodes Tuple", () => {
