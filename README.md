@@ -130,7 +130,7 @@ const bytes = await collectBytes(query("SELECT * FROM t FORMAT RowBinaryWithName
 
 ## RowBinary Format (Experimental)
 
-For high-performance inserts, use the binary `RowBinaryWithNames` format instead of JSON:
+Binary format that's ~7x faster to encode than JSON for simple data, with ~3x smaller payloads:
 
 ```ts
 import { insert, encodeRowBinaryWithNames, type ColumnDef } from "@maxjustus/chttp";
@@ -270,33 +270,10 @@ Requires Node.js 20+ or modern browsers (Chrome 116+, Firefox 124+, Safari 17.4+
 
 Set `compression` in options:
 - `"lz4"` - fast, WASM (default)
-- `"zstd"` - smaller output, native in Node.js with WASM fallback
+- `"zstd"` - ~2x better compression, native in Node.js with WASM fallback
 - `"none"` - no compression
 
-ZSTD automatically uses native bindings (`zstd-napi`) in Node.js, falling back to WASM (`@bokuweb/zstd-wasm`) in browsers or if native fails to load. Native is ~2x faster than WASM. The native bindings are an optional dependency and install automatically on supported platforms.
-
-### Benchmark
-
-Compression ratio by data type:
-
-| Data Type      | LZ4   | ZSTD     | gzip   |
-|----------------|-------|----------|--------|
-| Random bytes   | 1.0x  | 1.0x     | 1.0x   |
-| Repeated       | 250x  | 14,706x  | 963x   |
-| JSON (varied)  | 4.3x  | 9.0x     | 8.0x   |
-| UUIDs          | 1.0x  | 1.9x     | 1.7x   |
-| Log lines      | 5.5x  | 17.6x    | 11.5x  |
-
-Speed (686KB varied JSON):
-
-| Method     | Compress | Decompress |
-|------------|----------|------------|
-| LZ4 wasm   | 0.6ms    | 0.2ms      |
-| ZSTD napi  | 0.6ms    | 0.3ms      |
-| ZSTD wasm  | 1.4ms    | 0.4ms      |
-| gzip       | 4.2ms    | 0.9ms      |
-
-ZSTD with native bindings (auto-detected in Node.js) matches LZ4 speed with 2x better compression. Run `npm run bench` to reproduce.
+ZSTD uses native bindings in Node.js when available, falling back to WASM in browsers. Run `npm run bench` to see compression ratios and speeds for your data.
 
 ## Development
 
@@ -305,12 +282,3 @@ npm test  # runs integration tests against ClickHouse via testcontainers
 ```
 
 Requires Node.js 24+ (uses `--experimental-strip-types` for direct TS execution).
-
-## Wire Format
-
-ClickHouse native compression blocks:
-- 16-byte CityHash128 checksum (v1.0.2)
-- 1-byte method (0x82=LZ4, 0x90=ZSTD)
-- 4-byte compressed size (includes 9-byte header)
-- 4-byte uncompressed size
-- compressed data
