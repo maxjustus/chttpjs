@@ -4,6 +4,7 @@ import {
   encodeRowBinaryWithNames,
   decodeRowBinaryWithNames,
   type ColumnDef,
+  ClickHouseDateTime64,
 } from "../rowbinary.ts";
 
 // Helper to compare arrays (works with TypedArrays too)
@@ -852,8 +853,10 @@ describe("decodeRowBinaryWithNames", () => {
       columns.map((c) => c.type),
     );
 
-    assert.deepStrictEqual(decoded.rows[0][0], { foo: 1, bar: 2 });
-    assert.deepStrictEqual(decoded.rows[1][0], {});
+    const map1 = new Map<string, number>([["foo", 1], ["bar", 2]]);
+    const map2 = new Map<string, number>();
+    assert.deepStrictEqual(decoded.rows[0][0], map1);
+    assert.deepStrictEqual(decoded.rows[1][0], map2);
   });
 
   it("decodes nested types", () => {
@@ -873,7 +876,8 @@ describe("decodeRowBinaryWithNames", () => {
     const tuple = decoded.rows[0][0] as unknown[];
     assert.strictEqual(tuple[0], "outer");
     assertArrayEqual(tuple[1] as ArrayLike<number>, [1, 2, 3]);
-    assert.deepStrictEqual(tuple[2], { a: 1.5, b: 2.5 });
+    const expectedMap = new Map([["a", 1.5], ["b", 2.5]]);
+    assert.deepStrictEqual(tuple[2], expectedMap);
   });
 
   it("decodes Array of Tuples", () => {
@@ -943,9 +947,17 @@ describe("decodeRowBinaryWithNames", () => {
       columns.map((c) => c.type),
     );
 
-    assert.strictEqual(decoded.rows[0][0], "hello");
-    assert.strictEqual(decoded.rows[1][0], "world12345");
-    assert.strictEqual(decoded.rows[2][0], "x");
+    const enc = new TextEncoder();
+    const helloPadded = new Uint8Array(10);
+    helloPadded.set(enc.encode("hello"));
+    assert.deepStrictEqual(decoded.rows[0][0], helloPadded);
+
+    const world = enc.encode("world12345");
+    assert.deepStrictEqual(decoded.rows[1][0], world);
+
+    const xPadded = new Uint8Array(10);
+    xPadded.set(enc.encode("x"));
+    assert.deepStrictEqual(decoded.rows[2][0], xPadded);
   });
 
   it("Enum8", () => {
@@ -1040,8 +1052,9 @@ describe("decodeRowBinaryWithNames", () => {
       columns.map((c) => c.type),
     );
 
-    const d = decoded.rows[0][0] as Date;
-    assert.strictEqual(d.getTime(), date.getTime());
+    const d = decoded.rows[0][0] as ClickHouseDateTime64;
+    assert.ok(d instanceof ClickHouseDateTime64);
+    assert.strictEqual(d.toClosestDate().getTime(), date.getTime());
   });
 
   it("DateTime64(6) - microseconds", () => {
@@ -1054,9 +1067,12 @@ describe("decodeRowBinaryWithNames", () => {
       columns.map((c) => c.type),
     );
 
-    const d = decoded.rows[0][0] as Date;
-    // Precision is microseconds, but JS Date is ms, so should match
-    assert.strictEqual(d.getTime(), date.getTime());
+    const d = decoded.rows[0][0] as ClickHouseDateTime64;
+    assert.ok(d instanceof ClickHouseDateTime64);
+    // Expected ticks: ms * 1000
+    const expectedTicks = BigInt(date.getTime()) * 1000n;
+    assert.strictEqual(d.ticks, expectedTicks);
+    assert.strictEqual(d.toClosestDate().getTime(), date.getTime());
   });
 
   it("DateTime64(0) - seconds only", () => {
@@ -1069,9 +1085,9 @@ describe("decodeRowBinaryWithNames", () => {
       columns.map((c) => c.type),
     );
 
-    const d = decoded.rows[0][0] as Date;
+    const d = decoded.rows[0][0] as ClickHouseDateTime64;
     assert.strictEqual(
-      Math.floor(d.getTime() / 1000),
+      Math.floor(d.toClosestDate().getTime() / 1000),
       Math.floor(date.getTime() / 1000),
     );
   });
@@ -1288,7 +1304,13 @@ describe("decodeRowBinaryWithNames", () => {
     assert.strictEqual(result.int, 100n);
     assert.strictEqual(result.float, 3.14);
     assert.strictEqual(result.bool, false);
-    assert.strictEqual((result.date as Date).getTime(), testDate.getTime());
+    // JSON decodes dates as ClickHouseDateTime64 now?
+    // Wait, JSON decoder uses decodeTypeBinary?
+    // Yes, JsonCodec uses inferType(val) -> encode -> decode.
+    // If val is Date, inferType returns DateTime64(3).
+    // decode returns ClickHouseDateTime64.
+    const dateVal = result.date as ClickHouseDateTime64;
+    assert.strictEqual(dateVal.toClosestDate().getTime(), testDate.getTime());
   });
 
   it("JSON with type parameters", () => {
@@ -1445,9 +1467,10 @@ describe("decodeRowBinaryWithNames", () => {
       columns.map((c) => c.type),
     );
 
+    const expectedMap = new Map([["key1", "value1"], ["key2", "value2"]]);
     assert.deepStrictEqual(decoded.rows[0][0], {
       id: 1,
-      meta: { key1: "value1", key2: "value2" },
+      meta: expectedMap,
     });
   });
 
@@ -1469,6 +1492,74 @@ describe("decodeRowBinaryWithNames", () => {
       outer_id: 1,
       inner: { x: 1.5, y: 2.5 },
     });
+  });
+
+  it("LowCardinality(String)", () => {
+    const columns: ColumnDef[] = [{ name: "lc", type: "LowCardinality(String)" }];
+    const rows = [["foo"], ["bar"], ["foo"]];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
+
+    assert.strictEqual(decoded.rows[0][0], "foo");
+    assert.strictEqual(decoded.rows[1][0], "bar");
+    assert.strictEqual(decoded.rows[2][0], "foo");
+  });
+
+  it("Nested types", () => {
+    const columns: ColumnDef[] = [
+      { name: "n", type: "Nested(id UInt32, name String)" },
+    ];
+    // Nested is encoded as Array(Tuple(...))
+    const rows = [
+      [
+        [
+          { id: 1, name: "a" },
+          { id: 2, name: "b" },
+        ],
+      ],
+    ];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
+
+    const nested = decoded.rows[0][0] as unknown[];
+    assert.strictEqual(nested.length, 2);
+    assert.deepStrictEqual(nested[0], { id: 1, name: "a" });
+    assert.deepStrictEqual(nested[1], { id: 2, name: "b" });
+  });
+
+  it("Map with Date keys", () => {
+    const columns: ColumnDef[] = [{ name: "m", type: "Map(Date, UInt32)" }];
+    const d1 = new Date("2023-01-01");
+    const d2 = new Date("2023-01-02");
+    const map = new Map<Date, number>([
+      [d1, 100],
+      [d2, 200],
+    ]);
+    const rows = [[map]];
+
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
+
+    const decodedMap = decoded.rows[0][0] as Map<Date, number>;
+    assert.ok(decodedMap instanceof Map);
+    assert.strictEqual(decodedMap.size, 2);
+
+    // Note: distinct Date objects in Map keys won't equal strict reference,
+    // so we iterate to verify values.
+    const entries = [...decodedMap.entries()];
+    assert.strictEqual(entries[0][0].getTime(), d1.getTime());
+    assert.strictEqual(entries[0][1], 100);
+    assert.strictEqual(entries[1][0].getTime(), d2.getTime());
+    assert.strictEqual(entries[1][1], 200);
   });
 
   it("Dynamic with simple types", () => {
@@ -1531,9 +1622,11 @@ describe("decodeRowBinaryWithNames", () => {
       type: "Tuple(String, Int32)",
       value: ["hello", 42],
     });
+    
+    const expectedMap = new Map([["a", 1], ["b", 2]]);
     assert.deepStrictEqual(decoded.rows[2][0], {
       type: "Map(String, Int32)",
-      value: { a: 1, b: 2 },
+      value: expectedMap,
     });
   });
 
@@ -1627,9 +1720,12 @@ describe("decodeRowBinaryWithNames", () => {
       columns.map((c) => c.type),
     );
 
-    const result = decoded.rows[0][0] as { type: string; value: Date };
+    const result = decoded.rows[0][0] as {
+      type: string;
+      value: ClickHouseDateTime64;
+    };
     assert.strictEqual(result.type, "DateTime64(3)");
-    assert.strictEqual(result.value.getTime(), testDate.getTime());
+    assert.strictEqual(result.value.toClosestDate().getTime(), testDate.getTime());
   });
 
   it("Dynamic with inferred Array", () => {

@@ -1033,7 +1033,11 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
 
       assert.strictEqual(decoded.rows.length, 2);
       assert.deepStrictEqual(decoded.rows[0][1], ["foo", "bar"]);
-      assert.deepStrictEqual(decoded.rows[0][2], { a: 10, b: 20 });
+      // Maps are now returned as Map objects
+      const attrs = decoded.rows[0][2] as Map<string, number>;
+      assert.ok(attrs instanceof Map);
+      assert.strictEqual(attrs.get("a"), 10);
+      assert.strictEqual(attrs.get("b"), 20);
       const tuple0 = decoded.rows[0][3] as unknown[];
       assert.strictEqual(tuple0[0], "hello");
 

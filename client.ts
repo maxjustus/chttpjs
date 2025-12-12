@@ -14,6 +14,7 @@ export {
   type ScalarType,
   type ColumnType,
   type DecodeResult,
+  ClickHouseDateTime64,
 } from "./rowbinary.ts";
 
 export type Compression = "lz4" | "zstd" | "none";

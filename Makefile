@@ -1,4 +1,4 @@
-.PHONY: build build-full build-lz4 test bench publish
+.PHONY: build build-full build-lz4 test fuzz bench publish
 
 build: build-full build-lz4
 
@@ -10,6 +10,9 @@ build-lz4:
 
 test:
 	npm test
+
+fuzz:
+	npm run test:fuzz
 
 bench:
 	npm run bench
