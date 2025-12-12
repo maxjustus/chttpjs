@@ -132,6 +132,355 @@ function parseTupleElements(inner: string): TupleElement[] {
   })
 }
 
+// ============================================================================
+// Binary Type Encoding for Dynamic type
+// See: https://clickhouse.com/docs/sql-reference/data-types/data-types-binary-encoding
+// ============================================================================
+
+const textEncoder = new TextEncoder()
+const textDecoder = new TextDecoder()
+
+// Type codes for binary encoding
+const TYPE_CODES: Record<string, number> = {
+  'Nothing': 0x00,
+  'UInt8': 0x01, 'UInt16': 0x02, 'UInt32': 0x03, 'UInt64': 0x04,
+  'UInt128': 0x05, 'UInt256': 0x06,
+  'Int8': 0x07, 'Int16': 0x08, 'Int32': 0x09, 'Int64': 0x0A,
+  'Int128': 0x0B, 'Int256': 0x0C,
+  'Float32': 0x0D, 'Float64': 0x0E,
+  'Date': 0x0F, 'Date32': 0x10,
+  'DateTime': 0x11, // 0x12 = DateTime with tz
+  'DateTime64': 0x13, // 0x14 = DateTime64 with tz
+  'String': 0x15,
+  'FixedString': 0x16,
+  'Enum8': 0x17, 'Enum16': 0x18,
+  'Decimal32': 0x19, 'Decimal64': 0x1A, 'Decimal128': 0x1B, 'Decimal256': 0x1C,
+  'UUID': 0x1D,
+  'Array': 0x1E,
+  'Tuple': 0x1F, // 0x20 = named tuple
+  'Nullable': 0x23,
+  'Map': 0x27,
+  'IPv4': 0x28, 'IPv6': 0x29,
+  'Variant': 0x2A,
+  'Dynamic': 0x2B,
+  'Bool': 0x2D,
+}
+
+// Reverse mapping for decoding
+const CODE_TO_TYPE: Record<number, string> = {}
+for (const [type, code] of Object.entries(TYPE_CODES)) {
+  CODE_TO_TYPE[code] = type
+}
+// Add special codes
+CODE_TO_TYPE[0x12] = 'DateTime' // with timezone
+CODE_TO_TYPE[0x14] = 'DateTime64' // with timezone
+CODE_TO_TYPE[0x20] = 'Tuple' // named tuple
+
+// Encode a type string to binary format
+function encodeTypeBinary(type: string): Uint8Array {
+  const parts: number[] = []
+
+  // Simple types (exact match)
+  if (TYPE_CODES[type] !== undefined) {
+    return new Uint8Array([TYPE_CODES[type]])
+  }
+
+  // Nullable(T)
+  if (type.startsWith('Nullable(')) {
+    parts.push(0x23)
+    const inner = type.slice(9, -1)
+    const innerEncoded = encodeTypeBinary(inner)
+    parts.push(...innerEncoded)
+    return new Uint8Array(parts)
+  }
+
+  // Array(T)
+  if (type.startsWith('Array(')) {
+    parts.push(0x1E)
+    const inner = type.slice(6, -1)
+    const innerEncoded = encodeTypeBinary(inner)
+    parts.push(...innerEncoded)
+    return new Uint8Array(parts)
+  }
+
+  // Map(K, V)
+  if (type.startsWith('Map(')) {
+    parts.push(0x27)
+    const [keyType, valueType] = parseTypeList(type.slice(4, -1))
+    parts.push(...encodeTypeBinary(keyType))
+    parts.push(...encodeTypeBinary(valueType))
+    return new Uint8Array(parts)
+  }
+
+  // Tuple(...) or Tuple(name Type, ...)
+  if (type.startsWith('Tuple(')) {
+    const elements = parseTupleElements(type.slice(6, -1))
+    const isNamed = elements.length > 0 && elements[0].name !== null
+    parts.push(isNamed ? 0x20 : 0x1F)
+    // var_uint count
+    parts.push(...encodeVarUint(elements.length))
+    for (const elem of elements) {
+      if (isNamed) {
+        // name as var_uint length + bytes
+        const nameBytes = textEncoder.encode(elem.name!)
+        parts.push(...encodeVarUint(nameBytes.length))
+        parts.push(...nameBytes)
+      }
+      parts.push(...encodeTypeBinary(elem.type))
+    }
+    return new Uint8Array(parts)
+  }
+
+  // Variant(T1, T2, ...)
+  if (type.startsWith('Variant(')) {
+    parts.push(0x2A)
+    const variantTypes = parseTypeList(type.slice(8, -1))
+    parts.push(...encodeVarUint(variantTypes.length))
+    for (const vt of variantTypes) {
+      parts.push(...encodeTypeBinary(vt))
+    }
+    return new Uint8Array(parts)
+  }
+
+  // DateTime64(precision) or DateTime64(precision, 'tz')
+  if (type.startsWith('DateTime64')) {
+    const match = type.match(/DateTime64\((\d+)(?:,\s*'([^']+)')?\)/)
+    if (match) {
+      const precision = parseInt(match[1], 10)
+      const tz = match[2]
+      if (tz) {
+        parts.push(0x14)
+        parts.push(precision)
+        const tzBytes = textEncoder.encode(tz)
+        parts.push(...encodeVarUint(tzBytes.length))
+        parts.push(...tzBytes)
+      } else {
+        parts.push(0x13)
+        parts.push(precision)
+      }
+      return new Uint8Array(parts)
+    }
+  }
+
+  // FixedString(N)
+  if (type.startsWith('FixedString(')) {
+    parts.push(0x16)
+    const n = parseInt(type.slice(12, -1), 10)
+    parts.push(...encodeVarUint(n))
+    return new Uint8Array(parts)
+  }
+
+  // Decimal32/64/128/256(P, S) or Decimal32/64/128/256(S)
+  for (const [prefix, code] of [['Decimal32', 0x19], ['Decimal64', 0x1A], ['Decimal128', 0x1B], ['Decimal256', 0x1C]] as const) {
+    if (type.startsWith(prefix + '(')) {
+      parts.push(code)
+      const inner = type.slice(prefix.length + 1, -1)
+      const nums = inner.split(',').map(s => parseInt(s.trim(), 10))
+      if (nums.length === 1) {
+        // Just scale - precision is implicit from type
+        const defaultPrecision = prefix === 'Decimal32' ? 9 : prefix === 'Decimal64' ? 18 : prefix === 'Decimal128' ? 38 : 76
+        parts.push(defaultPrecision, nums[0])
+      } else {
+        parts.push(nums[0], nums[1])
+      }
+      return new Uint8Array(parts)
+    }
+  }
+
+  // Generic Decimal(P, S)
+  if (type.startsWith('Decimal(')) {
+    const match = type.match(/Decimal\((\d+),\s*(\d+)\)/)
+    if (match) {
+      const precision = parseInt(match[1], 10)
+      const scale = parseInt(match[2], 10)
+      // Determine which Decimal type based on precision
+      let code: number
+      if (precision <= 9) code = 0x19
+      else if (precision <= 18) code = 0x1A
+      else if (precision <= 38) code = 0x1B
+      else code = 0x1C
+      parts.push(code, precision, scale)
+      return new Uint8Array(parts)
+    }
+  }
+
+  throw new Error(`Cannot encode type to binary: ${type}`)
+}
+
+// Helper to encode variable-length unsigned integer
+function encodeVarUint(value: number): number[] {
+  const bytes: number[] = []
+  do {
+    let byte = value & 0x7f
+    value >>>= 7
+    if (value !== 0) byte |= 0x80
+    bytes.push(byte)
+  } while (value !== 0)
+  return bytes
+}
+
+// Decode a type from binary format, returns [type, bytesRead]
+function decodeTypeBinary(data: Uint8Array, offset: number): [string, number] {
+  const code = data[offset]
+  offset++
+
+  // Simple types
+  const simpleType = CODE_TO_TYPE[code]
+  if (simpleType && !['Array', 'Tuple', 'Nullable', 'Map', 'Variant', 'DateTime64', 'FixedString', 'Decimal32', 'Decimal64', 'Decimal128', 'Decimal256', 'DateTime'].includes(simpleType)) {
+    return [simpleType, offset]
+  }
+
+  switch (code) {
+    case 0x23: { // Nullable
+      const [inner, newOffset] = decodeTypeBinary(data, offset)
+      return [`Nullable(${inner})`, newOffset]
+    }
+    case 0x1E: { // Array
+      const [inner, newOffset] = decodeTypeBinary(data, offset)
+      return [`Array(${inner})`, newOffset]
+    }
+    case 0x27: { // Map
+      const [keyType, keyEnd] = decodeTypeBinary(data, offset)
+      const [valueType, valueEnd] = decodeTypeBinary(data, keyEnd)
+      return [`Map(${keyType}, ${valueType})`, valueEnd]
+    }
+    case 0x1F: { // Tuple (unnamed)
+      const [count, pos] = decodeVarUint(data, offset)
+      offset = pos
+      const types: string[] = []
+      for (let i = 0; i < count; i++) {
+        const [elemType, newOffset] = decodeTypeBinary(data, offset)
+        types.push(elemType)
+        offset = newOffset
+      }
+      return [`Tuple(${types.join(', ')})`, offset]
+    }
+    case 0x20: { // Tuple (named)
+      const [count, pos] = decodeVarUint(data, offset)
+      offset = pos
+      const parts: string[] = []
+      for (let i = 0; i < count; i++) {
+        const [nameLen, namePos] = decodeVarUint(data, offset)
+        const name = textDecoder.decode(data.subarray(namePos, namePos + nameLen))
+        offset = namePos + nameLen
+        const [elemType, newOffset] = decodeTypeBinary(data, offset)
+        parts.push(`${name} ${elemType}`)
+        offset = newOffset
+      }
+      return [`Tuple(${parts.join(', ')})`, offset]
+    }
+    case 0x2A: { // Variant
+      const [count, pos] = decodeVarUint(data, offset)
+      offset = pos
+      const types: string[] = []
+      for (let i = 0; i < count; i++) {
+        const [varType, newOffset] = decodeTypeBinary(data, offset)
+        types.push(varType)
+        offset = newOffset
+      }
+      return [`Variant(${types.join(', ')})`, offset]
+    }
+    case 0x11: // DateTime (no tz)
+      return ['DateTime', offset]
+    case 0x12: { // DateTime with tz
+      const [tzLen, tzPos] = decodeVarUint(data, offset)
+      const tz = textDecoder.decode(data.subarray(tzPos, tzPos + tzLen))
+      return [`DateTime('${tz}')`, tzPos + tzLen]
+    }
+    case 0x13: { // DateTime64 (no tz)
+      const precision = data[offset]
+      return [`DateTime64(${precision})`, offset + 1]
+    }
+    case 0x14: { // DateTime64 with tz
+      const precision = data[offset]
+      offset++
+      const [tzLen, tzPos] = decodeVarUint(data, offset)
+      const tz = textDecoder.decode(data.subarray(tzPos, tzPos + tzLen))
+      return [`DateTime64(${precision}, '${tz}')`, tzPos + tzLen]
+    }
+    case 0x16: { // FixedString
+      const [n, newOffset] = decodeVarUint(data, offset)
+      return [`FixedString(${n})`, newOffset]
+    }
+    case 0x19: { // Decimal32
+      const precision = data[offset]
+      const scale = data[offset + 1]
+      return [`Decimal32(${precision}, ${scale})`, offset + 2]
+    }
+    case 0x1A: { // Decimal64
+      const precision = data[offset]
+      const scale = data[offset + 1]
+      return [`Decimal64(${precision}, ${scale})`, offset + 2]
+    }
+    case 0x1B: { // Decimal128
+      const precision = data[offset]
+      const scale = data[offset + 1]
+      return [`Decimal128(${precision}, ${scale})`, offset + 2]
+    }
+    case 0x1C: { // Decimal256
+      const precision = data[offset]
+      const scale = data[offset + 1]
+      return [`Decimal256(${precision}, ${scale})`, offset + 2]
+    }
+    default:
+      throw new Error(`Unknown type code: 0x${code.toString(16)}`)
+  }
+}
+
+// Helper to decode variable-length unsigned integer
+function decodeVarUint(data: Uint8Array, offset: number): [number, number] {
+  let value = 0
+  let shift = 0
+  while (true) {
+    const byte = data[offset++]
+    value |= (byte & 0x7f) << shift
+    if ((byte & 0x80) === 0) break
+    shift += 7
+  }
+  return [value, offset]
+}
+
+// ============================================================================
+// Dynamic Type Inference
+// ============================================================================
+
+// Check if a value is an explicit Dynamic {type, value} object
+function isExplicitDynamic(v: unknown): v is { type: string; value: unknown } {
+  return typeof v === 'object' && v !== null &&
+    'type' in v && 'value' in v &&
+    typeof (v as { type: unknown }).type === 'string' &&
+    Object.keys(v).length === 2
+}
+
+// 128-bit boundary for BigInt
+const INT128_MAX = (1n << 127n) - 1n
+const INT128_MIN = -(1n << 127n)
+
+// Infer ClickHouse type from JS value
+function inferType(value: unknown): string {
+  if (value === null) return 'Nothing'
+  if (typeof value === 'boolean') return 'Bool'
+  if (typeof value === 'string') return 'String'
+  if (typeof value === 'bigint') {
+    // Use Int128 if within range, otherwise Int256
+    if (value >= INT128_MIN && value <= INT128_MAX) return 'Int128'
+    return 'Int256'
+  }
+  if (typeof value === 'number') {
+    // Integer vs float: check if it's a whole number
+    if (Number.isInteger(value)) return 'Int64'
+    return 'Float64'
+  }
+  if (value instanceof Date) return 'DateTime64(3)'
+  if (Array.isArray(value)) {
+    if (value.length === 0) return 'Array(Nothing)'
+    // Infer element type from first element
+    const elemType = inferType(value[0])
+    return `Array(${elemType})`
+  }
+  throw new Error(`Cannot infer Dynamic type for value: ${typeof value}`)
+}
+
 // Scalar type sizes
 const SCALAR_SIZES: Record<ScalarType, number | null> = {
   Int8: 1, Int16: 2, Int32: 4, Int64: 8,
@@ -145,8 +494,6 @@ const SCALAR_SIZES: Record<ScalarType, number | null> = {
 
 // Encoder functions - write value at offset, return new offset
 type Encoder = (view: DataView, offset: number, value: unknown) => number
-
-const textEncoder = new TextEncoder()
 
 const scalarEncoders: Record<ScalarType, Encoder> = {
   Int8: (view, offset, value) => {
@@ -278,11 +625,44 @@ function valueSize(type: string, value: unknown): number {
     return 1 + valueSize(variantTypes[v.type], v.value)
   }
 
-  // JSON / Object('json') - encoded as String (JSON.stringify)
+  // JSON / Object('json') - native binary format:
+  // <VarUInt num_paths> then for each path: <path_string><dynamic_value>
   if (type === 'JSON' || type === "Object('json')") {
-    const jsonStr = JSON.stringify(value)
-    const bytes = textEncoder.encode(jsonStr)
-    return leb128Size(bytes.length) + bytes.length
+    const obj = value as Record<string, unknown>
+    const paths = Object.keys(obj)
+    let size = leb128Size(paths.length)
+    for (const path of paths) {
+      // Path as string
+      const pathBytes = textEncoder.encode(path)
+      size += leb128Size(pathBytes.length) + pathBytes.length
+      // Dynamic value (type + value)
+      const val = obj[path]
+      if (val === null) {
+        size += 1 // Just 0x00 Nothing
+      } else {
+        const inferredType = inferType(val)
+        const typeBytes = encodeTypeBinary(inferredType)
+        size += typeBytes.length + valueSize(inferredType, val)
+      }
+    }
+    return size
+  }
+
+  // Dynamic - self-describing type: <binary_type><value>
+  if (type === 'Dynamic') {
+    if (value === null) return 1 // Just 0x00 Nothing
+    // Check if explicit {type, value} or infer from JS type
+    let innerType: string
+    let innerValue: unknown
+    if (isExplicitDynamic(value)) {
+      innerType = value.type
+      innerValue = value.value
+    } else {
+      innerType = inferType(value)
+      innerValue = value
+    }
+    const typeBytes = encodeTypeBinary(innerType)
+    return typeBytes.length + valueSize(innerType, innerValue)
   }
 
   // Tuple(T1, T2, ...) or Tuple(name1 T1, name2 T2, ...) - sum of element sizes
@@ -590,13 +970,54 @@ function encodeValue(view: DataView, offset: number, type: string, value: unknow
     return encodeValue(view, offset + 1, variantTypes[v.type], v.value)
   }
 
-  // JSON / Object('json') - encoded as String (JSON.stringify)
+  // JSON / Object('json') - native binary format:
+  // <VarUInt num_paths> then for each path: <path_string><dynamic_value>
   if (type === 'JSON' || type === "Object('json')") {
-    const jsonStr = JSON.stringify(value)
-    const bytes = textEncoder.encode(jsonStr)
-    offset = writeLEB128(view, offset, bytes.length)
-    new Uint8Array(view.buffer, offset, bytes.length).set(bytes)
-    return offset + bytes.length
+    const obj = value as Record<string, unknown>
+    const paths = Object.keys(obj)
+    offset = writeLEB128(view, offset, paths.length)
+    for (const path of paths) {
+      // Path as string
+      const pathBytes = textEncoder.encode(path)
+      offset = writeLEB128(view, offset, pathBytes.length)
+      new Uint8Array(view.buffer, offset, pathBytes.length).set(pathBytes)
+      offset += pathBytes.length
+      // Dynamic value (type + value)
+      const val = obj[path]
+      if (val === null) {
+        view.setUint8(offset, 0x00) // Nothing
+        offset += 1
+      } else {
+        const inferredType = inferType(val)
+        const typeBytes = encodeTypeBinary(inferredType)
+        new Uint8Array(view.buffer, offset, typeBytes.length).set(typeBytes)
+        offset += typeBytes.length
+        offset = encodeValue(view, offset, inferredType, val)
+      }
+    }
+    return offset
+  }
+
+  // Dynamic - self-describing type: <binary_type><value>
+  if (type === 'Dynamic') {
+    if (value === null) {
+      view.setUint8(offset, 0x00) // Nothing type code
+      return offset + 1
+    }
+    // Check if explicit {type, value} or infer from JS type
+    let innerType: string
+    let innerValue: unknown
+    if (isExplicitDynamic(value)) {
+      innerType = value.type
+      innerValue = value.value
+    } else {
+      innerType = inferType(value)
+      innerValue = value
+    }
+    const typeBytes = encodeTypeBinary(innerType)
+    new Uint8Array(view.buffer, offset, typeBytes.length).set(typeBytes)
+    offset += typeBytes.length
+    return encodeValue(view, offset, innerType, innerValue)
   }
 
   // Tuple(T1, T2, ...) or Tuple(name1 T1, name2 T2, ...) - encode elements sequentially
@@ -712,8 +1133,6 @@ export function encodeRowBinaryWithNames(
 // ============================================================================
 // Decoding
 // ============================================================================
-
-const textDecoder = new TextDecoder()
 
 // Read LEB128 encoded unsigned integer, returns [value, newOffset]
 function readLEB128(data: Uint8Array, offset: number): [number, number] {
@@ -954,10 +1373,38 @@ function decodeValue(view: DataView, data: Uint8Array, offset: number, type: str
     return [{ type: discriminator, value: val }, newOffset]
   }
 
-  // JSON / Object('json') - read as String, JSON.parse
+  // JSON / Object('json') - native binary format:
+  // <VarUInt num_paths> then for each path: <path_string><dynamic_value>
   if (type === 'JSON' || type === "Object('json')") {
-    const [jsonStr, newOffset] = readString(data, offset)
-    return [JSON.parse(jsonStr), newOffset]
+    const [numPaths, pos] = readLEB128(data, offset)
+    offset = pos
+    const result: Record<string, unknown> = {}
+    for (let i = 0; i < numPaths; i++) {
+      // Read path string
+      const [path, pathEnd] = readString(data, offset)
+      offset = pathEnd
+      // Read dynamic value
+      const [innerType, typeEnd] = decodeTypeBinary(data, offset)
+      if (innerType === 'Nothing') {
+        result[path] = null
+        offset = typeEnd
+      } else {
+        const [val, valEnd] = decodeValue(view, data, typeEnd, innerType)
+        result[path] = val
+        offset = valEnd
+      }
+    }
+    return [result, offset]
+  }
+
+  // Dynamic - self-describing type: <binary_type><value>
+  if (type === 'Dynamic') {
+    const [innerType, typeEnd] = decodeTypeBinary(data, offset)
+    if (innerType === 'Nothing') {
+      return [null, typeEnd]
+    }
+    const [val, valEnd] = decodeValue(view, data, typeEnd, innerType)
+    return [{ type: innerType, value: val }, valEnd]
   }
 
   // Tuple(T1, T2, ...) or Tuple(name1 T1, name2 T2, ...) - decode elements sequentially

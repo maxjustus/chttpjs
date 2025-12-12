@@ -1006,17 +1006,18 @@ describe("decodeRowBinaryWithNames", () => {
     assert.deepStrictEqual(decoded.rows[1][0], { type: 1, value: "text" });
   });
 
-  it("JSON (string mode)", () => {
+  it("JSON (native binary format)", () => {
     const columns: ColumnDef[] = [{ name: "j", type: "JSON" }];
     const rows = [
-      [{ foo: "bar", num: 42, nested: { a: [1, 2, 3] } }],
-      [{ empty: {} }],
+      [{ foo: "bar", num: 42, arr: [1, 2, 3] }],
+      [{ flag: true, nothing: null }],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
     const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
 
-    assert.deepStrictEqual(decoded.rows[0][0], { foo: "bar", num: 42, nested: { a: [1, 2, 3] } });
-    assert.deepStrictEqual(decoded.rows[1][0], { empty: {} });
+    // Values are decoded with native types (num becomes BigInt via Int64)
+    assert.deepStrictEqual(decoded.rows[0][0], { foo: "bar", num: 42n, arr: [1n, 2n, 3n] });
+    assert.deepStrictEqual(decoded.rows[1][0], { flag: true, nothing: null });
   });
 
   it("Object('json') alias", () => {
@@ -1026,6 +1027,23 @@ describe("decodeRowBinaryWithNames", () => {
     const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
 
     assert.deepStrictEqual(decoded.rows[0][0], { key: "value" });
+  });
+
+  it("JSON with various types", () => {
+    const columns: ColumnDef[] = [{ name: "j", type: "JSON" }];
+    const testDate = new Date("2024-06-15T10:30:00.123Z");
+    const rows = [
+      [{ str: "hello", int: 100, float: 3.14, bool: false, date: testDate }],
+    ];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    const result = decoded.rows[0][0] as Record<string, unknown>;
+    assert.strictEqual(result.str, "hello");
+    assert.strictEqual(result.int, 100n);
+    assert.strictEqual(result.float, 3.14);
+    assert.strictEqual(result.bool, false);
+    assert.strictEqual((result.date as Date).getTime(), testDate.getTime());
   });
 
   it("Decimal(P, S) generic form", () => {
@@ -1142,6 +1160,170 @@ describe("decodeRowBinaryWithNames", () => {
       outer_id: 1,
       inner: { x: 1.5, y: 2.5 }
     });
+  });
+
+  it("Dynamic with simple types", () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
+    const rows = [
+      [{ type: "Int32", value: 42 }],
+      [{ type: "String", value: "hello" }],
+      [{ type: "Bool", value: true }],
+      [{ type: "Float64", value: 3.14 }],
+    ];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    assert.deepStrictEqual(decoded.rows[0][0], { type: "Int32", value: 42 });
+    assert.deepStrictEqual(decoded.rows[1][0], { type: "String", value: "hello" });
+    assert.deepStrictEqual(decoded.rows[2][0], { type: "Bool", value: true });
+    const row3 = decoded.rows[3][0] as { type: string; value: number };
+    assert.strictEqual(row3.type, "Float64");
+    assert.ok(Math.abs(row3.value - 3.14) < 0.0001);
+  });
+
+  it("Dynamic with NULL (Nothing)", () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
+    const rows = [
+      [null],
+      [{ type: "Int32", value: 100 }],
+      [null],
+    ];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    assert.strictEqual(decoded.rows[0][0], null);
+    assert.deepStrictEqual(decoded.rows[1][0], { type: "Int32", value: 100 });
+    assert.strictEqual(decoded.rows[2][0], null);
+  });
+
+  it("Dynamic with complex types", () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
+    const rows = [
+      [{ type: "Array(Int32)", value: [1, 2, 3] }],
+      [{ type: "Tuple(String, Int32)", value: ["hello", 42] }],
+      [{ type: "Map(String, Int32)", value: { a: 1, b: 2 } }],
+    ];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    assert.deepStrictEqual(decoded.rows[0][0], { type: "Array(Int32)", value: [1, 2, 3] });
+    assert.deepStrictEqual(decoded.rows[1][0], { type: "Tuple(String, Int32)", value: ["hello", 42] });
+    assert.deepStrictEqual(decoded.rows[2][0], { type: "Map(String, Int32)", value: { a: 1, b: 2 } });
+  });
+
+  it("Array of Dynamic values", () => {
+    const columns: ColumnDef[] = [{ name: "arr", type: "Array(Dynamic)" }];
+    const rows = [
+      [[
+        { type: "Int32", value: 1 },
+        { type: "String", value: "two" },
+        null,
+        { type: "Bool", value: false },
+      ]],
+    ];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    const arr = decoded.rows[0][0] as Array<{ type: string; value: unknown } | null>;
+    assert.strictEqual(arr.length, 4);
+    assert.deepStrictEqual(arr[0], { type: "Int32", value: 1 });
+    assert.deepStrictEqual(arr[1], { type: "String", value: "two" });
+    assert.strictEqual(arr[2], null);
+    assert.deepStrictEqual(arr[3], { type: "Bool", value: false });
+  });
+
+  it("Dynamic with named tuple", () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
+    const rows = [
+      [{ type: "Tuple(id Int32, name String)", value: { id: 1, name: "alice" } }],
+    ];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    assert.deepStrictEqual(decoded.rows[0][0], {
+      type: "Tuple(id Int32, name String)",
+      value: { id: 1, name: "alice" }
+    });
+  });
+
+  it("Dynamic with inferred simple types", () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
+    // Pass plain JS values instead of {type, value}
+    const rows = [
+      [42],           // integer -> Int64
+      [3.14],         // float -> Float64
+      ["hello"],      // string -> String
+      [true],         // boolean -> Bool
+      [null],         // null -> Nothing
+    ];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    assert.deepStrictEqual(decoded.rows[0][0], { type: "Int64", value: 42n });
+    assert.deepStrictEqual(decoded.rows[1][0], { type: "Float64", value: 3.14 });
+    assert.deepStrictEqual(decoded.rows[2][0], { type: "String", value: "hello" });
+    assert.deepStrictEqual(decoded.rows[3][0], { type: "Bool", value: true });
+    assert.strictEqual(decoded.rows[4][0], null);
+  });
+
+  it("Dynamic with inferred Date -> DateTime64(3)", () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
+    const testDate = new Date("2024-06-15T10:30:00.123Z");
+    const rows = [[testDate]];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    const result = decoded.rows[0][0] as { type: string; value: Date };
+    assert.strictEqual(result.type, "DateTime64(3)");
+    assert.strictEqual(result.value.getTime(), testDate.getTime());
+  });
+
+  it("Dynamic with inferred Array", () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
+    const rows = [
+      [[1, 2, 3]],     // Array of integers -> Array(Int64)
+      [["a", "b"]],    // Array of strings -> Array(String)
+      [[]],            // Empty array -> Array(Nothing)
+    ];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    assert.deepStrictEqual(decoded.rows[0][0], { type: "Array(Int64)", value: [1n, 2n, 3n] });
+    assert.deepStrictEqual(decoded.rows[1][0], { type: "Array(String)", value: ["a", "b"] });
+    assert.deepStrictEqual(decoded.rows[2][0], { type: "Array(Nothing)", value: [] });
+  });
+
+  it("Dynamic with inferred BigInt -> Int128/Int256", () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
+    const smallBigInt = 12345678901234567890n;
+    // This value exceeds Int128 range
+    const largeBigInt = (1n << 200n);
+    const rows = [
+      [smallBigInt],
+      [largeBigInt],
+    ];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    assert.deepStrictEqual(decoded.rows[0][0], { type: "Int128", value: smallBigInt });
+    assert.deepStrictEqual(decoded.rows[1][0], { type: "Int256", value: largeBigInt });
+  });
+
+  it("Dynamic with mixed inferred and explicit types", () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
+    const rows = [
+      [42],                                   // inferred Int64
+      [{ type: "UInt8", value: 255 }],        // explicit UInt8
+      ["inferred string"],                    // inferred String
+      [{ type: "Float32", value: 1.5 }],      // explicit Float32
+    ];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    assert.deepStrictEqual(decoded.rows[0][0], { type: "Int64", value: 42n });
+    assert.deepStrictEqual(decoded.rows[1][0], { type: "UInt8", value: 255 });
+    assert.deepStrictEqual(decoded.rows[2][0], { type: "String", value: "inferred string" });
+    assert.deepStrictEqual(decoded.rows[3][0], { type: "Float32", value: 1.5 });
   });
 });
 

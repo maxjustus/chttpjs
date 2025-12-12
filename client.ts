@@ -117,8 +117,6 @@ async function insert(
     session_id: sessionId,
     query: query,
     decompress: "1",
-    // Enable JSON as string for RowBinary format compatibility
-    input_format_binary_read_json_as_string: "1",
   };
 
   // Single Uint8Array - compress and send directly
@@ -407,8 +405,6 @@ async function* query(
   const params: Record<string, string> = {
     session_id: sessionId,
     default_format: "JSONEachRowWithProgress",
-    // Enable JSON as string for RowBinary format compatibility
-    output_format_binary_write_json_as_string: "1",
   };
 
   if (compressed) {

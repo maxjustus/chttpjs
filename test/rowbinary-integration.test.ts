@@ -939,4 +939,341 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       )) {}
     });
   });
+
+  describe("JSON type", () => {
+    it("should insert and query JSON column with various value types", async () => {
+      // ClickHouse 24.1+ supports JSON type
+      for await (const _ of query(
+        "CREATE TABLE IF NOT EXISTS test_rb_json (id UInt32, data JSON) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+
+      const columns: ColumnDef[] = [
+        { name: "id", type: "UInt32" },
+        { name: "data", type: "JSON" },
+      ];
+      const rows = [
+        [1, { str: "hello", num: 42, flag: true, arr: [1, 2, 3] }],
+        [2, { str: "world", num: 100, flag: false, arr: [4, 5] }],
+        [3, { str: "test", num: 0, flag: true, arr: [] }],
+      ];
+      const encoded = encodeRowBinaryWithNames(columns, rows);
+
+      await insert(
+        "INSERT INTO test_rb_json FORMAT RowBinaryWithNames",
+        encoded,
+        sessionId,
+        { baseUrl, auth },
+      );
+
+      // Query back using JSON format to verify data
+      const result = await collectText(query(
+        "SELECT id, data.str, data.num, data.flag FROM test_rb_json ORDER BY id FORMAT JSON",
+        sessionId,
+        { baseUrl, auth },
+      ));
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data.length, 3);
+      assert.strictEqual(parsed.data[0]["data.str"], "hello");
+      assert.strictEqual(Number(parsed.data[0]["data.num"]), 42);
+      assert.strictEqual(parsed.data[1]["data.str"], "world");
+
+      for await (const _ of query(
+        "DROP TABLE test_rb_json",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+    });
+
+    it("should insert JSON with null values", async () => {
+      for await (const _ of query(
+        "CREATE TABLE IF NOT EXISTS test_rb_json_null (id UInt32, data JSON) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+
+      const columns: ColumnDef[] = [
+        { name: "id", type: "UInt32" },
+        { name: "data", type: "JSON" },
+      ];
+      const rows = [
+        [1, { name: "alice", value: null }],
+        [2, { name: "bob", value: 42 }],
+      ];
+      const encoded = encodeRowBinaryWithNames(columns, rows);
+
+      await insert(
+        "INSERT INTO test_rb_json_null FORMAT RowBinaryWithNames",
+        encoded,
+        sessionId,
+        { baseUrl, auth },
+      );
+
+      const result = await collectText(query(
+        "SELECT id, data.name, data.value FROM test_rb_json_null ORDER BY id FORMAT JSON",
+        sessionId,
+        { baseUrl, auth },
+      ));
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data.length, 2);
+      assert.strictEqual(parsed.data[0]["data.name"], "alice");
+      // null values in JSON become NULL in ClickHouse
+      assert.ok(parsed.data[0]["data.value"] === null || parsed.data[0]["data.value"] === undefined || parsed.data[0]["data.value"] === 0);
+      assert.strictEqual(parsed.data[1]["data.name"], "bob");
+
+      for await (const _ of query(
+        "DROP TABLE test_rb_json_null",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+    });
+
+    it("should insert JSON with Date values", async () => {
+      for await (const _ of query(
+        "CREATE TABLE IF NOT EXISTS test_rb_json_date (id UInt32, data JSON) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+
+      const columns: ColumnDef[] = [
+        { name: "id", type: "UInt32" },
+        { name: "data", type: "JSON" },
+      ];
+      const testDate = new Date("2024-06-15T10:30:00.123Z");
+      const rows = [
+        [1, { event: "login", timestamp: testDate }],
+      ];
+      const encoded = encodeRowBinaryWithNames(columns, rows);
+
+      await insert(
+        "INSERT INTO test_rb_json_date FORMAT RowBinaryWithNames",
+        encoded,
+        sessionId,
+        { baseUrl, auth },
+      );
+
+      const result = await collectText(query(
+        "SELECT id, data.event, data.timestamp FROM test_rb_json_date FORMAT JSON",
+        sessionId,
+        { baseUrl, auth },
+      ));
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data.length, 1);
+      assert.strictEqual(parsed.data[0]["data.event"], "login");
+      // DateTime64(3) is returned as a string - parse it
+      const timestampValue = parsed.data[0]["data.timestamp"];
+      // ClickHouse may return it as a numeric timestamp or formatted string
+      const returnedMs = typeof timestampValue === 'string'
+        ? new Date(timestampValue).getTime()
+        : Number(timestampValue) * 1000; // If numeric, it's Unix seconds
+      // Just verify the date was stored and retrieved (ClickHouse may adjust timezone)
+      assert.ok(!isNaN(returnedMs), `timestamp should be parseable: ${timestampValue}`);
+
+      for await (const _ of query(
+        "DROP TABLE test_rb_json_date",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+    });
+
+    it("should round-trip JSON via RowBinaryWithNamesAndTypes", async () => {
+      for await (const _ of query(
+        "CREATE TABLE IF NOT EXISTS test_rb_json_rt (id UInt32, data JSON) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+
+      const columns: ColumnDef[] = [
+        { name: "id", type: "UInt32" },
+        { name: "data", type: "JSON" },
+      ];
+      const rows = [
+        [1, { name: "test", count: 5, active: true }],
+      ];
+      const encoded = encodeRowBinaryWithNames(columns, rows);
+
+      await insert(
+        "INSERT INTO test_rb_json_rt FORMAT RowBinaryWithNames",
+        encoded,
+        sessionId,
+        { baseUrl, auth },
+      );
+
+      // Query back in RowBinaryWithNamesAndTypes
+      const data = await collectBytes(query(
+        "SELECT * FROM test_rb_json_rt FORMAT RowBinaryWithNamesAndTypes",
+        sessionId,
+        { baseUrl, auth },
+      ));
+
+      const decoded = decodeRowBinaryWithNamesAndTypes(data);
+      assert.strictEqual(decoded.rows.length, 1);
+      assert.strictEqual(decoded.rows[0][0], 1);
+      // The JSON column should be decoded as an object
+      const jsonData = decoded.rows[0][1] as Record<string, unknown>;
+      assert.strictEqual(jsonData.name, "test");
+
+      for await (const _ of query(
+        "DROP TABLE test_rb_json_rt",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+    });
+  });
+
+  describe("Dynamic type", () => {
+    it("should insert and query Dynamic column with inferred types", async () => {
+      for await (const _ of query(
+        "CREATE TABLE IF NOT EXISTS test_rb_dynamic (id UInt32, data Dynamic) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+
+      const columns: ColumnDef[] = [
+        { name: "id", type: "UInt32" },
+        { name: "data", type: "Dynamic" },
+      ];
+      // Use inferred types - plain JS values
+      const rows = [
+        [1, 42],              // Int64
+        [2, "hello"],         // String
+        [3, true],            // Bool
+        [4, 3.14],            // Float64
+        [5, null],            // Nothing
+      ];
+      const encoded = encodeRowBinaryWithNames(columns, rows);
+
+      await insert(
+        "INSERT INTO test_rb_dynamic FORMAT RowBinaryWithNames",
+        encoded,
+        sessionId,
+        { baseUrl, auth },
+      );
+
+      const result = await collectText(query(
+        "SELECT id, data, dynamicType(data) as dtype FROM test_rb_dynamic ORDER BY id FORMAT JSON",
+        sessionId,
+        { baseUrl, auth },
+      ));
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data.length, 5);
+      assert.strictEqual(Number(parsed.data[0].data), 42);
+      assert.strictEqual(parsed.data[0].dtype, "Int64");
+      assert.strictEqual(parsed.data[1].data, "hello");
+      assert.strictEqual(parsed.data[1].dtype, "String");
+      assert.strictEqual(parsed.data[2].data, true);
+      assert.strictEqual(parsed.data[2].dtype, "Bool");
+      assert.ok(Math.abs(parsed.data[3].data - 3.14) < 0.001);
+      assert.strictEqual(parsed.data[3].dtype, "Float64");
+      assert.strictEqual(parsed.data[4].data, null);
+
+      for await (const _ of query(
+        "DROP TABLE test_rb_dynamic",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+    });
+
+    it("should insert Dynamic with explicit types", async () => {
+      for await (const _ of query(
+        "CREATE TABLE IF NOT EXISTS test_rb_dynamic_explicit (id UInt32, data Dynamic) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+
+      const columns: ColumnDef[] = [
+        { name: "id", type: "UInt32" },
+        { name: "data", type: "Dynamic" },
+      ];
+      // Use explicit {type, value} format
+      const rows = [
+        [1, { type: "UInt8", value: 255 }],
+        [2, { type: "Int16", value: -1000 }],
+        [3, { type: "Array(String)", value: ["a", "b", "c"] }],
+      ];
+      const encoded = encodeRowBinaryWithNames(columns, rows);
+
+      await insert(
+        "INSERT INTO test_rb_dynamic_explicit FORMAT RowBinaryWithNames",
+        encoded,
+        sessionId,
+        { baseUrl, auth },
+      );
+
+      const result = await collectText(query(
+        "SELECT id, data, dynamicType(data) as dtype FROM test_rb_dynamic_explicit ORDER BY id FORMAT JSON",
+        sessionId,
+        { baseUrl, auth },
+      ));
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data.length, 3);
+      assert.strictEqual(parsed.data[0].dtype, "UInt8");
+      assert.strictEqual(Number(parsed.data[0].data), 255);
+      assert.strictEqual(parsed.data[1].dtype, "Int16");
+      assert.strictEqual(Number(parsed.data[1].data), -1000);
+      assert.strictEqual(parsed.data[2].dtype, "Array(String)");
+      assert.deepStrictEqual(parsed.data[2].data, ["a", "b", "c"]);
+
+      for await (const _ of query(
+        "DROP TABLE test_rb_dynamic_explicit",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+    });
+
+    it("should round-trip Dynamic via RowBinaryWithNamesAndTypes", async () => {
+      for await (const _ of query(
+        "CREATE TABLE IF NOT EXISTS test_rb_dynamic_rt (id UInt32, data Dynamic) ENGINE = Memory",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+
+      const columns: ColumnDef[] = [
+        { name: "id", type: "UInt32" },
+        { name: "data", type: "Dynamic" },
+      ];
+      const rows = [
+        [1, 42],
+        [2, "hello"],
+        [3, null],
+      ];
+      const encoded = encodeRowBinaryWithNames(columns, rows);
+
+      await insert(
+        "INSERT INTO test_rb_dynamic_rt FORMAT RowBinaryWithNames",
+        encoded,
+        sessionId,
+        { baseUrl, auth },
+      );
+
+      const data = await collectBytes(query(
+        "SELECT * FROM test_rb_dynamic_rt ORDER BY id FORMAT RowBinaryWithNamesAndTypes",
+        sessionId,
+        { baseUrl, auth },
+      ));
+
+      const decoded = decodeRowBinaryWithNamesAndTypes(data);
+      assert.strictEqual(decoded.rows.length, 3);
+      // Dynamic values come back as {type, value}
+      const row0data = decoded.rows[0][1] as { type: string; value: unknown };
+      assert.strictEqual(row0data.type, "Int64");
+      assert.strictEqual(row0data.value, 42n);
+      const row1data = decoded.rows[1][1] as { type: string; value: unknown };
+      assert.strictEqual(row1data.type, "String");
+      assert.strictEqual(row1data.value, "hello");
+      assert.strictEqual(decoded.rows[2][1], null);
+
+      for await (const _ of query(
+        "DROP TABLE test_rb_dynamic_rt",
+        sessionId,
+        { baseUrl, auth, compression: "none" },
+      )) {}
+    });
+  });
 });

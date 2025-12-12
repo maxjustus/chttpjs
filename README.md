@@ -128,7 +128,7 @@ const data = JSON.parse(json);
 const bytes = await collectBytes(query("SELECT * FROM t FORMAT RowBinaryWithNamesAndTypes", session, config));
 ```
 
-## RowBinary Format
+## RowBinary Format (Experimental)
 
 For high-performance inserts, use the binary `RowBinaryWithNames` format instead of JSON:
 
@@ -164,11 +164,35 @@ Supported types:
 - Date/Time: `Date`, `Date32`, `DateTime`, `DateTime64(precision)`
 - Other: `Bool`, `UUID`, `IPv4`, `IPv6`, `Enum8(...)`, `Enum16(...)`
 - Containers: `Nullable(T)`, `Array(T)`, `Tuple(T1, T2, ...)`, `Map(K, V)`, `Variant(T1, T2, ...)`
-- JSON: `JSON`, `Object('json')` (string mode - requires ClickHouse setting)
+- Self-describing: `Dynamic`, `JSON`, `Object('json')`
 
 Types can be arbitrarily nested: `Tuple(String, Array(Int32), Map(String, Float64))`.
 
 Typed arrays (`Int32Array`, `Float64Array`, etc.) are supported for array columns. Maps accept JS objects or `Map` instances. BigInt values are used for `Int128`/`UInt128`/`Int256`/`UInt256`. Decimal types return strings for precision preservation.
+
+Named tuples (`Tuple(a Int32, b String)`) encode from and decode to JS objects with matching field names.
+
+### Dynamic Type
+
+The `Dynamic` type carries its own type information. You can pass plain JS values (type is inferred) or explicit `{type, value}` objects:
+
+```ts
+// Inferred types
+const rows = [
+  [42],           // -> Int64
+  [3.14],         // -> Float64
+  ["hello"],      // -> String
+  [true],         // -> Bool
+  [new Date()],   // -> DateTime64(3)
+  [[1, 2, 3]],    // -> Array(Int64)
+];
+
+// Explicit types (for anything not auto-inferred)
+const rows = [
+  [{ type: "UInt8", value: 255 }],
+  [{ type: "Decimal64(18, 4)", value: "123.4567" }],
+];
+```
 
 ### Decoding Query Results
 
