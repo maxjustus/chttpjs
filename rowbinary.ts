@@ -53,7 +53,7 @@ const INT128_MIN = -(1n << 127n);
 const TYPED_ARRAYS: Record<
   string,
   {
-    new (
+    new(
       buffer: ArrayBuffer,
       byteOffset: number,
       length: number,
@@ -105,10 +105,12 @@ export class RowBinaryEncoder {
     this.ensure(1);
     this.buffer[this.offset++] = val;
   }
+
+  // JavaScript automatically converts signed integers (val) to their unsigned 8-bit
+  // representation when assigned to this.buffer (a Uint8Array) so we can use the same method.
   i8(val: number) {
-    this.ensure(1);
-    this.buffer[this.offset++] = val;
-  } // cast to u8 implicitly
+    this.u8(val);
+  }
 
   u16(val: number) {
     this.ensure(2);
@@ -137,6 +139,7 @@ export class RowBinaryEncoder {
     this.view.setBigUint64(this.offset, val, true);
     this.offset += 8;
   }
+
   i64(val: bigint) {
     this.ensure(8);
     this.view.setBigInt64(this.offset, val, true);
@@ -148,19 +151,27 @@ export class RowBinaryEncoder {
     this.view.setFloat32(this.offset, val, true);
     this.offset += 4;
   }
+
   f64(val: number) {
     this.ensure(8);
     this.view.setFloat64(this.offset, val, true);
     this.offset += 8;
   }
 
+  // LEB128 for uint32 values (max 5 bytes)
   leb128(value: number) {
+    // fast path for single-byte values
+    if (value < 128) {
+      this.ensure(1);
+      this.buffer[this.offset++] = value;
+      return;
+    }
+
     this.ensure(5);
     do {
-      let byte = value & 0x7f;
+      const more = value > 0x7f ? 0x80 : 0;
+      this.buffer[this.offset++] = (value & 0x7f) | more;
       value >>>= 7;
-      if (value !== 0) byte |= 0x80;
-      this.buffer[this.offset++] = byte;
     } while (value !== 0);
   }
 
@@ -272,7 +283,6 @@ function createCodecImpl(type: string): Codec {
   if (type.startsWith("Enum"))
     return type.startsWith("Enum8") ? SCALAR_CODECS.Int8 : SCALAR_CODECS.Int16;
 
-  // 3. Other Types
   if (type === "Nothing") return new NothingCodec();
   if (type === "Date32") return new Date32Codec();
   if (type.startsWith("JSON") || type === "Object('json')")
@@ -411,7 +421,7 @@ const SCALAR_CODECS: Record<string, Codec> = {
       const parts = (v as string).split(".").map(Number);
       e.u32(
         ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>>
-          0,
+        0,
       );
     },
     decode: (v, _, c) => {
@@ -460,7 +470,7 @@ const SCALAR_CODECS: Record<string, Codec> = {
 // --- Complex Codecs ---
 
 class NothingCodec implements Codec {
-  encode(e: RowBinaryEncoder, v: unknown) {}
+  encode(e: RowBinaryEncoder, v: unknown) { }
   decode(v: DataView, b: Uint8Array, c: Cursor) {
     return null;
   }
