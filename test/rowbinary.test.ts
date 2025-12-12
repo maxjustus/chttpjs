@@ -1055,6 +1055,18 @@ describe("decodeRowBinaryWithNames", () => {
     assert.strictEqual((result.date as Date).getTime(), testDate.getTime());
   });
 
+  it("JSON with type parameters", () => {
+    // ClickHouse JSON types can have schema hints like JSON(a.b Int64, max_dynamic_types=128)
+    const columns: ColumnDef[] = [
+      { name: "j", type: "JSON(a.b Int64, path.to.field Float64, max_dynamic_types=128)" }
+    ];
+    const rows = [[{ foo: "bar", num: 42 }]];
+    const encoded = encodeRowBinaryWithNames(columns, rows);
+    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+
+    assert.deepStrictEqual(decoded.rows[0][0], { foo: "bar", num: 42n });
+  });
+
   it("Decimal(P, S) generic form", () => {
     // Test all precision ranges
     const tests = [

@@ -1015,7 +1015,7 @@ class RowBinaryEncoder {
     }
 
     // JSON / Object('json')
-    if (type === 'JSON' || type === "Object('json')") {
+    if (type.startsWith('JSON') || type === "Object('json')") {
       const obj = value as Record<string, unknown>
       const paths = Object.keys(obj)
       this.writeLEB128(paths.length)
@@ -1358,7 +1358,7 @@ function decodeValue(view: DataView, data: Uint8Array, offset: number, type: str
 
   // JSON / Object('json') - native binary format:
   // <VarUInt num_paths> then for each path: <path_string><dynamic_value>
-  if (type === 'JSON' || type === "Object('json')") {
+  if (type.startsWith('JSON') || type === "Object('json')") {
     const [numPaths, pos] = readLEB128(data, offset)
     offset = pos
     const result: Record<string, unknown> = {}
