@@ -23,7 +23,10 @@ const AbortSignalAny = AbortSignal as typeof AbortSignal & {
   any(signals: AbortSignal[]): AbortSignal;
 };
 
-function createSignal(signal?: AbortSignal, timeout?: number): AbortSignal | undefined {
+function createSignal(
+  signal?: AbortSignal,
+  timeout?: number,
+): AbortSignal | undefined {
   if (!signal && !timeout) return undefined;
   if (signal && !timeout) return signal;
   if (!signal && timeout) return AbortSignal.timeout(timeout);
@@ -32,9 +35,12 @@ function createSignal(signal?: AbortSignal, timeout?: number): AbortSignal | und
 
 function compressionToMethod(compression: Compression): MethodCode {
   switch (compression) {
-    case "lz4": return Method.LZ4;
-    case "zstd": return Method.ZSTD;
-    case "none": return Method.None;
+    case "lz4":
+      return Method.LZ4;
+    case "zstd":
+      return Method.ZSTD;
+    case "none":
+      return Method.None;
   }
 }
 
@@ -42,7 +48,12 @@ function compressionToMethod(compression: Compression): MethodCode {
 const encoder = new TextEncoder();
 
 function readUInt32LE(arr: Uint8Array, offset: number): number {
-  return arr[offset] | (arr[offset + 1] << 8) | (arr[offset + 2] << 16) | (arr[offset + 3] << 24) >>> 0;
+  return (
+    arr[offset] |
+    (arr[offset + 1] << 8) |
+    (arr[offset + 2] << 16) |
+    ((arr[offset + 3] << 24) >>> 0)
+  );
 }
 
 interface AuthConfig {
@@ -55,7 +66,11 @@ interface AuthConfig {
  * @param params - Query params including ClickHouse settings (max_execution_time, etc.)
  *   See: https://clickhouse.com/docs/en/operations/settings/settings
  */
-function buildReqUrl(baseUrl: string, params: Record<string, string>, auth?: AuthConfig): URL {
+function buildReqUrl(
+  baseUrl: string,
+  params: Record<string, string>,
+  auth?: AuthConfig,
+): URL {
   const url = new URL(baseUrl);
   Object.entries(params).forEach(([key, value]) => {
     url.searchParams.append(key, value);
@@ -94,7 +109,11 @@ interface InsertOptions {
   timeout?: number;
 }
 
-type InsertData = Uint8Array | Uint8Array[] | AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
+type InsertData =
+  | Uint8Array
+  | Uint8Array[]
+  | AsyncIterable<Uint8Array>
+  | Iterable<Uint8Array>;
 
 async function insert(
   query: string,
@@ -219,9 +238,15 @@ async function insert(
 
           while (chunkOffset < chunk.length) {
             const spaceAvailable = fillBuffer.length - fillLen;
-            const bytesToCopy = Math.min(spaceAvailable, chunk.length - chunkOffset);
+            const bytesToCopy = Math.min(
+              spaceAvailable,
+              chunk.length - chunkOffset,
+            );
 
-            fillBuffer.set(chunk.subarray(chunkOffset, chunkOffset + bytesToCopy), fillLen);
+            fillBuffer.set(
+              chunk.subarray(chunkOffset, chunkOffset + bytesToCopy),
+              fillLen,
+            );
             fillLen += bytesToCopy;
             chunkOffset += bytesToCopy;
 
@@ -281,18 +306,20 @@ async function insert(
  * Use with insert() for JSON data.
  */
 function streamJsonEachRow(data: Iterable<unknown>): Generator<Uint8Array>;
-function streamJsonEachRow(data: AsyncIterable<unknown>): AsyncGenerator<Uint8Array>;
+function streamJsonEachRow(
+  data: AsyncIterable<unknown>,
+): AsyncGenerator<Uint8Array>;
 function streamJsonEachRow(
   data: Iterable<unknown> | AsyncIterable<unknown>,
 ): Generator<Uint8Array> | AsyncGenerator<Uint8Array> {
   if (Symbol.asyncIterator in data) {
-    return (async function*() {
+    return (async function* () {
       for await (const row of data) {
         yield encoder.encode(JSON.stringify(row) + "\n");
       }
     })();
   }
-  return (function*() {
+  return (function* () {
     for (const row of data as Iterable<unknown>) {
       yield encoder.encode(JSON.stringify(row) + "\n");
     }
@@ -316,18 +343,20 @@ function streamJsonEachRow(
  */
 function streamJsonCompactEachRowWithNames(
   data: Iterable<Record<string, unknown>>,
-  columns?: string[]
+  columns?: string[],
 ): Generator<Uint8Array>;
 function streamJsonCompactEachRowWithNames(
   data: AsyncIterable<Record<string, unknown>>,
-  columns?: string[]
+  columns?: string[],
 ): AsyncGenerator<Uint8Array>;
 function streamJsonCompactEachRowWithNames(
-  data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>,
+  data:
+    | Iterable<Record<string, unknown>>
+    | AsyncIterable<Record<string, unknown>>,
   columns?: string[],
 ): Generator<Uint8Array> | AsyncGenerator<Uint8Array> {
   if (Symbol.asyncIterator in data) {
-    return (async function*() {
+    return (async function* () {
       let cols = columns;
       for await (const row of data) {
         if (!cols) {
@@ -336,11 +365,11 @@ function streamJsonCompactEachRowWithNames(
         } else if (cols === columns) {
           yield encoder.encode(JSON.stringify(cols) + "\n");
         }
-        yield encoder.encode(JSON.stringify(cols.map(k => row[k])) + "\n");
+        yield encoder.encode(JSON.stringify(cols.map((k) => row[k])) + "\n");
       }
     })();
   }
-  return (function*() {
+  return (function* () {
     let cols = columns;
     for (const row of data as Iterable<Record<string, unknown>>) {
       if (!cols) {
@@ -349,7 +378,7 @@ function streamJsonCompactEachRowWithNames(
       } else if (cols === columns) {
         yield encoder.encode(JSON.stringify(cols) + "\n");
       }
-      yield encoder.encode(JSON.stringify(cols.map(k => row[k])) + "\n");
+      yield encoder.encode(JSON.stringify(cols.map((k) => row[k])) + "\n");
     }
   })();
 }
@@ -364,7 +393,7 @@ function streamJsonCompactEachRowWithNames(
  * }
  */
 async function* parseJsonCompactEachRowWithNames<T = Record<string, unknown>>(
-  chunks: AsyncIterable<Uint8Array>
+  chunks: AsyncIterable<Uint8Array>,
 ): AsyncGenerator<T> {
   let columns: string[] | null = null;
   for await (const line of streamLines(chunks)) {
@@ -498,7 +527,7 @@ async function* query(
  */
 async function* streamLines(
   chunks: AsyncIterable<Uint8Array>,
-  delimiter: string = "\n"
+  delimiter: string = "\n",
 ): AsyncGenerator<string> {
   let buffer = "";
   for await (const text of streamText(chunks)) {
@@ -522,7 +551,7 @@ async function* streamLines(
  * }
  */
 async function* streamJsonLines<T = unknown>(
-  chunks: AsyncIterable<Uint8Array>
+  chunks: AsyncIterable<Uint8Array>,
 ): AsyncGenerator<T> {
   for await (const line of streamLines(chunks)) {
     yield JSON.parse(line) as T;
@@ -538,7 +567,7 @@ async function* streamJsonLines<T = unknown>(
  * }
  */
 async function* streamText(
-  chunks: AsyncIterable<Uint8Array>
+  chunks: AsyncIterable<Uint8Array>,
 ): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   for await (const chunk of chunks) {
@@ -556,7 +585,9 @@ async function* streamText(
  * const data = await collectBytes(query("SELECT * FROM t FORMAT RowBinaryWithNamesAndTypes", session, config));
  * const result = decodeRowBinaryWithNamesAndTypes(data);
  */
-async function collectBytes(chunks: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
+async function collectBytes(
+  chunks: AsyncIterable<Uint8Array>,
+): Promise<Uint8Array> {
   const parts: Uint8Array[] = [];
   let totalLen = 0;
   for await (const chunk of chunks) {
@@ -587,4 +618,17 @@ async function collectText(chunks: AsyncIterable<Uint8Array>): Promise<string> {
   return result;
 }
 
-export { init, insert, query, buildReqUrl, streamJsonEachRow, streamJsonCompactEachRowWithNames, parseJsonCompactEachRowWithNames, streamText, streamLines, streamJsonLines, collectBytes, collectText };
+export {
+  init,
+  insert,
+  query,
+  buildReqUrl,
+  streamJsonEachRow,
+  streamJsonCompactEachRowWithNames,
+  parseJsonCompactEachRowWithNames,
+  streamText,
+  streamLines,
+  streamJsonLines,
+  collectBytes,
+  collectText,
+};

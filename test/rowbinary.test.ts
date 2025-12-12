@@ -7,8 +7,15 @@ import {
 } from "../rowbinary.ts";
 
 // Helper to compare arrays (works with TypedArrays too)
-function assertArrayEqual(actual: ArrayLike<unknown>, expected: unknown[]): void {
-  assert.strictEqual(actual.length, expected.length, `length mismatch: ${actual.length} vs ${expected.length}`);
+function assertArrayEqual(
+  actual: ArrayLike<unknown>,
+  expected: unknown[],
+): void {
+  assert.strictEqual(
+    actual.length,
+    expected.length,
+    `length mismatch: ${actual.length} vs ${expected.length}`,
+  );
   for (let i = 0; i < expected.length; i++) {
     assert.strictEqual(actual[i], expected[i], `mismatch at index ${i}`);
   }
@@ -68,7 +75,11 @@ describe("encodeRowBinaryWithNames", () => {
       [-128, -32768, -2147483648, -9223372036854775808n],
     ]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -82,7 +93,10 @@ describe("encodeRowBinaryWithNames", () => {
     assert.strictEqual(view.getInt8(offset), -128);
     assert.strictEqual(view.getInt16(offset + 1, true), -32768);
     assert.strictEqual(view.getInt32(offset + 3, true), -2147483648);
-    assert.strictEqual(view.getBigInt64(offset + 7, true), -9223372036854775808n);
+    assert.strictEqual(
+      view.getBigInt64(offset + 7, true),
+      -9223372036854775808n,
+    );
   });
 
   it("encodes UInt8/UInt16/UInt32/UInt64", () => {
@@ -96,7 +110,11 @@ describe("encodeRowBinaryWithNames", () => {
       [255, 65535, 4294967295, 18446744073709551615n],
     ]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -110,7 +128,10 @@ describe("encodeRowBinaryWithNames", () => {
     assert.strictEqual(view.getUint8(offset), 255);
     assert.strictEqual(view.getUint16(offset + 1, true), 65535);
     assert.strictEqual(view.getUint32(offset + 3, true), 4294967295);
-    assert.strictEqual(view.getBigUint64(offset + 7, true), 18446744073709551615n);
+    assert.strictEqual(
+      view.getBigUint64(offset + 7, true),
+      18446744073709551615n,
+    );
   });
 
   it("encodes Float32/Float64", () => {
@@ -120,7 +141,11 @@ describe("encodeRowBinaryWithNames", () => {
     ];
     const result = encodeRowBinaryWithNames(columns, [[3.14, 2.718281828]]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -132,7 +157,9 @@ describe("encodeRowBinaryWithNames", () => {
     }
 
     assert.ok(Math.abs(view.getFloat32(offset, true) - 3.14) < 0.00001);
-    assert.ok(Math.abs(view.getFloat64(offset + 4, true) - 2.718281828) < 0.000000001);
+    assert.ok(
+      Math.abs(view.getFloat64(offset + 4, true) - 2.718281828) < 0.000000001,
+    );
   });
 
   it("encodes String", () => {
@@ -176,7 +203,11 @@ describe("encodeRowBinaryWithNames", () => {
     const date = new Date("2024-01-15");
     const result = encodeRowBinaryWithNames(columns, [[date]]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -197,7 +228,11 @@ describe("encodeRowBinaryWithNames", () => {
     const date = new Date("2024-01-15T12:30:45Z");
     const result = encodeRowBinaryWithNames(columns, [[date]]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -234,7 +269,11 @@ describe("encodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "n", type: "Nullable(Int32)" }];
     const result = encodeRowBinaryWithNames(columns, [[42]]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -254,7 +293,11 @@ describe("encodeRowBinaryWithNames", () => {
     const arr = new Int32Array([1, 2, 3, 4, 5]);
     const result = encodeRowBinaryWithNames(columns, [[arr]]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -278,7 +321,11 @@ describe("encodeRowBinaryWithNames", () => {
     const arr = [1.1, 2.2, 3.3];
     const result = encodeRowBinaryWithNames(columns, [[arr]]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -332,7 +379,11 @@ describe("encodeRowBinaryWithNames", () => {
     ];
     const result = encodeRowBinaryWithNames(columns, rows);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -390,7 +441,11 @@ describe("encodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "t", type: "Tuple(Int32, String)" }];
     const result = encodeRowBinaryWithNames(columns, [[[42, "hello"]]]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -409,10 +464,16 @@ describe("encodeRowBinaryWithNames", () => {
   });
 
   it("encodes nested Tuple", () => {
-    const columns: ColumnDef[] = [{ name: "t", type: "Tuple(Int32, Tuple(String, Float64))" }];
+    const columns: ColumnDef[] = [
+      { name: "t", type: "Tuple(Int32, Tuple(String, Float64))" },
+    ];
     const result = encodeRowBinaryWithNames(columns, [[[42, ["hello", 3.14]]]]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -434,10 +495,16 @@ describe("encodeRowBinaryWithNames", () => {
   });
 
   it("encodes Tuple with Array element", () => {
-    const columns: ColumnDef[] = [{ name: "t", type: "Tuple(String, Array(Int32))" }];
+    const columns: ColumnDef[] = [
+      { name: "t", type: "Tuple(String, Array(Int32))" },
+    ];
     const result = encodeRowBinaryWithNames(columns, [[["test", [1, 2, 3]]]]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -465,7 +532,11 @@ describe("encodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "m", type: "Map(String, Int32)" }];
     const result = encodeRowBinaryWithNames(columns, [[{ foo: 1, bar: 2 }]]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -497,10 +568,17 @@ describe("encodeRowBinaryWithNames", () => {
 
   it("encodes Map from JS Map", () => {
     const columns: ColumnDef[] = [{ name: "m", type: "Map(String, Int32)" }];
-    const map = new Map([["foo", 1], ["bar", 2]]);
+    const map = new Map([
+      ["foo", 1],
+      ["bar", 2],
+    ]);
     const result = encodeRowBinaryWithNames(columns, [[map]]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -531,10 +609,18 @@ describe("encodeRowBinaryWithNames", () => {
   });
 
   it("encodes Map with Array values", () => {
-    const columns: ColumnDef[] = [{ name: "m", type: "Map(String, Array(Int32))" }];
-    const result = encodeRowBinaryWithNames(columns, [[{ a: [1, 2], b: [3, 4, 5] }]]);
+    const columns: ColumnDef[] = [
+      { name: "m", type: "Map(String, Array(Int32))" },
+    ];
+    const result = encodeRowBinaryWithNames(columns, [
+      [{ a: [1, 2], b: [3, 4, 5] }],
+    ]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -572,10 +658,23 @@ describe("encodeRowBinaryWithNames", () => {
   });
 
   it("encodes Array of Tuples", () => {
-    const columns: ColumnDef[] = [{ name: "arr", type: "Array(Tuple(String, Int32))" }];
-    const result = encodeRowBinaryWithNames(columns, [[[["a", 1], ["b", 2]]]]);
+    const columns: ColumnDef[] = [
+      { name: "arr", type: "Array(Tuple(String, Int32))" },
+    ];
+    const result = encodeRowBinaryWithNames(columns, [
+      [
+        [
+          ["a", 1],
+          ["b", 2],
+        ],
+      ],
+    ]);
 
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const view = new DataView(
+      result.buffer,
+      result.byteOffset,
+      result.byteLength,
+    );
 
     // Skip header
     let offset = 0;
@@ -618,7 +717,10 @@ describe("decodeRowBinaryWithNames", () => {
       [-100, "world", 2.71],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.columns.length, 3);
     assert.strictEqual(decoded.columns[0].name, "a");
@@ -640,7 +742,10 @@ describe("decodeRowBinaryWithNames", () => {
     ];
     const rows = [[-9223372036854775808n, 18446744073709551615n]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], -9223372036854775808n);
     assert.strictEqual(decoded.rows[0][1], 18446744073709551615n);
@@ -650,7 +755,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "b", type: "Bool" }];
     const rows = [[true], [false]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], true);
     assert.strictEqual(decoded.rows[1][0], false);
@@ -665,20 +773,23 @@ describe("decodeRowBinaryWithNames", () => {
     const datetime = new Date("2024-01-15T12:30:45Z");
     const rows = [[date, datetime]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     // Date precision is days
     const decodedDate = decoded.rows[0][0] as Date;
     assert.strictEqual(
       Math.floor(decodedDate.getTime() / 86400000),
-      Math.floor(date.getTime() / 86400000)
+      Math.floor(date.getTime() / 86400000),
     );
 
     // DateTime precision is seconds
     const decodedDateTime = decoded.rows[0][1] as Date;
     assert.strictEqual(
       Math.floor(decodedDateTime.getTime() / 1000),
-      Math.floor(datetime.getTime() / 1000)
+      Math.floor(datetime.getTime() / 1000),
     );
   });
 
@@ -686,7 +797,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "n", type: "Nullable(Int32)" }];
     const rows = [[42], [null], [100]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], 42);
     assert.strictEqual(decoded.rows[1][0], null);
@@ -697,7 +811,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "arr", type: "Array(Int32)" }];
     const rows = [[[1, 2, 3]], [[]], [[100]]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     // Note: numeric arrays may return TypedArrays for performance
     assertArrayEqual(decoded.rows[0][0] as ArrayLike<number>, [1, 2, 3]);
@@ -706,10 +823,15 @@ describe("decodeRowBinaryWithNames", () => {
   });
 
   it("decodes Tuple", () => {
-    const columns: ColumnDef[] = [{ name: "t", type: "Tuple(Int32, String, Float64)" }];
+    const columns: ColumnDef[] = [
+      { name: "t", type: "Tuple(Int32, String, Float64)" },
+    ];
     const rows = [[[42, "hello", 3.14]], [[100, "world", 2.71]]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     const tuple0 = decoded.rows[0][0] as unknown[];
     assert.strictEqual(tuple0[0], 42);
@@ -725,7 +847,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "m", type: "Map(String, Int32)" }];
     const rows = [[{ foo: 1, bar: 2 }], [{}]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], { foo: 1, bar: 2 });
     assert.deepStrictEqual(decoded.rows[1][0], {});
@@ -733,11 +858,17 @@ describe("decodeRowBinaryWithNames", () => {
 
   it("decodes nested types", () => {
     const columns: ColumnDef[] = [
-      { name: "data", type: "Tuple(String, Array(Int32), Map(String, Float64))" },
+      {
+        name: "data",
+        type: "Tuple(String, Array(Int32), Map(String, Float64))",
+      },
     ];
     const rows = [[["outer", [1, 2, 3], { a: 1.5, b: 2.5 }]]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     const tuple = decoded.rows[0][0] as unknown[];
     assert.strictEqual(tuple[0], "outer");
@@ -746,10 +877,22 @@ describe("decodeRowBinaryWithNames", () => {
   });
 
   it("decodes Array of Tuples", () => {
-    const columns: ColumnDef[] = [{ name: "arr", type: "Array(Tuple(String, Int32))" }];
-    const rows = [[[["a", 1], ["b", 2]]]];
+    const columns: ColumnDef[] = [
+      { name: "arr", type: "Array(Tuple(String, Int32))" },
+    ];
+    const rows = [
+      [
+        [
+          ["a", 1],
+          ["b", 2],
+        ],
+      ],
+    ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     const arr = decoded.rows[0][0] as unknown[][];
     assert.deepStrictEqual(arr[0], ["a", 1]);
@@ -765,29 +908,29 @@ describe("decodeRowBinaryWithNames", () => {
 
     assert.throws(
       () => decodeRowBinaryWithNames(encoded, ["Int32"]),
-      /Column count mismatch/
+      /Column count mismatch/,
     );
   });
 
   it("Date32", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Date32" }];
     // Date32 supports negative (pre-1970) dates
-    const rows = [
-      [new Date("2024-01-15")],
-      [new Date("1950-06-20")],
-    ];
+    const rows = [[new Date("2024-01-15")], [new Date("1950-06-20")]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     const d1 = decoded.rows[0][0] as Date;
     const d2 = decoded.rows[1][0] as Date;
     assert.strictEqual(
       Math.floor(d1.getTime() / 86400000),
-      Math.floor(rows[0][0].getTime() / 86400000)
+      Math.floor(rows[0][0].getTime() / 86400000),
     );
     assert.strictEqual(
       Math.floor(d2.getTime() / 86400000),
-      Math.floor(rows[1][0].getTime() / 86400000)
+      Math.floor(rows[1][0].getTime() / 86400000),
     );
   });
 
@@ -795,7 +938,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "s", type: "FixedString(10)" }];
     const rows = [["hello"], ["world12345"], ["x"]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], "hello");
     assert.strictEqual(decoded.rows[1][0], "world12345");
@@ -803,10 +949,15 @@ describe("decodeRowBinaryWithNames", () => {
   });
 
   it("Enum8", () => {
-    const columns: ColumnDef[] = [{ name: "e", type: "Enum8('a' = 1, 'b' = 2)" }];
+    const columns: ColumnDef[] = [
+      { name: "e", type: "Enum8('a' = 1, 'b' = 2)" },
+    ];
     const rows = [[1], [2], [1]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], 1);
     assert.strictEqual(decoded.rows[1][0], 2);
@@ -817,7 +968,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "e", type: "Enum16('big' = 1000)" }];
     const rows = [[1000]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], 1000);
   });
@@ -827,7 +981,10 @@ describe("decodeRowBinaryWithNames", () => {
     const uuid = "550e8400-e29b-41d4-a716-446655440000";
     const rows = [[uuid]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], uuid);
   });
@@ -836,7 +993,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "ip", type: "IPv4" }];
     const rows = [["192.168.1.1"], ["10.0.0.1"], ["255.255.255.255"]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], "192.168.1.1");
     assert.strictEqual(decoded.rows[1][0], "10.0.0.1");
@@ -847,7 +1007,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "ip", type: "IPv6" }];
     const rows = [["2001:db8:85a3:0:0:8a2e:370:7334"]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     // IPv6 normalizes to lowercase without leading zeros in groups
     assert.strictEqual(decoded.rows[0][0], "2001:db8:85a3:0:0:8a2e:370:7334");
@@ -857,7 +1020,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "ip", type: "IPv6" }];
     const rows = [["::1"], ["fe80::1"]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     // Decoded form is expanded
     assert.strictEqual(decoded.rows[0][0], "0:0:0:0:0:0:0:1");
@@ -869,7 +1035,10 @@ describe("decodeRowBinaryWithNames", () => {
     const date = new Date("2024-01-15T12:30:45.123Z");
     const rows = [[date]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     const d = decoded.rows[0][0] as Date;
     assert.strictEqual(d.getTime(), date.getTime());
@@ -880,7 +1049,10 @@ describe("decodeRowBinaryWithNames", () => {
     const date = new Date("2024-01-15T12:30:45.123Z");
     const rows = [[date]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     const d = decoded.rows[0][0] as Date;
     // Precision is microseconds, but JS Date is ms, so should match
@@ -892,10 +1064,16 @@ describe("decodeRowBinaryWithNames", () => {
     const date = new Date("2024-01-15T12:30:45.000Z");
     const rows = [[date]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     const d = decoded.rows[0][0] as Date;
-    assert.strictEqual(Math.floor(d.getTime() / 1000), Math.floor(date.getTime() / 1000));
+    assert.strictEqual(
+      Math.floor(d.getTime() / 1000),
+      Math.floor(date.getTime() / 1000),
+    );
   });
 
   it("Int128", () => {
@@ -904,7 +1082,10 @@ describe("decodeRowBinaryWithNames", () => {
     const neg = -170141183460469231731687303715884105728n; // min Int128
     const rows = [[big], [neg], [0n]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], big);
     assert.strictEqual(decoded.rows[1][0], neg);
@@ -916,7 +1097,10 @@ describe("decodeRowBinaryWithNames", () => {
     const big = 340282366920938463463374607431768211455n; // max UInt128
     const rows = [[big], [0n], [12345678901234567890n]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], big);
     assert.strictEqual(decoded.rows[1][0], 0n);
@@ -929,7 +1113,10 @@ describe("decodeRowBinaryWithNames", () => {
     const neg = -val;
     const rows = [[val], [neg], [0n]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], val);
     assert.strictEqual(decoded.rows[1][0], neg);
@@ -941,7 +1128,10 @@ describe("decodeRowBinaryWithNames", () => {
     const val = 12345678901234567890123456789012345678901234567890n;
     const rows = [[val], [0n]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], val);
     assert.strictEqual(decoded.rows[1][0], 0n);
@@ -951,7 +1141,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Decimal32(9, 2)" }];
     const rows = [[123.45], [-99.99], [0]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], "123.45");
     assert.strictEqual(decoded.rows[1][0], "-99.99");
@@ -962,7 +1155,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Decimal64(18, 4)" }];
     const rows = [[12345.6789], [-0.0001]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], "12345.6789");
     assert.strictEqual(decoded.rows[1][0], "-0.0001");
@@ -973,7 +1169,10 @@ describe("decodeRowBinaryWithNames", () => {
     // Use string for precision
     const rows = [["12345678901234567890.1234567890"]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], "12345678901234567890.1234567890");
   });
@@ -982,20 +1181,31 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Decimal256(76, 20)" }];
     const rows = [["123456789012345678901234567890.12345678901234567890"]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
-    assert.strictEqual(decoded.rows[0][0], "123456789012345678901234567890.12345678901234567890");
+    assert.strictEqual(
+      decoded.rows[0][0],
+      "123456789012345678901234567890.12345678901234567890",
+    );
   });
 
   it("Variant(String, Int32)", () => {
-    const columns: ColumnDef[] = [{ name: "v", type: "Variant(String, Int32)" }];
+    const columns: ColumnDef[] = [
+      { name: "v", type: "Variant(String, Int32)" },
+    ];
     const rows = [
       [{ type: 0, value: "hello" }],
       [{ type: 1, value: 42 }],
       [null],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], { type: 0, value: "hello" });
     assert.deepStrictEqual(decoded.rows[1][0], { type: 1, value: 42 });
@@ -1003,13 +1213,18 @@ describe("decodeRowBinaryWithNames", () => {
   });
 
   it("Variant with nested types", () => {
-    const columns: ColumnDef[] = [{ name: "v", type: "Variant(Array(Int32), String)" }];
+    const columns: ColumnDef[] = [
+      { name: "v", type: "Variant(Array(Int32), String)" },
+    ];
     const rows = [
       [{ type: 0, value: [1, 2, 3] }],
       [{ type: 1, value: "text" }],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], { type: 0, value: [1, 2, 3] });
     assert.deepStrictEqual(decoded.rows[1][0], { type: 1, value: "text" });
@@ -1022,10 +1237,17 @@ describe("decodeRowBinaryWithNames", () => {
       [{ flag: true, nothing: null }],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     // Values are decoded with native types (num becomes BigInt via Int64)
-    assert.deepStrictEqual(decoded.rows[0][0], { foo: "bar", num: 42n, arr: [1n, 2n, 3n] });
+    assert.deepStrictEqual(decoded.rows[0][0], {
+      foo: "bar",
+      num: 42n,
+      arr: [1n, 2n, 3n],
+    });
     assert.deepStrictEqual(decoded.rows[1][0], { flag: true, nothing: null });
   });
 
@@ -1033,7 +1255,10 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "j", type: "Object('json')" }];
     const rows = [[{ key: "value" }]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], { key: "value" });
   });
@@ -1045,7 +1270,10 @@ describe("decodeRowBinaryWithNames", () => {
       [{ str: "hello", int: 100, float: 3.14, bool: false, date: testDate }],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     const result = decoded.rows[0][0] as Record<string, unknown>;
     assert.strictEqual(result.str, "hello");
@@ -1058,11 +1286,17 @@ describe("decodeRowBinaryWithNames", () => {
   it("JSON with type parameters", () => {
     // ClickHouse JSON types can have schema hints like JSON(a.b Int64, max_dynamic_types=128)
     const columns: ColumnDef[] = [
-      { name: "j", type: "JSON(a.b Int64, path.to.field Float64, max_dynamic_types=128)" }
+      {
+        name: "j",
+        type: "JSON(a.b Int64, path.to.field Float64, max_dynamic_types=128)",
+      },
     ];
     const rows = [[{ foo: "bar", num: 42 }]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], { foo: "bar", num: 42n });
   });
@@ -1071,63 +1305,98 @@ describe("decodeRowBinaryWithNames", () => {
     // Test all precision ranges
     const tests = [
       { type: "Decimal(9, 2)", value: "1234567.89", expected: "1234567.89" },
-      { type: "Decimal(18, 4)", value: "12345678901234.5678", expected: "12345678901234.5678" },
-      { type: "Decimal(38, 10)", value: "1234567890123456789.0123456789", expected: "1234567890123456789.0123456789" },
-      { type: "Decimal(76, 20)", value: "12345678901234567890.12345678901234567890", expected: "12345678901234567890.12345678901234567890" },
+      {
+        type: "Decimal(18, 4)",
+        value: "12345678901234.5678",
+        expected: "12345678901234.5678",
+      },
+      {
+        type: "Decimal(38, 10)",
+        value: "1234567890123456789.0123456789",
+        expected: "1234567890123456789.0123456789",
+      },
+      {
+        type: "Decimal(76, 20)",
+        value: "12345678901234567890.12345678901234567890",
+        expected: "12345678901234567890.12345678901234567890",
+      },
     ];
 
     for (const { type, value, expected } of tests) {
       const columns: ColumnDef[] = [{ name: "d", type }];
       const rows = [[value]];
       const encoded = encodeRowBinaryWithNames(columns, rows);
-      const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+      const decoded = decodeRowBinaryWithNames(
+        encoded,
+        columns.map((c) => c.type),
+      );
 
       assert.strictEqual(decoded.rows[0][0], expected, `Failed for ${type}`);
     }
   });
 
   it("Named tuple basic", () => {
-    const columns: ColumnDef[] = [{ name: "t", type: "Tuple(id Int32, name String)" }];
-    const rows = [
-      [{ id: 1, name: "alice" }],
-      [{ id: 2, name: "bob" }],
+    const columns: ColumnDef[] = [
+      { name: "t", type: "Tuple(id Int32, name String)" },
     ];
+    const rows = [[{ id: 1, name: "alice" }], [{ id: 2, name: "bob" }]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], { id: 1, name: "alice" });
     assert.deepStrictEqual(decoded.rows[1][0], { id: 2, name: "bob" });
   });
 
   it("Named tuple with nested array", () => {
-    const columns: ColumnDef[] = [{ name: "t", type: "Tuple(tags Array(String), count Int32)" }];
+    const columns: ColumnDef[] = [
+      { name: "t", type: "Tuple(tags Array(String), count Int32)" },
+    ];
     const rows = [
       [{ tags: ["a", "b", "c"], count: 3 }],
       [{ tags: [], count: 0 }],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
-    assert.deepStrictEqual(decoded.rows[0][0], { tags: ["a", "b", "c"], count: 3 });
+    assert.deepStrictEqual(decoded.rows[0][0], {
+      tags: ["a", "b", "c"],
+      count: 3,
+    });
     assert.deepStrictEqual(decoded.rows[1][0], { tags: [], count: 0 });
   });
 
   it("Deep nesting: Array(Tuple(a Array(String), v Variant(String, Int64)))", () => {
-    const columns: ColumnDef[] = [{
-      name: "data",
-      type: "Array(Tuple(a Array(String), v Variant(String, Int64)))"
-    }];
+    const columns: ColumnDef[] = [
+      {
+        name: "data",
+        type: "Array(Tuple(a Array(String), v Variant(String, Int64)))",
+      },
+    ];
     const rows = [
-      [[
-        { a: ["hello", "world"], v: { type: 0, value: "string_value" } },
-        { a: ["foo"], v: { type: 1, value: 42n } },
-        { a: [], v: null },
-      ]],
+      [
+        [
+          { a: ["hello", "world"], v: { type: 0, value: "string_value" } },
+          { a: ["foo"], v: { type: 1, value: 42n } },
+          { a: [], v: null },
+        ],
+      ],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
-    const result = decoded.rows[0][0] as Array<{ a: string[]; v: { type: number; value: unknown } | null }>;
+    const result = decoded.rows[0][0] as Array<{
+      a: string[];
+      v: { type: number; value: unknown } | null;
+    }>;
     assert.strictEqual(result.length, 3);
     assert.deepStrictEqual(result[0].a, ["hello", "world"]);
     assert.deepStrictEqual(result[0].v, { type: 0, value: "string_value" });
@@ -1138,48 +1407,59 @@ describe("decodeRowBinaryWithNames", () => {
   });
 
   it("Unnamed tuples still work as arrays", () => {
-    const columns: ColumnDef[] = [{ name: "t", type: "Tuple(Int32, String, Float64)" }];
+    const columns: ColumnDef[] = [
+      { name: "t", type: "Tuple(Int32, String, Float64)" },
+    ];
     const rows = [[[100, "test", 3.14]]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     const tuple = decoded.rows[0][0] as unknown[];
     assert.strictEqual(tuple[0], 100);
     assert.strictEqual(tuple[1], "test");
-    assert.ok(Math.abs(tuple[2] as number - 3.14) < 0.0001);
+    assert.ok(Math.abs((tuple[2] as number) - 3.14) < 0.0001);
   });
 
   it("Named tuple with Map field", () => {
-    const columns: ColumnDef[] = [{
-      name: "t",
-      type: "Tuple(id UInt32, meta Map(String, String))"
-    }];
-    const rows = [
-      [{ id: 1, meta: { key1: "value1", key2: "value2" } }],
+    const columns: ColumnDef[] = [
+      {
+        name: "t",
+        type: "Tuple(id UInt32, meta Map(String, String))",
+      },
     ];
+    const rows = [[{ id: 1, meta: { key1: "value1", key2: "value2" } }]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], {
       id: 1,
-      meta: { key1: "value1", key2: "value2" }
+      meta: { key1: "value1", key2: "value2" },
     });
   });
 
   it("Nested named tuples", () => {
-    const columns: ColumnDef[] = [{
-      name: "t",
-      type: "Tuple(outer_id Int32, inner Tuple(x Float64, y Float64))"
-    }];
-    const rows = [
-      [{ outer_id: 1, inner: { x: 1.5, y: 2.5 } }],
+    const columns: ColumnDef[] = [
+      {
+        name: "t",
+        type: "Tuple(outer_id Int32, inner Tuple(x Float64, y Float64))",
+      },
     ];
+    const rows = [[{ outer_id: 1, inner: { x: 1.5, y: 2.5 } }]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], {
       outer_id: 1,
-      inner: { x: 1.5, y: 2.5 }
+      inner: { x: 1.5, y: 2.5 },
     });
   });
 
@@ -1192,10 +1472,16 @@ describe("decodeRowBinaryWithNames", () => {
       [{ type: "Float64", value: 3.14 }],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], { type: "Int32", value: 42 });
-    assert.deepStrictEqual(decoded.rows[1][0], { type: "String", value: "hello" });
+    assert.deepStrictEqual(decoded.rows[1][0], {
+      type: "String",
+      value: "hello",
+    });
     assert.deepStrictEqual(decoded.rows[2][0], { type: "Bool", value: true });
     const row3 = decoded.rows[3][0] as { type: string; value: number };
     assert.strictEqual(row3.type, "Float64");
@@ -1204,13 +1490,12 @@ describe("decodeRowBinaryWithNames", () => {
 
   it("Dynamic with NULL (Nothing)", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
-    const rows = [
-      [null],
-      [{ type: "Int32", value: 100 }],
-      [null],
-    ];
+    const rows = [[null], [{ type: "Int32", value: 100 }], [null]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.strictEqual(decoded.rows[0][0], null);
     assert.deepStrictEqual(decoded.rows[1][0], { type: "Int32", value: 100 });
@@ -1225,27 +1510,47 @@ describe("decodeRowBinaryWithNames", () => {
       [{ type: "Map(String, Int32)", value: { a: 1, b: 2 } }],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
-    assert.deepStrictEqual(decoded.rows[0][0], { type: "Array(Int32)", value: [1, 2, 3] });
-    assert.deepStrictEqual(decoded.rows[1][0], { type: "Tuple(String, Int32)", value: ["hello", 42] });
-    assert.deepStrictEqual(decoded.rows[2][0], { type: "Map(String, Int32)", value: { a: 1, b: 2 } });
+    assert.deepStrictEqual(decoded.rows[0][0], {
+      type: "Array(Int32)",
+      value: [1, 2, 3],
+    });
+    assert.deepStrictEqual(decoded.rows[1][0], {
+      type: "Tuple(String, Int32)",
+      value: ["hello", 42],
+    });
+    assert.deepStrictEqual(decoded.rows[2][0], {
+      type: "Map(String, Int32)",
+      value: { a: 1, b: 2 },
+    });
   });
 
   it("Array of Dynamic values", () => {
     const columns: ColumnDef[] = [{ name: "arr", type: "Array(Dynamic)" }];
     const rows = [
-      [[
-        { type: "Int32", value: 1 },
-        { type: "String", value: "two" },
-        null,
-        { type: "Bool", value: false },
-      ]],
+      [
+        [
+          { type: "Int32", value: 1 },
+          { type: "String", value: "two" },
+          null,
+          { type: "Bool", value: false },
+        ],
+      ],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
-    const arr = decoded.rows[0][0] as Array<{ type: string; value: unknown } | null>;
+    const arr = decoded.rows[0][0] as Array<{
+      type: string;
+      value: unknown;
+    } | null>;
     assert.strictEqual(arr.length, 4);
     assert.deepStrictEqual(arr[0], { type: "Int32", value: 1 });
     assert.deepStrictEqual(arr[1], { type: "String", value: "two" });
@@ -1256,14 +1561,22 @@ describe("decodeRowBinaryWithNames", () => {
   it("Dynamic with named tuple", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
     const rows = [
-      [{ type: "Tuple(id Int32, name String)", value: { id: 1, name: "alice" } }],
+      [
+        {
+          type: "Tuple(id Int32, name String)",
+          value: { id: 1, name: "alice" },
+        },
+      ],
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], {
       type: "Tuple(id Int32, name String)",
-      value: { id: 1, name: "alice" }
+      value: { id: 1, name: "alice" },
     });
   });
 
@@ -1271,18 +1584,27 @@ describe("decodeRowBinaryWithNames", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
     // Pass plain JS values instead of {type, value}
     const rows = [
-      [42],           // integer -> Int64
-      [3.14],         // float -> Float64
-      ["hello"],      // string -> String
-      [true],         // boolean -> Bool
-      [null],         // null -> Nothing
+      [42], // integer -> Int64
+      [3.14], // float -> Float64
+      ["hello"], // string -> String
+      [true], // boolean -> Bool
+      [null], // null -> Nothing
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], { type: "Int64", value: 42n });
-    assert.deepStrictEqual(decoded.rows[1][0], { type: "Float64", value: 3.14 });
-    assert.deepStrictEqual(decoded.rows[2][0], { type: "String", value: "hello" });
+    assert.deepStrictEqual(decoded.rows[1][0], {
+      type: "Float64",
+      value: 3.14,
+    });
+    assert.deepStrictEqual(decoded.rows[2][0], {
+      type: "String",
+      value: "hello",
+    });
     assert.deepStrictEqual(decoded.rows[3][0], { type: "Bool", value: true });
     assert.strictEqual(decoded.rows[4][0], null);
   });
@@ -1292,7 +1614,10 @@ describe("decodeRowBinaryWithNames", () => {
     const testDate = new Date("2024-06-15T10:30:00.123Z");
     const rows = [[testDate]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     const result = decoded.rows[0][0] as { type: string; value: Date };
     assert.strictEqual(result.type, "DateTime64(3)");
@@ -1302,49 +1627,72 @@ describe("decodeRowBinaryWithNames", () => {
   it("Dynamic with inferred Array", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
     const rows = [
-      [[1, 2, 3]],     // Array of integers -> Array(Int64)
-      [["a", "b"]],    // Array of strings -> Array(String)
-      [[]],            // Empty array -> Array(Nothing)
+      [[1, 2, 3]], // Array of integers -> Array(Int64)
+      [["a", "b"]], // Array of strings -> Array(String)
+      [[]], // Empty array -> Array(Nothing)
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
-    assert.deepStrictEqual(decoded.rows[0][0], { type: "Array(Int64)", value: [1n, 2n, 3n] });
-    assert.deepStrictEqual(decoded.rows[1][0], { type: "Array(String)", value: ["a", "b"] });
-    assert.deepStrictEqual(decoded.rows[2][0], { type: "Array(Nothing)", value: [] });
+    assert.deepStrictEqual(decoded.rows[0][0], {
+      type: "Array(Int64)",
+      value: [1n, 2n, 3n],
+    });
+    assert.deepStrictEqual(decoded.rows[1][0], {
+      type: "Array(String)",
+      value: ["a", "b"],
+    });
+    assert.deepStrictEqual(decoded.rows[2][0], {
+      type: "Array(Nothing)",
+      value: [],
+    });
   });
 
   it("Dynamic with inferred BigInt -> Int128/Int256", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
     const smallBigInt = 12345678901234567890n;
     // This value exceeds Int128 range
-    const largeBigInt = (1n << 200n);
-    const rows = [
-      [smallBigInt],
-      [largeBigInt],
-    ];
+    const largeBigInt = 1n << 200n;
+    const rows = [[smallBigInt], [largeBigInt]];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
-    assert.deepStrictEqual(decoded.rows[0][0], { type: "Int128", value: smallBigInt });
-    assert.deepStrictEqual(decoded.rows[1][0], { type: "Int256", value: largeBigInt });
+    assert.deepStrictEqual(decoded.rows[0][0], {
+      type: "Int128",
+      value: smallBigInt,
+    });
+    assert.deepStrictEqual(decoded.rows[1][0], {
+      type: "Int256",
+      value: largeBigInt,
+    });
   });
 
   it("Dynamic with mixed inferred and explicit types", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
     const rows = [
-      [42],                                   // inferred Int64
-      [{ type: "UInt8", value: 255 }],        // explicit UInt8
-      ["inferred string"],                    // inferred String
-      [{ type: "Float32", value: 1.5 }],      // explicit Float32
+      [42], // inferred Int64
+      [{ type: "UInt8", value: 255 }], // explicit UInt8
+      ["inferred string"], // inferred String
+      [{ type: "Float32", value: 1.5 }], // explicit Float32
     ];
     const encoded = encodeRowBinaryWithNames(columns, rows);
-    const decoded = decodeRowBinaryWithNames(encoded, columns.map((c) => c.type));
+    const decoded = decodeRowBinaryWithNames(
+      encoded,
+      columns.map((c) => c.type),
+    );
 
     assert.deepStrictEqual(decoded.rows[0][0], { type: "Int64", value: 42n });
     assert.deepStrictEqual(decoded.rows[1][0], { type: "UInt8", value: 255 });
-    assert.deepStrictEqual(decoded.rows[2][0], { type: "String", value: "inferred string" });
+    assert.deepStrictEqual(decoded.rows[2][0], {
+      type: "String",
+      value: "inferred string",
+    });
     assert.deepStrictEqual(decoded.rows[3][0], { type: "Float32", value: 1.5 });
   });
 });
-

@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 import { init, insert, query, collectBytes, collectText } from "../client.ts";
-import { encodeRowBinaryWithNames, decodeRowBinaryWithNamesAndTypes, type ColumnDef } from "../rowbinary.ts";
+import {
+  encodeRowBinaryWithNames,
+  decodeRowBinaryWithNamesAndTypes,
+  type ColumnDef,
+} from "../rowbinary.ts";
 
 describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
   let clickhouse: Awaited<ReturnType<typeof startClickHouse>>;
@@ -28,7 +32,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_basic (id UInt32, name String, value Float64) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -49,22 +54,25 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth, compression: "lz4" },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_basic ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_basic ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 3);
       assert.strictEqual(parsed.data[0].name, "alice");
       assert.strictEqual(parsed.data[2].value, 3.5);
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_basic",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_basic", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert RowBinary with Nullable columns", async () => {
@@ -72,7 +80,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_nullable (id UInt32, value Nullable(Int32)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -92,11 +101,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_nullable ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_nullable ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 3);
@@ -104,11 +115,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[1].value, null);
       assert.strictEqual(parsed.data[2].value, 300);
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_nullable",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_nullable", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert RowBinary with Array columns", async () => {
@@ -116,7 +128,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_array (id UInt32, tags Array(String), values Array(Int32)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -137,22 +150,25 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_array ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_array ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 3);
       assert.deepStrictEqual(parsed.data[0].tags, ["foo", "bar"]);
       assert.deepStrictEqual(parsed.data[0].values, [10, 20, 30]);
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_array",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_array", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert RowBinary with Tuple columns", async () => {
@@ -160,7 +176,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_tuple (id UInt32, data Tuple(String, Int32, Float64)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -179,21 +196,24 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_tuple ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_tuple ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
       assert.deepStrictEqual(parsed.data[0].data, ["alice", 100, 1.5]);
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_tuple",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_tuple", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert RowBinary with Map columns", async () => {
@@ -201,7 +221,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_map (id UInt32, attrs Map(String, Int32)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -221,21 +242,23 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_map ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query("SELECT * FROM test_rb_map ORDER BY id FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+        }),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 3);
       assert.deepStrictEqual(parsed.data[0].attrs, { foo: 100, bar: 200 });
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_map",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_map", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
   });
 
@@ -245,7 +268,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_date32 (id UInt32, d Date32) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -264,22 +288,25 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_date32 ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_date32 ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
       assert.strictEqual(parsed.data[0].d, "2024-01-15");
       assert.strictEqual(parsed.data[1].d, "1950-06-20");
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_date32",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_date32", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert RowBinary with DateTime64", async () => {
@@ -287,7 +314,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_dt64 (id UInt32, dt DateTime64(3)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -306,22 +334,24 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_dt64 ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query("SELECT * FROM test_rb_dt64 ORDER BY id FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+        }),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
       assert.ok(parsed.data[0].dt.includes("2024-01-15"));
       assert.ok(parsed.data[0].dt.includes("12:30:45"));
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_dt64",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_dt64", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
   });
 
@@ -331,7 +361,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_fixedstring (id UInt32, code FixedString(4)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -339,7 +370,7 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       ];
       const rows = [
         [1, "ABCD"],
-        [2, "XY"],  // Will be padded
+        [2, "XY"], // Will be padded
       ];
       const data = encodeRowBinaryWithNames(columns, rows);
 
@@ -350,22 +381,25 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT id, code FROM test_rb_fixedstring ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT id, code FROM test_rb_fixedstring ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
       assert.strictEqual(parsed.data[0].code, "ABCD");
       assert.ok(parsed.data[1].code.startsWith("XY"));
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_fixedstring",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_fixedstring", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
   });
 
@@ -375,7 +409,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_uuid (id UInt32, uuid UUID) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -394,22 +429,30 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_uuid ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query("SELECT * FROM test_rb_uuid ORDER BY id FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+        }),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
-      assert.strictEqual(parsed.data[0].uuid, "550e8400-e29b-41d4-a716-446655440000");
-      assert.strictEqual(parsed.data[1].uuid, "00000000-0000-0000-0000-000000000000");
+      assert.strictEqual(
+        parsed.data[0].uuid,
+        "550e8400-e29b-41d4-a716-446655440000",
+      );
+      assert.strictEqual(
+        parsed.data[1].uuid,
+        "00000000-0000-0000-0000-000000000000",
+      );
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_uuid",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_uuid", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert RowBinary with IPv4 and IPv6", async () => {
@@ -417,7 +460,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_ip (id UInt32, ip4 IPv4, ip6 IPv6) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -437,11 +481,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_ip ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query("SELECT * FROM test_rb_ip ORDER BY id FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+        }),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
@@ -449,11 +494,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[1].ip4, "10.0.0.1");
       assert.ok(parsed.data[0].ip6.includes("2001"));
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_ip",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_ip", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
   });
 
@@ -463,7 +509,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_int128 (id UInt32, signed Int128, unsigned UInt128) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -483,11 +530,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_int128 ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_int128 ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
@@ -495,11 +544,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[0].unsigned, "98765432109876543210");
       assert.strictEqual(parsed.data[1].signed, "-12345678901234567890");
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_int128",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_int128", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert RowBinary with Int256/UInt256", async () => {
@@ -507,7 +557,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_int256 (id UInt32, signed Int256, unsigned UInt256) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -528,11 +579,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_int256 ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_int256 ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
@@ -540,11 +593,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[0].unsigned, bigVal.toString());
       assert.strictEqual(parsed.data[1].signed, (-bigVal).toString());
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_int256",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_int256", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
   });
 
@@ -554,7 +608,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_decimal (id UInt32, d32 Decimal32(2), d64 Decimal64(4)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -574,11 +629,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_decimal ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_decimal ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
@@ -586,11 +643,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(Number(parsed.data[0].d64), 12345.6789);
       assert.strictEqual(Number(parsed.data[1].d32), -99.99);
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_decimal",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_decimal", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert RowBinary with Decimal128/Decimal256", async () => {
@@ -598,7 +656,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_decimal_big (id UInt32, d128 Decimal128(10), d256 Decimal256(20)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       // Decimal128(10) and Decimal256(20) - scale is in the type parameter
       const columns: ColumnDef[] = [
@@ -619,11 +678,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_decimal_big ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_decimal_big ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
@@ -633,11 +694,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.ok(d128.includes("123456789"));
       assert.ok(d256.includes("1234567890"));
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_decimal_big",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_decimal_big", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
   });
 
@@ -647,11 +709,15 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_enum8 (id UInt32, status Enum8('pending' = 0, 'active' = 1, 'done' = 2)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
-        { name: "status", type: "Enum8('pending' = 0, 'active' = 1, 'done' = 2)" },
+        {
+          name: "status",
+          type: "Enum8('pending' = 0, 'active' = 1, 'done' = 2)",
+        },
       ];
       const rows = [
         [1, 0],
@@ -667,11 +733,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_enum8 ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_enum8 ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 3);
@@ -679,11 +747,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[1].status, "active");
       assert.strictEqual(parsed.data[2].status, "done");
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_enum8",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_enum8", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert RowBinary with Enum16", async () => {
@@ -691,11 +760,15 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_enum16 (id UInt32, priority Enum16('low' = 1, 'medium' = 100, 'high' = 1000)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
-        { name: "priority", type: "Enum16('low' = 1, 'medium' = 100, 'high' = 1000)" },
+        {
+          name: "priority",
+          type: "Enum16('low' = 1, 'medium' = 100, 'high' = 1000)",
+        },
       ];
       const rows = [
         [1, 1],
@@ -711,11 +784,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_enum16 ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_enum16 ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 3);
@@ -723,11 +798,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[1].priority, "medium");
       assert.strictEqual(parsed.data[2].priority, "high");
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_enum16",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_enum16", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
   });
 
@@ -737,11 +813,15 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_nested (id UInt32, data Tuple(String, Array(Int32), Tuple(Float64, String))) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
-        { name: "data", type: "Tuple(String, Array(Int32), Tuple(Float64, String))" },
+        {
+          name: "data",
+          type: "Tuple(String, Array(Int32), Tuple(Float64, String))",
+        },
       ];
       const rows = [
         [1, ["outer", [1, 2, 3], [3.14, "inner"]]],
@@ -756,22 +836,33 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT * FROM test_rb_nested ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT * FROM test_rb_nested ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
-      assert.deepStrictEqual(parsed.data[0].data, ["outer", [1, 2, 3], [3.14, "inner"]]);
-      assert.deepStrictEqual(parsed.data[1].data, ["test", [], [2.71, "nested"]]);
+      assert.deepStrictEqual(parsed.data[0].data, [
+        "outer",
+        [1, 2, 3],
+        [3.14, "inner"],
+      ]);
+      assert.deepStrictEqual(parsed.data[1].data, [
+        "test",
+        [],
+        [2.71, "nested"],
+      ]);
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_nested",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_nested", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
   });
 
@@ -783,7 +874,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
           "SET allow_experimental_variant_type = 1",
           sessionId,
           { baseUrl, auth, compression: "none" },
-        )) {}
+        )) {
+        }
       } catch {
         // Setting may not exist in older versions
       }
@@ -793,10 +885,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
           "CREATE TABLE IF NOT EXISTS test_rb_variant (id UInt32, v Variant(String, Int32, Float64)) ENGINE = Memory",
           sessionId,
           { baseUrl, auth, compression: "none" },
-        )) {}
+        )) {
+        }
       } catch (err) {
         // Skip test if Variant not supported
-        console.log("    Skipping Variant test - not supported in this ClickHouse version");
+        console.log(
+          "    Skipping Variant test - not supported in this ClickHouse version",
+        );
         return;
       }
 
@@ -819,11 +914,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT id, v, variantType(v) as vtype FROM test_rb_variant ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT id, v, variantType(v) as vtype FROM test_rb_variant ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 4);
@@ -834,11 +931,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[3].v, null);
       assert.strictEqual(parsed.data[3].vtype, "None");
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_variant",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_variant", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
   });
 
@@ -848,7 +946,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_decode (id UInt32, name String, value Float64, flag Bool) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -869,11 +968,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const data = await collectBytes(query(
-        "SELECT * FROM test_rb_decode ORDER BY id FORMAT RowBinaryWithNamesAndTypes",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const data = await collectBytes(
+        query(
+          "SELECT * FROM test_rb_decode ORDER BY id FORMAT RowBinaryWithNamesAndTypes",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const decoded = decodeRowBinaryWithNamesAndTypes(data);
 
@@ -885,11 +986,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(decoded.rows[0][1], "alice");
       assert.strictEqual(decoded.rows[0][3], true);
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_decode",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_decode", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should decode complex types from ClickHouse", async () => {
@@ -897,7 +999,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_decode_complex (id UInt32, tags Array(String), attrs Map(String, Int32), data Tuple(String, Float64)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -918,11 +1021,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const data = await collectBytes(query(
-        "SELECT * FROM test_rb_decode_complex ORDER BY id FORMAT RowBinaryWithNamesAndTypes",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const data = await collectBytes(
+        query(
+          "SELECT * FROM test_rb_decode_complex ORDER BY id FORMAT RowBinaryWithNamesAndTypes",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const decoded = decodeRowBinaryWithNamesAndTypes(data);
 
@@ -936,7 +1041,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "DROP TABLE test_rb_decode_complex",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
     });
   });
 
@@ -947,7 +1053,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_json (id UInt32, data JSON) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -968,11 +1075,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       );
 
       // Query back using JSON format to verify data
-      const result = await collectText(query(
-        "SELECT id, data.str, data.num, data.flag FROM test_rb_json ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT id, data.str, data.num, data.flag FROM test_rb_json ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 3);
@@ -980,11 +1089,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(Number(parsed.data[0]["data.num"]), 42);
       assert.strictEqual(parsed.data[1]["data.str"], "world");
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_json",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_json", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert JSON with null values", async () => {
@@ -992,7 +1102,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_json_null (id UInt32, data JSON) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1011,24 +1122,31 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT id, data.name, data.value FROM test_rb_json_null ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT id, data.name, data.value FROM test_rb_json_null ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
       assert.strictEqual(parsed.data[0]["data.name"], "alice");
       // null values in JSON become NULL in ClickHouse
-      assert.ok(parsed.data[0]["data.value"] === null || parsed.data[0]["data.value"] === undefined || parsed.data[0]["data.value"] === 0);
+      assert.ok(
+        parsed.data[0]["data.value"] === null ||
+          parsed.data[0]["data.value"] === undefined ||
+          parsed.data[0]["data.value"] === 0,
+      );
       assert.strictEqual(parsed.data[1]["data.name"], "bob");
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_json_null",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_json_null", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert JSON with Date values", async () => {
@@ -1036,16 +1154,15 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_json_date (id UInt32, data JSON) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
         { name: "data", type: "JSON" },
       ];
       const testDate = new Date("2024-06-15T10:30:00.123Z");
-      const rows = [
-        [1, { event: "login", timestamp: testDate }],
-      ];
+      const rows = [[1, { event: "login", timestamp: testDate }]];
       const encoded = encodeRowBinaryWithNames(columns, rows);
 
       await insert(
@@ -1055,11 +1172,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT id, data.event, data.timestamp FROM test_rb_json_date FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT id, data.event, data.timestamp FROM test_rb_json_date FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 1);
@@ -1067,17 +1186,22 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       // DateTime64(3) is returned as a string - parse it
       const timestampValue = parsed.data[0]["data.timestamp"];
       // ClickHouse may return it as a numeric timestamp or formatted string
-      const returnedMs = typeof timestampValue === 'string'
-        ? new Date(timestampValue).getTime()
-        : Number(timestampValue) * 1000; // If numeric, it's Unix seconds
+      const returnedMs =
+        typeof timestampValue === "string"
+          ? new Date(timestampValue).getTime()
+          : Number(timestampValue) * 1000; // If numeric, it's Unix seconds
       // Just verify the date was stored and retrieved (ClickHouse may adjust timezone)
-      assert.ok(!isNaN(returnedMs), `timestamp should be parseable: ${timestampValue}`);
+      assert.ok(
+        !isNaN(returnedMs),
+        `timestamp should be parseable: ${timestampValue}`,
+      );
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_json_date",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_json_date", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should round-trip JSON via RowBinaryWithNamesAndTypes", async () => {
@@ -1085,15 +1209,14 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_json_rt (id UInt32, data JSON) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
         { name: "data", type: "JSON" },
       ];
-      const rows = [
-        [1, { name: "test", count: 5, active: true }],
-      ];
+      const rows = [[1, { name: "test", count: 5, active: true }]];
       const encoded = encodeRowBinaryWithNames(columns, rows);
 
       await insert(
@@ -1104,11 +1227,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       );
 
       // Query back in RowBinaryWithNamesAndTypes
-      const data = await collectBytes(query(
-        "SELECT * FROM test_rb_json_rt FORMAT RowBinaryWithNamesAndTypes",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const data = await collectBytes(
+        query(
+          "SELECT * FROM test_rb_json_rt FORMAT RowBinaryWithNamesAndTypes",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const decoded = decodeRowBinaryWithNamesAndTypes(data);
       assert.strictEqual(decoded.rows.length, 1);
@@ -1117,11 +1242,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       const jsonData = decoded.rows[0][1] as Record<string, unknown>;
       assert.strictEqual(jsonData.name, "test");
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_json_rt",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_json_rt", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
   });
 
@@ -1131,7 +1257,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_dynamic (id UInt32, data Dynamic) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1139,11 +1266,11 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       ];
       // Use inferred types - plain JS values
       const rows = [
-        [1, 42],              // Int64
-        [2, "hello"],         // String
-        [3, true],            // Bool
-        [4, 3.14],            // Float64
-        [5, null],            // Nothing
+        [1, 42], // Int64
+        [2, "hello"], // String
+        [3, true], // Bool
+        [4, 3.14], // Float64
+        [5, null], // Nothing
       ];
       const encoded = encodeRowBinaryWithNames(columns, rows);
 
@@ -1154,11 +1281,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT id, data, dynamicType(data) as dtype FROM test_rb_dynamic ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT id, data, dynamicType(data) as dtype FROM test_rb_dynamic ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 5);
@@ -1172,11 +1301,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[3].dtype, "Float64");
       assert.strictEqual(parsed.data[4].data, null);
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_dynamic",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_dynamic", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
 
     it("should insert Dynamic with explicit types", async () => {
@@ -1184,7 +1314,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_dynamic_explicit (id UInt32, data Dynamic) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1205,11 +1336,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const result = await collectText(query(
-        "SELECT id, data, dynamicType(data) as dtype FROM test_rb_dynamic_explicit ORDER BY id FORMAT JSON",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const result = await collectText(
+        query(
+          "SELECT id, data, dynamicType(data) as dtype FROM test_rb_dynamic_explicit ORDER BY id FORMAT JSON",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 3);
@@ -1224,7 +1357,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "DROP TABLE test_rb_dynamic_explicit",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
     });
 
     it("should round-trip Dynamic via RowBinaryWithNamesAndTypes", async () => {
@@ -1232,7 +1366,8 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "CREATE TABLE IF NOT EXISTS test_rb_dynamic_rt (id UInt32, data Dynamic) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {}
+      )) {
+      }
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1252,11 +1387,13 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth },
       );
 
-      const data = await collectBytes(query(
-        "SELECT * FROM test_rb_dynamic_rt ORDER BY id FORMAT RowBinaryWithNamesAndTypes",
-        sessionId,
-        { baseUrl, auth },
-      ));
+      const data = await collectBytes(
+        query(
+          "SELECT * FROM test_rb_dynamic_rt ORDER BY id FORMAT RowBinaryWithNamesAndTypes",
+          sessionId,
+          { baseUrl, auth },
+        ),
+      );
 
       const decoded = decodeRowBinaryWithNamesAndTypes(data);
       assert.strictEqual(decoded.rows.length, 3);
@@ -1269,11 +1406,12 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(row1data.value, "hello");
       assert.strictEqual(decoded.rows[2][1], null);
 
-      for await (const _ of query(
-        "DROP TABLE test_rb_dynamic_rt",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      )) {}
+      for await (const _ of query("DROP TABLE test_rb_dynamic_rt", sessionId, {
+        baseUrl,
+        auth,
+        compression: "none",
+      })) {
+      }
     });
   });
 });

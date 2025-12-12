@@ -10,12 +10,6 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": [
-    "*.ts",
-    "test/**/*.ts",
-    "types.d.ts"
-  ],
-  "exclude": [
-    "node_modules"
-  ]
+  "include": ["*.ts", "test/**/*.ts", "types.d.ts"],
+  "exclude": ["node_modules"]
 }

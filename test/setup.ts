@@ -1,4 +1,7 @@
-import { ClickHouseContainer, StartedClickHouseContainer } from "@testcontainers/clickhouse";
+import {
+  ClickHouseContainer,
+  StartedClickHouseContainer,
+} from "@testcontainers/clickhouse";
 
 let container: StartedClickHouseContainer | undefined;
 

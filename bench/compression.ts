@@ -1,9 +1,18 @@
 import { gzip, gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { compressFrame, decompressFrame } from "lz4-napi";
-import { compress as zstdNativeCompress, decompress as zstdNativeDecompress } from "zstd-napi";
+import {
+  compress as zstdNativeCompress,
+  decompress as zstdNativeDecompress,
+} from "zstd-napi";
 import * as bokuweb from "@bokuweb/zstd-wasm";
-import { init, encodeBlock, decodeBlock, Method, usingNativeZstd } from "../compression.ts";
+import {
+  init,
+  encodeBlock,
+  decodeBlock,
+  Method,
+  usingNativeZstd,
+} from "../compression.ts";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -23,7 +32,10 @@ function generateTestDataSets(): TestDataSet[] {
   const randomBytes = new Uint8Array(500_000);
   // getRandomValues has 64KB limit, fill in chunks
   for (let i = 0; i < randomBytes.length; i += 65536) {
-    const chunk = randomBytes.subarray(i, Math.min(i + 65536, randomBytes.length));
+    const chunk = randomBytes.subarray(
+      i,
+      Math.min(i + 65536, randomBytes.length),
+    );
     crypto.getRandomValues(chunk);
   }
   datasets.push({
@@ -59,13 +71,15 @@ function generateTestDataSets(): TestDataSet[] {
   // 4. Medium entropy - typical JSON with variation
   const variedJson: string[] = [];
   for (let i = 0; i < 5000; i++) {
-    variedJson.push(JSON.stringify({
-      id: i,
-      timestamp: Date.now(),
-      user_id: `user_${i % 1000}`,
-      event_type: ["click", "view", "purchase", "signup"][i % 4],
-      metadata: { page: `/page/${i % 100}`, duration: Math.random() * 1000 },
-    }));
+    variedJson.push(
+      JSON.stringify({
+        id: i,
+        timestamp: Date.now(),
+        user_id: `user_${i % 1000}`,
+        event_type: ["click", "view", "purchase", "signup"][i % 4],
+        metadata: { page: `/page/${i % 100}`, duration: Math.random() * 1000 },
+      }),
+    );
   }
   datasets.push({
     name: "json-varied",
@@ -165,8 +179,10 @@ function getMethods(): CompressionMethod[] {
     },
     {
       name: "LZ4 native",
-      compress: async (d) => new Uint8Array(await compressFrame(Buffer.from(d))),
-      decompress: async (d) => new Uint8Array(await decompressFrame(Buffer.from(d))),
+      compress: async (d) =>
+        new Uint8Array(await compressFrame(Buffer.from(d))),
+      decompress: async (d) =>
+        new Uint8Array(await decompressFrame(Buffer.from(d))),
     },
     {
       name: "ZSTD chttp",
@@ -199,7 +215,9 @@ async function main() {
   const datasets = generateTestDataSets();
   const methods = getMethods();
 
-  console.log(`ZSTD backend: ${usingNativeZstd ? "native (zstd-napi)" : "WASM (@bokuweb/zstd-wasm)"}`);
+  console.log(
+    `ZSTD backend: ${usingNativeZstd ? "native (zstd-napi)" : "WASM (@bokuweb/zstd-wasm)"}`,
+  );
   console.log(`Iterations: ${iterations}\n`);
 
   for (const dataset of datasets) {

@@ -9,6 +9,7 @@ npm install @maxjustus/chttp
 ```
 
 For smaller bundle (LZ4 only, no ZSTD):
+
 ```ts
 import { ... } from "@maxjustus/chttp/lz4";
 ```
@@ -20,7 +21,7 @@ import { insert, query, streamJsonEachRow } from "@maxjustus/chttp";
 
 const config = {
   baseUrl: "http://localhost:8123/",
-  auth: { username: "default", password: "" }
+  auth: { username: "default", password: "" },
 };
 
 // Insert with JSON data (using streamJsonEachRow helper)
@@ -28,40 +29,32 @@ await insert(
   "INSERT INTO table FORMAT JSONEachRow",
   streamJsonEachRow([{ id: 1, name: "test" }]),
   "session123",
-  config  // compression defaults to "lz4"
+  config, // compression defaults to "lz4"
 );
 
 // Insert raw bytes (any format)
 const encoder = new TextEncoder();
 const csvData = encoder.encode("1,test\n2,other\n");
-await insert(
-  "INSERT INTO table FORMAT CSV",
-  csvData,
-  "session123",
-  config
-);
+await insert("INSERT INTO table FORMAT CSV", csvData, "session123", config);
 
 // Query (yields Uint8Array, compression enabled by default)
 import { query, streamText, collectText } from "@maxjustus/chttp";
 
 // Stream text chunks
-for await (const text of streamText(query(
-  "SELECT * FROM table FORMAT JSON",
-  "session123",
-  config,
-))) {
+for await (const text of streamText(
+  query("SELECT * FROM table FORMAT JSON", "session123", config),
+)) {
   console.log(text);
 }
 
 // Or collect entire response
-const json = await collectText(query(
-  "SELECT * FROM table FORMAT JSON",
-  "session123",
-  config,
-));
+const json = await collectText(
+  query("SELECT * FROM table FORMAT JSON", "session123", config),
+);
 
 // DDL statements (consume the iterator)
-for await (const _ of query("CREATE TABLE ...", "session123", config)) {}
+for await (const _ of query("CREATE TABLE ...", "session123", config)) {
+}
 ```
 
 ## Streaming Large Inserts
@@ -80,7 +73,10 @@ await insert(
   "INSERT INTO large_table FORMAT JSONEachRow",
   streamJsonEachRow(generateRows()),
   "session123",
-  { compression: "zstd", onProgress: (p) => console.log(`${p.bytesUncompressed} bytes`) }
+  {
+    compression: "zstd",
+    onProgress: (p) => console.log(`${p.bytesUncompressed} bytes`),
+  },
 );
 
 // Streaming raw bytes (any format)
@@ -99,7 +95,7 @@ await insert(
   "INSERT INTO large_table FORMAT CSV",
   generateCsvChunks(),
   "session123",
-  { compression: "lz4" }
+  { compression: "lz4" },
 );
 ```
 
@@ -108,24 +104,39 @@ await insert(
 The `query()` function yields raw `Uint8Array` chunks aligned to compression blocks, not rows. Use helpers to parse:
 
 ```ts
-import { query, streamText, streamLines, streamJsonLines, collectText, collectBytes } from "@maxjustus/chttp";
+import {
+  query,
+  streamText,
+  streamLines,
+  streamJsonLines,
+  collectText,
+  collectBytes,
+} from "@maxjustus/chttp";
 
 // JSONEachRow - streaming parsed objects
-for await (const row of streamJsonLines(query("SELECT * FROM t FORMAT JSONEachRow", session, config))) {
+for await (const row of streamJsonLines(
+  query("SELECT * FROM t FORMAT JSONEachRow", session, config),
+)) {
   console.log(row.id, row.name);
 }
 
 // CSV/TSV - streaming raw lines
-for await (const line of streamLines(query("SELECT * FROM t FORMAT CSV", session, config))) {
+for await (const line of streamLines(
+  query("SELECT * FROM t FORMAT CSV", session, config),
+)) {
   const [id, name] = line.split(",");
 }
 
 // JSON format - buffer entire response
-const json = await collectText(query("SELECT * FROM t FORMAT JSON", session, config));
+const json = await collectText(
+  query("SELECT * FROM t FORMAT JSON", session, config),
+);
 const data = JSON.parse(json);
 
 // Binary formats (RowBinary, etc.)
-const bytes = await collectBytes(query("SELECT * FROM t FORMAT RowBinaryWithNamesAndTypes", session, config));
+const bytes = await collectBytes(
+  query("SELECT * FROM t FORMAT RowBinaryWithNamesAndTypes", session, config),
+);
 ```
 
 ## RowBinary Format (Experimental)
@@ -133,7 +144,11 @@ const bytes = await collectBytes(query("SELECT * FROM t FORMAT RowBinaryWithName
 Binary format that's ~7x faster to encode than JSON for simple data, with ~3x smaller payloads:
 
 ```ts
-import { insert, encodeRowBinaryWithNames, type ColumnDef } from "@maxjustus/chttp";
+import {
+  insert,
+  encodeRowBinaryWithNames,
+  type ColumnDef,
+} from "@maxjustus/chttp";
 
 const columns: ColumnDef[] = [
   { name: "id", type: "UInt32" },
@@ -152,11 +167,12 @@ await insert(
   "INSERT INTO table FORMAT RowBinaryWithNames",
   data,
   "session123",
-  config
+  config,
 );
 ```
 
 Supported types:
+
 - Integers: `Int8`-`Int64`, `UInt8`-`UInt64`, `Int128`, `UInt128`, `Int256`, `UInt256`
 - Floats: `Float32`, `Float64`
 - Decimals: `Decimal32(P,S)`, `Decimal64(P,S)`, `Decimal128(P,S)`, `Decimal256(P,S)`
@@ -179,12 +195,12 @@ The `Dynamic` type carries its own type information. You can pass plain JS value
 ```ts
 // Inferred types
 const rows = [
-  [42],           // -> Int64
-  [3.14],         // -> Float64
-  ["hello"],      // -> String
-  [true],         // -> Bool
-  [new Date()],   // -> DateTime64(3)
-  [[1, 2, 3]],    // -> Array(Int64)
+  [42], // -> Int64
+  [3.14], // -> Float64
+  ["hello"], // -> String
+  [true], // -> Bool
+  [new Date()], // -> DateTime64(3)
+  [[1, 2, 3]], // -> Array(Int64)
 ];
 
 // Explicit types (for anything not auto-inferred)
@@ -199,13 +215,19 @@ const rows = [
 Use `collectBytes` with `RowBinaryWithNamesAndTypes` format to decode query results:
 
 ```ts
-import { query, collectBytes, decodeRowBinaryWithNamesAndTypes } from "@maxjustus/chttp";
+import {
+  query,
+  collectBytes,
+  decodeRowBinaryWithNamesAndTypes,
+} from "@maxjustus/chttp";
 
-const data = await collectBytes(query(
-  "SELECT * FROM table FORMAT RowBinaryWithNamesAndTypes",
-  "session123",
-  config
-));
+const data = await collectBytes(
+  query(
+    "SELECT * FROM table FORMAT RowBinaryWithNamesAndTypes",
+    "session123",
+    config,
+  ),
+);
 
 const { columns, rows } = decodeRowBinaryWithNamesAndTypes(data);
 // columns: [{ name: "id", type: "UInt32" }, { name: "name", type: "String" }, ...]
@@ -219,7 +241,12 @@ The `decodeRowBinaryWithNamesAndTypes` function returns column names, types, and
 Compact JSON format where the first row contains column names and subsequent rows are value arrays:
 
 ```ts
-import { insert, query, streamJsonCompactEachRowWithNames, parseJsonCompactEachRowWithNames } from "@maxjustus/chttp";
+import {
+  insert,
+  query,
+  streamJsonCompactEachRowWithNames,
+  parseJsonCompactEachRowWithNames,
+} from "@maxjustus/chttp";
 
 // Insert - objects are automatically converted to compact arrays
 const rows = [
@@ -229,14 +256,18 @@ const rows = [
 
 await insert(
   "INSERT INTO table FORMAT JSONCompactEachRowWithNames",
-  streamJsonCompactEachRowWithNames(rows),  // columns extracted from first object
+  streamJsonCompactEachRowWithNames(rows), // columns extracted from first object
   "session123",
-  config
+  config,
 );
 
 // Query - parse compact format back to objects
 for await (const row of parseJsonCompactEachRowWithNames(
-  query("SELECT * FROM table FORMAT JSONCompactEachRowWithNames", "session123", config)
+  query(
+    "SELECT * FROM table FORMAT JSONCompactEachRowWithNames",
+    "session123",
+    config,
+  ),
 )) {
   console.log(row.id, row.name);
 }
@@ -260,7 +291,7 @@ await insert(query, data, sessionId, { signal: controller.signal });
 // Both (whichever triggers first)
 await insert(query, data, sessionId, {
   signal: controller.signal,
-  timeout: 60_000
+  timeout: 60_000,
 });
 ```
 
@@ -269,6 +300,7 @@ Requires Node.js 20+ or modern browsers (Chrome 116+, Firefox 124+, Safari 17.4+
 ## Compression
 
 Set `compression` in options:
+
 - `"lz4"` - fast, WASM (default)
 - `"zstd"` - ~2x better compression, native in Node.js with WASM fallback
 - `"none"` - no compression

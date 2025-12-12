@@ -8,9 +8,10 @@ export function __wbg_set_wasm(val) {
   wasm = val;
 }
 
-const lTextDecoder = typeof TextDecoder === "undefined"
-  ? (0, module.require)("util").TextDecoder
-  : TextDecoder;
+const lTextDecoder =
+  typeof TextDecoder === "undefined"
+    ? (0, module.require)("util").TextDecoder
+    : TextDecoder;
 
 let cachedTextDecoder = new lTextDecoder("utf-8", {
   ignoreBOM: true,
@@ -23,7 +24,8 @@ let cachedUint8ArrayMemory0 = null;
 
 function getUint8ArrayMemory0() {
   if (
-    cachedUint8ArrayMemory0 === null || cachedUint8ArrayMemory0.byteLength === 0
+    cachedUint8ArrayMemory0 === null ||
+    cachedUint8ArrayMemory0.byteLength === 0
   ) {
     cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
   }
