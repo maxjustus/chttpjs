@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import {
   encodeRowBinaryWithNames,
   decodeRowBinaryWithNames,
+  streamDecodeRowBinaryWithNamesAndTypes,
+  streamDecodeRowBinaryWithNamesAndTypesAll,
+  streamEncodeRowBinaryWithNames,
   type ColumnDef,
   ClickHouseDateTime64,
   Float32NaN,
@@ -2023,5 +2026,276 @@ describe("Float NaN Wrappers", () => {
       Array.from(nan.bytes),
       [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0xf8, 0x7f],
     );
+  });
+});
+
+describe("Streaming API", () => {
+  // Helper to create async iterable from chunks
+  async function* chunksToAsyncIterable(chunks: Uint8Array[]): AsyncIterable<Uint8Array> {
+    for (const chunk of chunks) {
+      yield chunk;
+    }
+  }
+
+  // Helper to split a buffer into random-sized chunks
+  function splitIntoChunks(data: Uint8Array, maxChunkSize: number): Uint8Array[] {
+    const chunks: Uint8Array[] = [];
+    let offset = 0;
+    while (offset < data.length) {
+      const chunkSize = Math.min(
+        Math.floor(Math.random() * maxChunkSize) + 1,
+        data.length - offset
+      );
+      chunks.push(data.slice(offset, offset + chunkSize));
+      offset += chunkSize;
+    }
+    return chunks;
+  }
+
+  it("streaming decode single chunk matches sync decode", async () => {
+    const columns: ColumnDef[] = [
+      { name: "id", type: "Int32" },
+      { name: "name", type: "String" },
+    ];
+    const rows = [[1, "alice"], [2, "bob"], [3, "charlie"]];
+
+    // Build RowBinaryWithNamesAndTypes manually
+    const parts: number[] = [];
+    // Column count
+    parts.push(2);
+    // Names
+    for (const col of columns) {
+      const bytes = new TextEncoder().encode(col.name);
+      parts.push(bytes.length);
+      parts.push(...bytes);
+    }
+    // Types
+    for (const col of columns) {
+      const bytes = new TextEncoder().encode(col.type);
+      parts.push(bytes.length);
+      parts.push(...bytes);
+    }
+    // Row data: Int32 little-endian + length-prefixed string
+    for (const row of rows) {
+      const id = row[0] as number;
+      parts.push(id & 0xff, (id >> 8) & 0xff, (id >> 16) & 0xff, (id >> 24) & 0xff);
+      const nameBytes = new TextEncoder().encode(row[1] as string);
+      parts.push(nameBytes.length);
+      parts.push(...nameBytes);
+    }
+    const data = new Uint8Array(parts);
+
+    // Streaming decode
+    const streamResult = await streamDecodeRowBinaryWithNamesAndTypesAll(
+      chunksToAsyncIterable([data])
+    );
+
+    assert.strictEqual(streamResult.columns.length, 2);
+    assert.strictEqual(streamResult.columns[0].name, "id");
+    assert.strictEqual(streamResult.columns[0].type, "Int32");
+    assert.strictEqual(streamResult.columns[1].name, "name");
+    assert.strictEqual(streamResult.columns[1].type, "String");
+    assert.strictEqual(streamResult.rows.length, 3);
+    assert.strictEqual(streamResult.rows[0][0], 1);
+    assert.strictEqual(streamResult.rows[0][1], "alice");
+    assert.strictEqual(streamResult.rows[1][0], 2);
+    assert.strictEqual(streamResult.rows[1][1], "bob");
+    assert.strictEqual(streamResult.rows[2][0], 3);
+    assert.strictEqual(streamResult.rows[2][1], "charlie");
+  });
+
+  it("streaming decode handles chunked data correctly", async () => {
+    const columns: ColumnDef[] = [
+      { name: "id", type: "Int32" },
+      { name: "name", type: "String" },
+    ];
+    const rows = [[1, "alice"], [2, "bob"], [3, "charlie"]];
+
+    // Build data manually
+    const parts: number[] = [];
+    parts.push(2);
+    for (const col of columns) {
+      const bytes = new TextEncoder().encode(col.name);
+      parts.push(bytes.length);
+      parts.push(...bytes);
+    }
+    for (const col of columns) {
+      const bytes = new TextEncoder().encode(col.type);
+      parts.push(bytes.length);
+      parts.push(...bytes);
+    }
+    for (const row of rows) {
+      const id = row[0] as number;
+      parts.push(id & 0xff, (id >> 8) & 0xff, (id >> 16) & 0xff, (id >> 24) & 0xff);
+      const nameBytes = new TextEncoder().encode(row[1] as string);
+      parts.push(nameBytes.length);
+      parts.push(...nameBytes);
+    }
+    const data = new Uint8Array(parts);
+
+    // Split into small chunks (1-3 bytes each)
+    const chunks = splitIntoChunks(data, 3);
+
+    // Streaming decode should handle boundaries correctly
+    const streamResult = await streamDecodeRowBinaryWithNamesAndTypesAll(
+      chunksToAsyncIterable(chunks)
+    );
+
+    assert.strictEqual(streamResult.rows.length, 3);
+    assert.strictEqual(streamResult.rows[0][0], 1);
+    assert.strictEqual(streamResult.rows[0][1], "alice");
+  });
+
+  it("streaming decode yields rows one at a time", async () => {
+    const rows = [[1], [2], [3]];
+
+    // Build data
+    const parts: number[] = [];
+    parts.push(1); // 1 column
+    parts.push(2, ...new TextEncoder().encode("id")); // name
+    parts.push(5, ...new TextEncoder().encode("Int32")); // type
+    for (const row of rows) {
+      const id = row[0] as number;
+      parts.push(id & 0xff, (id >> 8) & 0xff, (id >> 16) & 0xff, (id >> 24) & 0xff);
+    }
+    const data = new Uint8Array(parts);
+
+    // Use generator directly (batchSize=1 yields one row at a time)
+    const results: number[] = [];
+    for await (const { rows } of streamDecodeRowBinaryWithNamesAndTypes(
+      chunksToAsyncIterable([data]),
+      { batchSize: 1 }
+    )) {
+      for (const row of rows) {
+        results.push(row[0] as number);
+      }
+    }
+
+    assert.deepStrictEqual(results, [1, 2, 3]);
+  });
+
+  it("streaming encode produces valid output", async () => {
+    const columns: ColumnDef[] = [
+      { name: "id", type: "Int32" },
+      { name: "name", type: "String" },
+    ];
+    const rows = [[1, "alice"], [2, "bob"]];
+
+    // Collect chunks from streaming encode
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of streamEncodeRowBinaryWithNames(columns, rows)) {
+      chunks.push(chunk);
+    }
+
+    // Concatenate
+    const totalLen = chunks.reduce((sum, c) => sum + c.length, 0);
+    const result = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    // Decode with sync API and verify
+    const decoded = decodeRowBinaryWithNames(result, ["Int32", "String"]);
+    assert.strictEqual(decoded.columns[0].name, "id");
+    assert.strictEqual(decoded.columns[1].name, "name");
+    assert.strictEqual(decoded.rows.length, 2);
+    assert.strictEqual(decoded.rows[0][0], 1);
+    assert.strictEqual(decoded.rows[0][1], "alice");
+  });
+
+  it("streaming encode handles async row source", async () => {
+    const columns: ColumnDef[] = [{ name: "val", type: "Int32" }];
+
+    // Async generator of rows
+    async function* generateRows(): AsyncIterable<unknown[]> {
+      yield [1];
+      yield [2];
+      yield [3];
+    }
+
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of streamEncodeRowBinaryWithNames(columns, generateRows())) {
+      chunks.push(chunk);
+    }
+
+    const totalLen = chunks.reduce((sum, c) => sum + c.length, 0);
+    const result = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    const decoded = decodeRowBinaryWithNames(result, ["Int32"]);
+    assert.strictEqual(decoded.rows.length, 3);
+    assert.strictEqual(decoded.rows[0][0], 1);
+    assert.strictEqual(decoded.rows[1][0], 2);
+    assert.strictEqual(decoded.rows[2][0], 3);
+  });
+
+  it("streaming decode handles FixedString with chunked data", async () => {
+    // Build data
+    const parts: number[] = [];
+    parts.push(1); // 1 column
+    parts.push(2, ...new TextEncoder().encode("fs")); // name
+    parts.push(15, ...new TextEncoder().encode("FixedString(10)")); // type (15 chars)
+    // Row 1: "hello" padded to 10 bytes
+    const hello = new TextEncoder().encode("hello");
+    parts.push(...hello);
+    for (let i = hello.length; i < 10; i++) parts.push(0);
+    // Row 2: "world12345"
+    parts.push(...new TextEncoder().encode("world12345"));
+    const data = new Uint8Array(parts);
+
+    // Split into tiny chunks
+    const chunks = splitIntoChunks(data, 2);
+
+    const result = await streamDecodeRowBinaryWithNamesAndTypesAll(
+      chunksToAsyncIterable(chunks)
+    );
+
+    assert.strictEqual(result.rows.length, 2);
+    const fs1 = result.rows[0][0] as Uint8Array;
+    const fs2 = result.rows[1][0] as Uint8Array;
+    assert.strictEqual(fs1.length, 10);
+    assert.strictEqual(fs2.length, 10);
+    // Check content
+    const decoder = new TextDecoder();
+    assert.strictEqual(decoder.decode(fs1.slice(0, 5)), "hello");
+    assert.strictEqual(decoder.decode(fs2), "world12345");
+  });
+
+  it("streaming decode handles Array with chunked data", async () => {
+    // Build data
+    const parts: number[] = [];
+    parts.push(1); // 1 column
+    parts.push(3, ...new TextEncoder().encode("arr")); // name
+    parts.push(12, ...new TextEncoder().encode("Array(Int32)")); // type
+    // Row 1: [1, 2, 3]
+    parts.push(3); // array length
+    parts.push(1, 0, 0, 0); // 1
+    parts.push(2, 0, 0, 0); // 2
+    parts.push(3, 0, 0, 0); // 3
+    // Row 2: []
+    parts.push(0);
+    const data = new Uint8Array(parts);
+
+    // Split into tiny chunks
+    const chunks = splitIntoChunks(data, 3);
+
+    const result = await streamDecodeRowBinaryWithNamesAndTypesAll(
+      chunksToAsyncIterable(chunks)
+    );
+
+    assert.strictEqual(result.rows.length, 2);
+    const arr1 = result.rows[0][0] as Int32Array;
+    const arr2 = result.rows[1][0] as Int32Array;
+    assert.strictEqual(arr1.length, 3);
+    assert.strictEqual(arr1[0], 1);
+    assert.strictEqual(arr1[1], 2);
+    assert.strictEqual(arr1[2], 3);
+    assert.strictEqual(arr2.length, 0);
   });
 });

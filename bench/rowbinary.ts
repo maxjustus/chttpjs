@@ -7,6 +7,8 @@ import {
   encodeRowBinaryWithNames,
   decodeRowBinaryWithNames,
   decodeRowBinaryWithNamesAndTypes,
+  streamDecodeRowBinaryWithNamesAndTypesAll,
+  streamEncodeRowBinaryWithNames,
   type ColumnDef,
 } from "../rowbinary.ts";
 
@@ -125,6 +127,39 @@ function formatResult(
 ): string {
   const rowsPerSec = rows / (result.ms / 1000);
   return `  ${result.name.padEnd(30)} ${result.ms.toFixed(3).padStart(8)}ms  ${(rowsPerSec / 1_000_000).toFixed(2).padStart(6)}M rows/sec`;
+}
+
+async function benchAsync(
+  name: string,
+  fn: () => Promise<void>,
+  warmup = 50,
+  iterations = 100,
+): Promise<{ name: string; ms: number }> {
+  for (let i = 0; i < warmup; i++) await fn();
+  const start = performance.now();
+  for (let i = 0; i < iterations; i++) await fn();
+  const elapsed = performance.now() - start;
+  return { name, ms: elapsed / iterations };
+}
+
+// Helper to simulate chunked streaming from a buffer
+async function* chunkedStream(data: Uint8Array, chunkSize: number): AsyncIterable<Uint8Array> {
+  for (let i = 0; i < data.length; i += chunkSize) {
+    yield data.subarray(i, Math.min(i + chunkSize, data.length));
+  }
+}
+
+async function collectChunks(gen: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of gen) chunks.push(chunk);
+  const total = chunks.reduce((sum, c) => sum + c.length, 0);
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
 }
 
 // --- JSONEachRow helpers ---
@@ -618,6 +653,110 @@ async function main() {
   console.log(
     `  Full path: RowBinary+LZ4 is ${(jsonFullComplexTyped.ms / rbFullComplexTyped.ms).toFixed(2)}x ${rbFullComplexTyped.ms < jsonFullComplexTyped.ms ? "faster" : "slower"}`,
   );
+
+  // === Streaming vs Sync ===
+  console.log("\n=== Streaming vs Sync (Simple Data) ===\n");
+
+  // Build RowBinaryWithNamesAndTypes format for streaming decode
+  // First, calculate the header size in RowBinaryWithNames (1 byte count + names)
+  const namesHeaderSize = 1 + simpleColumns.reduce((s, c) => s + 1 + encoder.encode(c.name).length, 0);
+  const rowDataOnly = simpleRowBinaryEncoded.subarray(namesHeaderSize);
+
+  // Now build the WithNamesAndTypes header
+  const headerParts: number[] = [];
+  headerParts.push(simpleColumns.length); // column count
+  for (const col of simpleColumns) {
+    const nameBytes = encoder.encode(col.name);
+    headerParts.push(nameBytes.length, ...nameBytes);
+  }
+  for (const col of simpleColumns) {
+    const typeBytes = encoder.encode(col.type);
+    headerParts.push(typeBytes.length, ...typeBytes);
+  }
+  const simpleWithTypesEncoded = new Uint8Array([...headerParts, ...rowDataOnly]);
+
+  console.log("Decoding (sync vs streaming):");
+  const syncDecode = bench(
+    "Sync decode",
+    () => {
+      decodeRowBinaryWithNamesAndTypes(simpleWithTypesEncoded);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(syncDecode, ROWS));
+
+  // Streaming with single chunk (best case)
+  const streamDecode1Chunk = await benchAsync(
+    "Stream decode (1 chunk)",
+    async () => {
+      await streamDecodeRowBinaryWithNamesAndTypesAll(chunkedStream(simpleWithTypesEncoded, simpleWithTypesEncoded.length));
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(streamDecode1Chunk, ROWS));
+
+  // Streaming with 64KB chunks (realistic)
+  const streamDecode64K = await benchAsync(
+    "Stream decode (64KB chunks)",
+    async () => {
+      await streamDecodeRowBinaryWithNamesAndTypesAll(chunkedStream(simpleWithTypesEncoded, 64 * 1024));
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(streamDecode64K, ROWS));
+
+  // Streaming with 4KB chunks (small chunks)
+  const streamDecode4K = await benchAsync(
+    "Stream decode (4KB chunks)",
+    async () => {
+      await streamDecodeRowBinaryWithNamesAndTypesAll(chunkedStream(simpleWithTypesEncoded, 4 * 1024));
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(streamDecode4K, ROWS));
+
+  // Streaming with large batch (reduced async overhead)
+  const streamDecodeBatched = await benchAsync(
+    "Stream decode (batch=1000)",
+    async () => {
+      await streamDecodeRowBinaryWithNamesAndTypesAll(chunkedStream(simpleWithTypesEncoded, simpleWithTypesEncoded.length));
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(streamDecodeBatched, ROWS));
+
+  console.log("\nEncoding (sync vs streaming):");
+  const syncEncode = bench(
+    "Sync encode",
+    () => {
+      encodeRowBinaryWithNames(simpleColumns, simpleRowsArray);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(syncEncode, ROWS));
+
+  const streamEncode = await benchAsync(
+    "Stream encode",
+    async () => {
+      await collectChunks(streamEncodeRowBinaryWithNames(simpleColumns, simpleRowsArray));
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(streamEncode, ROWS));
+
+  console.log("\nStreaming overhead:");
+  console.log(`  Decode (1 chunk): ${((streamDecode1Chunk.ms / syncDecode.ms - 1) * 100).toFixed(1)}% overhead`);
+  console.log(`  Decode (64KB):    ${((streamDecode64K.ms / syncDecode.ms - 1) * 100).toFixed(1)}% overhead`);
+  console.log(`  Decode (4KB):     ${((streamDecode4K.ms / syncDecode.ms - 1) * 100).toFixed(1)}% overhead`);
+  console.log(`  Decode (batched): ${((streamDecodeBatched.ms / syncDecode.ms - 1) * 100).toFixed(1)}% overhead`);
+  console.log(`  Encode:           ${((streamEncode.ms / syncEncode.ms - 1) * 100).toFixed(1)}% overhead`);
 }
 
 main().catch(console.error);

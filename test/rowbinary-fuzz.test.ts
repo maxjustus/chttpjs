@@ -1,7 +1,10 @@
 import { describe, it, before, after } from "node:test";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { init, insert, query, collectBytes, collectText } from "../client.ts";
-import { encodeRowBinaryWithNames, decodeRowBinaryWithNamesAndTypes } from "../rowbinary.ts";
+import { init, insert, query, collectText } from "../client.ts";
+import {
+  encodeRowBinaryWithNames,
+  streamDecodeRowBinaryWithNamesAndTypesAll,
+} from "../rowbinary.ts";
 
 describe("RowBinary Fuzz Tests", { timeout: 300000 }, () => {
   let clickhouse: Awaited<ReturnType<typeof startClickHouse>>;
@@ -51,17 +54,15 @@ describe("RowBinary Fuzz Tests", { timeout: 300000 }, () => {
           ),
         );
 
-        // 3. Query source in RowBinary format
-        const srcBytes = await collectBytes(
+        // 3. Query source in RowBinary format and decode via streaming
+        const decoded = await streamDecodeRowBinaryWithNamesAndTypesAll(
           query(
             `SELECT * FROM ${srcTable} FORMAT RowBinaryWithNamesAndTypes`,
             sessionId,
             { baseUrl, auth },
           ),
+          { mapAsArray: true },
         );
-
-        // 4. Decode (use mapAsArray to preserve duplicate keys from generateRandom)
-        const decoded = decodeRowBinaryWithNamesAndTypes(srcBytes, { mapAsArray: true });
 
         // 5. Create empty dest table
         await consume(

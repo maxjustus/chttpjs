@@ -280,6 +280,92 @@ function leb128Size(value: number): number {
 }
 
 // ============================================================================
+// StreamingReader - Buffer manager for streaming decode
+// ============================================================================
+
+/**
+ * StreamingReader accumulates chunks from an AsyncIterable and provides
+ * buffer slices for sync decode with retry-on-underflow semantics.
+ */
+class StreamingReader {
+  private buffer: Uint8Array;
+  private bufferLen = 0;  // valid bytes in buffer
+  private offset = 0;     // current read position
+  private source: AsyncIterator<Uint8Array>;
+  private done = false;
+  options?: DecodeOptions;
+
+  constructor(chunks: AsyncIterable<Uint8Array>, initialSize = 64 * 1024) {
+    this.buffer = new Uint8Array(initialSize);
+    this.source = chunks[Symbol.asyncIterator]();
+  }
+
+  /** Get slice of valid data from current position for decode */
+  getSlice(): Uint8Array {
+    return this.buffer.subarray(this.offset, this.bufferLen);
+  }
+
+  /** Get DataView for the valid slice */
+  getView(): DataView {
+    const slice = this.getSlice();
+    return new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+  }
+
+  /** Advance position after successful decode */
+  advance(n: number): void {
+    this.offset += n;
+  }
+
+  /** Check if more data might be available */
+  hasMore(): boolean {
+    return this.offset < this.bufferLen || !this.done;
+  }
+
+  /** Available bytes in buffer */
+  available(): number {
+    return this.bufferLen - this.offset;
+  }
+
+  /** Pull more data from source. Returns false if EOF. */
+  async pullMore(): Promise<boolean> {
+    if (this.done) return false;
+    const { done, value } = await this.source.next();
+    if (done) {
+      this.done = true;
+      return false;
+    }
+    this.appendChunk(value);
+    return true;
+  }
+
+  /** Ensure at least n bytes available, pulling if needed */
+  async ensure(n: number): Promise<boolean> {
+    while (this.available() < n && !this.done) {
+      await this.pullMore();
+    }
+    return this.available() >= n;
+  }
+
+  private appendChunk(chunk: Uint8Array): void {
+    const needed = this.available() + chunk.length;
+
+    if (needed > this.buffer.length - this.offset) {
+      // Allocate new buffer (don't reuse - old buffer may have TypedArray views)
+      const newSize = Math.max(this.buffer.length * 2, needed);
+      const newBuffer = new Uint8Array(newSize);
+      newBuffer.set(this.buffer.subarray(this.offset, this.bufferLen));
+      this.buffer = newBuffer;
+      this.bufferLen = this.available();
+      this.offset = 0;
+    }
+
+    this.buffer.set(chunk, this.bufferLen);
+    this.bufferLen += chunk.length;
+  }
+
+}
+
+// ============================================================================
 // Codec Interface & Implementation
 // ============================================================================
 
@@ -399,6 +485,7 @@ const SCALAR_CODECS: Record<string, Codec> = {
       e.offset += 4;
     },
     decode: (_, b, c) => {
+      checkBounds(b, c, 4);
       const bytes = b.subarray(c.offset, c.offset + 4);
       const view = new DataView(b.buffer, b.byteOffset + c.offset, 4);
       const val = view.getFloat32(0, true);
@@ -420,6 +507,7 @@ const SCALAR_CODECS: Record<string, Codec> = {
       e.offset += 8;
     },
     decode: (_, b, c) => {
+      checkBounds(b, c, 8);
       const bytes = b.subarray(c.offset, c.offset + 8);
       const view = new DataView(b.buffer, b.byteOffset + c.offset, 8);
       const val = view.getFloat64(0, true);
@@ -460,6 +548,7 @@ const SCALAR_CODECS: Record<string, Codec> = {
       e.offset += 16;
     },
     decode: (_, b, c) => {
+      checkBounds(b, c, 16);
       const bytes = b.subarray(c.offset, c.offset + 16);
       const high = Array.from(bytes.subarray(0, 8)).reverse();
       const low = Array.from(bytes.subarray(8, 16)).reverse();
@@ -495,6 +584,7 @@ const SCALAR_CODECS: Record<string, Codec> = {
       }
     },
     decode: (_, b, c) => {
+      checkBounds(b, c, 16);
       const parts: string[] = [];
       for (let i = 0; i < 16; i += 2) {
         parts.push(((b[c.offset + i] << 8) | b[c.offset + i + 1]).toString(16));
@@ -582,20 +672,20 @@ class ArrayCodec implements Codec {
   }
 
   decode(v: DataView, b: Uint8Array, c: Cursor) {
-    const [len, _] = readLEB128(b, c);
+    const len = readLEB128(b, c);
 
-    // Fast path: aligned TypedArray view
+    // Fast path: TypedArray view (no copy)
+    // Safe in streaming because we don't compact - old buffers stay alive via views
     if (this.TypedArrayCtor) {
       const byteLen = len * this.TypedArrayCtor.BYTES_PER_ELEMENT
+      checkBounds(b, c, byteLen);
       const absoluteOffset = b.byteOffset + c.offset
       if (absoluteOffset % this.TypedArrayCtor.BYTES_PER_ELEMENT === 0) {
         const res = new this.TypedArrayCtor(b.buffer, absoluteOffset, len)
         c.offset += byteLen
         return res
       }
-
-      // Unaligned fast path: copy to new aligned buffer
-      // This is still much faster than the element-by-element loop
+      // Unaligned: must copy to aligned buffer
       const copy = new Uint8Array(byteLen)
       copy.set(b.subarray(c.offset, c.offset + byteLen))
       c.offset += byteLen
@@ -674,7 +764,7 @@ class MapCodec implements Codec {
   }
 
   decode(v: DataView, b: Uint8Array, c: Cursor) {
-    const [len, _] = readLEB128(b, c)
+    const len = readLEB128(b, c);
     if (c.options?.mapAsArray) {
       const result: [unknown, unknown][] = []
       for (let i = 0; i < len; i++) {
@@ -709,6 +799,7 @@ class FixedStringCodec implements Codec {
   }
 
   decode(_: DataView, b: Uint8Array, c: Cursor) {
+    checkBounds(b, c, this.n);
     const bytes = new Uint8Array(this.n)
     bytes.set(b.subarray(c.offset, c.offset + this.n))
     c.offset += this.n
@@ -879,11 +970,11 @@ class JsonCodec implements Codec {
   }
 
   decode(v: DataView, b: Uint8Array, c: Cursor) {
-    const [numPaths, _] = readLEB128(b, c);
+    const numPaths = readLEB128(b, c);
     const result: Record<string, unknown> = {};
     for (let i = 0; i < numPaths; i++) {
       const path = readString(b, c);
-      const [type, _2] = decodeTypeBinary(b, c);
+      const type = decodeTypeBinary(b, c);
       if (type === "Nothing") {
         result[path] = null;
       } else {
@@ -914,7 +1005,7 @@ class DynamicCodec implements Codec {
   }
 
   decode(v: DataView, b: Uint8Array, c: Cursor) {
-    const [type, _] = decodeTypeBinary(b, c);
+    const type = decodeTypeBinary(b, c);
     if (type === "Nothing") return null;
     const val = createCodec(type).decode(v, b, c);
     return { type, value: val };
@@ -958,7 +1049,7 @@ export function decodeRowBinaryWithNames(
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
 
   // 1. Count
-  const [colCount, _] = readLEB128(data, cursor);
+  const colCount = readLEB128(data, cursor);
 
   if (colCount !== types.length) {
     throw new Error(
@@ -996,7 +1087,7 @@ export function decodeRowBinaryWithNamesAndTypes(
   const cursor: Cursor = { offset: 0, options };
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
 
-  const [colCount, _] = readLEB128(data, cursor);
+  const colCount = readLEB128(data, cursor);
 
   const names: string[] = [];
   for (let i = 0; i < colCount; i++) names.push(readString(data, cursor));
@@ -1020,21 +1111,278 @@ export function decodeRowBinaryWithNamesAndTypes(
 }
 
 // ============================================================================
+// Streaming API
+// ============================================================================
+
+export interface StreamDecodeOptions extends DecodeOptions {
+  /** Yield rows in batches of this size (default: 1) */
+  batchSize?: number;
+}
+
+export interface StreamDecodeResult {
+  columns: ColumnDef[];
+  rows: unknown[][];  // batch of rows
+}
+
+/** Read a string from streaming reader with retry-on-underflow */
+async function readStreamString(reader: StreamingReader, options: DecodeOptions | undefined, errorMsg: string): Promise<string> {
+  while (true) {
+    const slice = reader.getSlice();
+    const cursor: Cursor = { offset: 0, options };
+    try {
+      const str = readString(slice, cursor);
+      reader.advance(cursor.offset);
+      return str;
+    } catch (e) {
+      if (e instanceof RangeError) {
+        if (!(await reader.pullMore())) throw new Error(errorMsg);
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
+/** Core row decode loop - shared by both streaming decode functions */
+async function* streamDecodeRows(
+  reader: StreamingReader,
+  columns: ColumnDef[],
+  codecs: Codec[],
+  batchSize: number,
+  options: DecodeOptions | undefined,
+): AsyncGenerator<StreamDecodeResult> {
+  const colCount = columns.length;
+  let batch: unknown[][] = [];
+
+  while (reader.hasMore()) {
+    const slice = reader.getSlice();
+    if (slice.length === 0) {
+      if (!(await reader.pullMore())) break;
+      continue;
+    }
+
+    const view = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+    const cursor: Cursor = { offset: 0, options };
+
+    try {
+      const row = new Array(colCount);
+      for (let i = 0; i < colCount; i++) {
+        row[i] = codecs[i].decode(view, slice, cursor);
+      }
+      reader.advance(cursor.offset);
+      batch.push(row);
+      if (batch.length >= batchSize) {
+        yield { columns, rows: batch };
+        batch = [];
+      }
+    } catch (e) {
+      if (e instanceof RangeError) {
+        if (!(await reader.pullMore())) throw new Error('Unexpected EOF mid-row');
+        continue;
+      }
+      throw e;
+    }
+  }
+
+  if (batch.length > 0) {
+    yield { columns, rows: batch };
+  }
+}
+
+/**
+ * Streaming decode of RowBinaryWithNamesAndTypes format.
+ * Yields rows in batches as they're parsed from the chunk stream.
+ */
+export async function* streamDecodeRowBinaryWithNamesAndTypes(
+  chunks: AsyncIterable<Uint8Array>,
+  options?: StreamDecodeOptions,
+): AsyncGenerator<StreamDecodeResult> {
+  const reader = new StreamingReader(chunks);
+  reader.options = options;
+  const batchSize = options?.batchSize ?? 1;
+
+  if (!(await reader.ensure(1))) return;
+
+  // Parse header with retry
+  while (true) {
+    const slice = reader.getSlice();
+    const cursor: Cursor = { offset: 0, options };
+    try {
+      const colCount = readLEB128(slice, cursor);
+      reader.advance(cursor.offset);
+
+      // Read names and types
+      const names: string[] = [];
+      const types: string[] = [];
+      for (let i = 0; i < colCount; i++) {
+        names.push(await readStreamString(reader, options, 'Unexpected EOF reading column names'));
+      }
+      for (let i = 0; i < colCount; i++) {
+        types.push(await readStreamString(reader, options, 'Unexpected EOF reading column types'));
+      }
+
+      const columns = names.map((name, i) => ({ name, type: types[i] }));
+      const codecs = types.map(createCodec);
+
+      yield* streamDecodeRows(reader, columns, codecs, batchSize, options);
+      return;
+    } catch (e) {
+      if (e instanceof RangeError) {
+        if (!(await reader.pullMore())) throw new Error('Unexpected EOF reading header');
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
+/**
+ * Convenience wrapper: collect all rows from streaming decode into DecodeResult.
+ */
+export async function streamDecodeRowBinaryWithNamesAndTypesAll(
+  chunks: AsyncIterable<Uint8Array>,
+  options?: DecodeOptions,
+): Promise<DecodeResult> {
+  let columns: ColumnDef[] = [];
+  const rows: unknown[][] = [];
+
+  for await (const { columns: cols, rows: batch } of streamDecodeRowBinaryWithNamesAndTypes(chunks, { ...options, batchSize: 10000 })) {
+    columns = cols;
+    rows.push(...batch);
+  }
+
+  return { columns, rows };
+}
+
+/**
+ * Streaming decode of RowBinaryWithNames format.
+ * Types must be provided externally.
+ */
+export async function* streamDecodeRowBinaryWithNames(
+  chunks: AsyncIterable<Uint8Array>,
+  types: ColumnType[],
+  options?: StreamDecodeOptions,
+): AsyncGenerator<StreamDecodeResult> {
+  const reader = new StreamingReader(chunks);
+  reader.options = options;
+  const batchSize = options?.batchSize ?? 1;
+
+  if (!(await reader.ensure(1))) return;
+
+  while (true) {
+    const slice = reader.getSlice();
+    const cursor: Cursor = { offset: 0, options };
+    try {
+      const colCount = readLEB128(slice, cursor);
+      reader.advance(cursor.offset);
+
+      if (colCount !== types.length) {
+        throw new Error(`Column count mismatch: data has ${colCount}, provided ${types.length}`);
+      }
+
+      // Read names
+      const columns: ColumnDef[] = [];
+      for (let i = 0; i < colCount; i++) {
+        const name = await readStreamString(reader, options, 'Unexpected EOF reading column names');
+        columns.push({ name, type: types[i] });
+      }
+
+      const codecs = types.map(createCodec);
+
+      yield* streamDecodeRows(reader, columns, codecs, batchSize, options);
+      return;
+    } catch (e) {
+      if (e instanceof RangeError) {
+        if (!(await reader.pullMore())) throw new Error('Unexpected EOF reading header');
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
+export interface StreamingEncodeOptions {
+  /** Target chunk size in bytes (default: 64KB) */
+  chunkSize?: number;
+  /** Include column names header (default: true) */
+  includeHeader?: boolean;
+}
+
+/**
+ * Streaming encode rows as RowBinaryWithNames format.
+ * Yields Uint8Array chunks as the buffer fills up.
+ */
+export async function* streamEncodeRowBinaryWithNames(
+  columns: ColumnDef[],
+  rows: AsyncIterable<unknown[]> | Iterable<unknown[]>,
+  options?: StreamingEncodeOptions,
+): AsyncGenerator<Uint8Array> {
+  const chunkSize = options?.chunkSize ?? 64 * 1024;
+  const threshold = chunkSize - 4096; // Leave room for a row
+
+  const encoder = new RowBinaryEncoder(chunkSize);
+  const codecs = columns.map((c) => createCodec(c.type));
+
+  // Encode header if requested
+  if (options?.includeHeader !== false) {
+    encoder.leb128(columns.length);
+    for (const col of columns) {
+      encoder.string(col.name);
+    }
+  }
+
+  // Fast path for sync iterables - no await per row
+  if (Symbol.iterator in rows && !(Symbol.asyncIterator in rows)) {
+    for (const row of rows as Iterable<unknown[]>) {
+      for (let i = 0; i < columns.length; i++) {
+        codecs[i].encode(encoder, row[i]);
+      }
+      if (encoder.offset >= threshold) {
+        yield encoder.buffer.slice(0, encoder.offset);
+        encoder.offset = 0;
+      }
+    }
+  } else {
+    // Async path
+    for await (const row of rows as AsyncIterable<unknown[]>) {
+      for (let i = 0; i < columns.length; i++) {
+        codecs[i].encode(encoder, row[i]);
+      }
+      if (encoder.offset >= threshold) {
+        yield encoder.buffer.slice(0, encoder.offset);
+        encoder.offset = 0;
+      }
+    }
+  }
+
+  // Yield any remaining data
+  if (encoder.offset > 0) {
+    yield encoder.finish();
+  }
+}
+
+// ============================================================================
 // Internal Helpers
 // ============================================================================
 
 // --- IO Helpers ---
 
-function readLEB128(data: Uint8Array, c: Cursor): [number, number] {
+/** Throws RangeError if not enough bytes available - used for streaming retry */
+function checkBounds(b: Uint8Array, c: Cursor, n: number): void {
+  if (c.offset + n > b.length) throw new RangeError('Buffer underflow');
+}
+
+function readLEB128(data: Uint8Array, c: Cursor): number {
   let value = 0;
   let shift = 0;
   while (true) {
+    if (c.offset >= data.length) throw new RangeError('Buffer underflow');
     const byte = data[c.offset++];
     value |= (byte & 0x7f) << shift;
     if ((byte & 0x80) === 0) break;
     shift += 7;
   }
-  return [value, c.offset];
+  return value;
 }
 
 function utf8DecodeSmall(data: Uint8Array, start: number, end: number): string {
@@ -1066,7 +1414,8 @@ function utf8DecodeSmall(data: Uint8Array, start: number, end: number): string {
 }
 
 function readString(data: Uint8Array, c: Cursor): string {
-  const [len, _] = readLEB128(data, c);
+  const len = readLEB128(data, c);
+  checkBounds(data, c, len);
   const end = c.offset + len;
   // Optimization for short strings
   const str =
@@ -1077,43 +1426,58 @@ function readString(data: Uint8Array, c: Cursor): string {
   return str;
 }
 
+// Core 128/256-bit helpers (used by both Int128/256 codecs and Decimal codecs)
+function writeBigInt128(v: DataView, o: number, val: bigint, signed: boolean): void {
+  const low = val & 0xffffffffffffffffn;
+  const high = val >> 64n;
+  v.setBigUint64(o, low, true);
+  if (signed) v.setBigInt64(o + 8, high, true);
+  else v.setBigUint64(o + 8, high, true);
+}
+
+function readBigInt128(v: DataView, o: number, signed: boolean): bigint {
+  const low = v.getBigUint64(o, true);
+  const high = signed ? v.getBigInt64(o + 8, true) : v.getBigUint64(o + 8, true);
+  return (high << 64n) | low;
+}
+
+function writeBigInt256(v: DataView, o: number, val: bigint, signed: boolean): void {
+  for (let i = 0; i < 3; i++) {
+    v.setBigUint64(o + i * 8, val & 0xffffffffffffffffn, true);
+    val >>= 64n;
+  }
+  if (signed) v.setBigInt64(o + 24, val, true);
+  else v.setBigUint64(o + 24, val, true);
+}
+
+function readBigInt256(v: DataView, o: number, signed: boolean): bigint {
+  let val = signed ? v.getBigInt64(o + 24, true) : v.getBigUint64(o + 24, true);
+  for (let i = 2; i >= 0; i--) {
+    val = (val << 64n) | v.getBigUint64(o + i * 8, true);
+  }
+  return val;
+}
+
 function write128(e: RowBinaryEncoder, value: bigint, signed: boolean): void {
   e.ensure(16);
-  const low = value & 0xffffffffffffffffn;
-  const high = value >> 64n;
-  e.view.setBigUint64(e.offset, low, true);
-  if (signed) e.view.setBigInt64(e.offset + 8, high, true);
-  else e.view.setBigUint64(e.offset + 8, high, true);
+  writeBigInt128(e.view, e.offset, value, signed);
   e.offset += 16;
 }
 
 function read128(view: DataView, c: Cursor, signed: boolean): bigint {
-  const low = view.getBigUint64(c.offset, true);
-  const high = signed
-    ? view.getBigInt64(c.offset + 8, true)
-    : view.getBigUint64(c.offset + 8, true);
+  const val = readBigInt128(view, c.offset, signed);
   c.offset += 16;
-  return (high << 64n) | low;
+  return val;
 }
 
 function write256(e: RowBinaryEncoder, value: bigint, signed: boolean): void {
   e.ensure(32);
-  for (let i = 0; i < 3; i++) {
-    e.view.setBigUint64(e.offset + i * 8, value & 0xffffffffffffffffn, true);
-    value >>= 64n;
-  }
-  if (signed) e.view.setBigInt64(e.offset + 24, value, true);
-  else e.view.setBigUint64(e.offset + 24, value, true);
+  writeBigInt256(e.view, e.offset, value, signed);
   e.offset += 32;
 }
 
 function read256(view: DataView, c: Cursor, signed: boolean): bigint {
-  let val = signed
-    ? view.getBigInt64(c.offset + 24, true)
-    : view.getBigUint64(c.offset + 24, true);
-  for (let i = 2; i >= 0; i--) {
-    val = (val << 64n) | view.getBigUint64(c.offset + i * 8, true);
-  }
+  const val = readBigInt256(view, c.offset, signed);
   c.offset += 32;
   return val;
 }
@@ -1141,57 +1505,21 @@ function extractDecimalScale(type: string): number {
   return match ? parseInt(match[1], 10) : 0;
 }
 
-function writeScaledInt(
-  v: DataView,
-  o: number,
-  val: bigint,
-  size: number,
-): void {
+function writeScaledInt(v: DataView, o: number, val: bigint, size: number): void {
   switch (size) {
-    case 4:
-      v.setInt32(o, Number(val), true);
-      break;
-    case 8:
-      v.setBigInt64(o, val, true);
-      break;
-    case 16:
-      {
-        const low = val & 0xffffffffffffffffn;
-        const high = val >> 64n;
-        v.setBigUint64(o, low, true);
-        v.setBigInt64(o + 8, high, true);
-      }
-      break;
-    case 32:
-      {
-        let x = val;
-        for (let i = 0; i < 3; i++) {
-          v.setBigUint64(o + i * 8, x & 0xffffffffffffffffn, true);
-          x >>= 64n;
-        }
-        v.setBigInt64(o + 24, x, true);
-      }
-      break;
+    case 4: v.setInt32(o, Number(val), true); break;
+    case 8: v.setBigInt64(o, val, true); break;
+    case 16: writeBigInt128(v, o, val, true); break;
+    case 32: writeBigInt256(v, o, val, true); break;
   }
 }
 
 function readScaledInt(v: DataView, o: number, size: number): bigint {
   switch (size) {
-    case 4:
-      return BigInt(v.getInt32(o, true));
-    case 8:
-      return v.getBigInt64(o, true);
-    case 16: {
-      const low = v.getBigUint64(o, true);
-      const high = v.getBigInt64(o + 8, true);
-      return (high << 64n) | low;
-    }
-    case 32: {
-      let val = v.getBigInt64(o + 24, true);
-      for (let i = 2; i >= 0; i--)
-        val = (val << 64n) | v.getBigUint64(o + i * 8, true);
-      return val;
-    }
+    case 4: return BigInt(v.getInt32(o, true));
+    case 8: return v.getBigInt64(o, true);
+    case 16: return readBigInt128(v, o, true);
+    case 32: return readBigInt256(v, o, true);
   }
   return 0n;
 }
@@ -1488,7 +1816,7 @@ function encodeTypeTo(type: string, e: RowBinaryEncoder) {
   throw new Error(`Binary type encoding not fully implemented for: ${type}`);
 }
 
-function decodeTypeBinary(data: Uint8Array, c: Cursor): [string, number] {
+function decodeTypeBinary(data: Uint8Array, c: Cursor): string {
   const code = data[c.offset++];
   const simple = REVERSE_TYPE_CODES[code];
   if (
@@ -1507,63 +1835,61 @@ function decodeTypeBinary(data: Uint8Array, c: Cursor): [string, number] {
       "Decimal256",
     ].includes(simple)
   )
-    return [simple, c.offset];
+    return simple;
 
   if (code === 0x23) {
-    const [t, _] = decodeTypeBinary(data, c);
-    return [`Nullable(${t})`, c.offset];
+    return `Nullable(${decodeTypeBinary(data, c)})`;
   }
   if (code === 0x1e) {
-    const [t, _] = decodeTypeBinary(data, c);
-    return [`Array(${t})`, c.offset];
+    return `Array(${decodeTypeBinary(data, c)})`;
   }
   if (code === 0x27) {
-    const [k, _] = decodeTypeBinary(data, c);
-    const [v, _2] = decodeTypeBinary(data, c);
-    return [`Map(${k}, ${v})`, c.offset];
+    const k = decodeTypeBinary(data, c);
+    const v = decodeTypeBinary(data, c);
+    return `Map(${k}, ${v})`;
   }
 
   if (code === 0x1f) {
     // Tuple unnamed
-    const [count, _] = readLEB128(data, c);
+    const count = readLEB128(data, c);
     const types: string[] = [];
-    for (let i = 0; i < count; i++) types.push(decodeTypeBinary(data, c)[0]);
-    return [`Tuple(${types.join(", ")})`, c.offset];
+    for (let i = 0; i < count; i++) types.push(decodeTypeBinary(data, c));
+    return `Tuple(${types.join(", ")})`;
   }
 
   if (code === 0x20) {
     // Tuple named
-    const [count, _] = readLEB128(data, c);
+    const count = readLEB128(data, c);
     const parts: string[] = [];
     for (let i = 0; i < count; i++) {
       const name = readString(data, c);
-      const type = decodeTypeBinary(data, c)[0];
+      const type = decodeTypeBinary(data, c);
       parts.push(`${name} ${type}`);
     }
-    return [`Tuple(${parts.join(", ")})`, c.offset];
+    return `Tuple(${parts.join(", ")})`;
   }
 
   if (code === 0x2a) {
     // Variant
-    const [count, _] = readLEB128(data, c);
+    const count = readLEB128(data, c);
     const types: string[] = [];
-    for (let i = 0; i < count; i++) types.push(decodeTypeBinary(data, c)[0]);
-    return [`Variant(${types.join(", ")})`, c.offset];
+    for (let i = 0; i < count; i++) types.push(decodeTypeBinary(data, c));
+    return `Variant(${types.join(", ")})`;
   }
 
   if (code === 0x13) {
     const p = data[c.offset++];
-    return [`DateTime64(${p})`, c.offset];
+    return `DateTime64(${p})`;
   }
   if (code === 0x14) {
     const p = data[c.offset++];
     const tz = readString(data, c);
-    return [`DateTime64(${p}, '${tz}')`, c.offset];
+    return `DateTime64(${p}, '${tz}')`;
   }
 
   if (code === 0x16) {
-    const [n, _] = readLEB128(data, c);
-    return [`FixedString(${n})`, c.offset];
+    const n = readLEB128(data, c);
+    return `FixedString(${n})`;
   }
 
   if (code >= 0x19 && code <= 0x1c) {
@@ -1578,7 +1904,7 @@ function decodeTypeBinary(data: Uint8Array, c: Cursor): [string, number] {
           : code === 0x1b
             ? "Decimal128"
             : "Decimal256";
-    return [`${name}(${p}, ${s})`, c.offset];
+    return `${name}(${p}, ${s})`;
   }
 
   throw new Error(
