@@ -25,7 +25,7 @@ export let usingNativeZstd = false;
 
 async function initLz4(): Promise<void> {
   // Try native lz4-napi first in Node.js
-  if (typeof process !== "undefined" && process.versions?.node) {
+  if (typeof process !== "undefined" && process.versions?.node && typeof Buffer !== "undefined") {
     try {
       const native = await import("lz4-napi");
       // lz4-napi compressSync prepends 4-byte size prefix - strip it for raw block output
@@ -69,7 +69,7 @@ async function initLz4(): Promise<void> {
 
 async function initZstd(): Promise<void> {
   // Try native zstd-napi first in Node.js
-  if (typeof process !== "undefined" && process.versions?.node) {
+  if (typeof process !== "undefined" && process.versions?.node && typeof Buffer !== "undefined") {
     try {
       const native = await import("zstd-napi");
       zstdCompressFn = (d, level) =>
