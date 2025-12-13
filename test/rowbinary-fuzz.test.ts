@@ -2,8 +2,9 @@ import { describe, it, before, after } from "node:test";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 import { init, insert, query, collectText } from "../client.ts";
 import {
-  encodeRowBinaryWithNames,
-  streamDecodeRowBinaryWithNamesAndTypesAll,
+  encodeRowBinary,
+  streamDecodeRowBinary,
+  type ColumnDef,
 } from "../rowbinary.ts";
 
 describe("RowBinary Fuzz Tests", { timeout: 300000 }, () => {
@@ -55,14 +56,20 @@ describe("RowBinary Fuzz Tests", { timeout: 300000 }, () => {
         );
 
         // 3. Query source in RowBinary format and decode via streaming
-        const decoded = await streamDecodeRowBinaryWithNamesAndTypesAll(
+        let columns: ColumnDef[] = [];
+        const rows: unknown[][] = [];
+        for await (const batch of streamDecodeRowBinary(
           query(
             `SELECT * FROM ${srcTable} FORMAT RowBinaryWithNamesAndTypes`,
             sessionId,
             { baseUrl, auth },
           ),
           { mapAsArray: true },
-        );
+        )) {
+          columns = batch.columns;
+          rows.push(...batch.rows);
+        }
+        const decoded = { columns, rows };
 
         // 5. Create empty dest table
         await consume(
@@ -74,9 +81,9 @@ describe("RowBinary Fuzz Tests", { timeout: 300000 }, () => {
         );
 
         // 6. Encode and insert
-        const encoded = encodeRowBinaryWithNames(decoded.columns, decoded.rows);
+        const encoded = encodeRowBinary(decoded.columns, decoded.rows);
         await insert(
-          `INSERT INTO ${dstTable} FORMAT RowBinaryWithNames`,
+          `INSERT INTO ${dstTable} FORMAT RowBinaryWithNamesAndTypes`,
           encoded,
           sessionId,
           { baseUrl, auth },

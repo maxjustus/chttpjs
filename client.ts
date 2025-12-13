@@ -7,13 +7,15 @@ import {
 } from "./compression.ts";
 
 export {
-  encodeRowBinaryWithNames,
-  decodeRowBinaryWithNames,
-  decodeRowBinaryWithNamesAndTypes,
+  encodeRowBinary,
+  decodeRowBinary,
+  streamEncodeRowBinary,
+  streamDecodeRowBinary,
   type ColumnDef,
   type ScalarType,
   type ColumnType,
   type DecodeResult,
+  type StreamDecodeResult,
   ClickHouseDateTime64,
 } from "./rowbinary.ts";
 
@@ -584,7 +586,7 @@ async function* streamText(
  *
  * @example
  * const data = await collectBytes(query("SELECT * FROM t FORMAT RowBinaryWithNamesAndTypes", session, config));
- * const result = decodeRowBinaryWithNamesAndTypes(data);
+ * const result = decodeRowBinary(data);
  */
 async function collectBytes(
   chunks: AsyncIterable<Uint8Array>,

@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 import { init, insert, query, collectBytes, collectText } from "../client.ts";
 import {
-  encodeRowBinaryWithNames,
-  decodeRowBinaryWithNamesAndTypes,
+  encodeRowBinary,
+  decodeRowBinary,
   type ColumnDef,
 } from "../rowbinary.ts";
 
@@ -27,7 +27,7 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
   });
 
   describe("Basic types", () => {
-    it("should insert with RowBinaryWithNames format", async () => {
+    it("should insert with RowBinaryWithNamesAndTypes format", async () => {
       for await (const _ of query(
         "CREATE TABLE IF NOT EXISTS test_rb_basic (id UInt32, name String, value Float64) ENGINE = Memory",
         sessionId,
@@ -45,10 +45,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [2, "bob", 2.5],
         [3, "charlie", 3.5],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_basic FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_basic FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth, compression: "lz4" },
@@ -92,10 +92,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [2, null],
         [3, 300],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_nullable FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_nullable FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -141,10 +141,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [2, ["baz"], new Int32Array([100, 200])],
         [3, [], []],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_array FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_array FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -187,10 +187,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, ["alice", 100, 1.5]],
         [2, ["bob", 200, 2.5]],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_tuple FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_tuple FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -233,10 +233,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [2, new Map([["baz", 300]])],
         [3, {}],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_map FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_map FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -279,10 +279,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, new Date("2024-01-15")],
         [2, new Date("1950-06-20")], // Pre-1970 date
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_date32 FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_date32 FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -325,10 +325,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, new Date("2024-01-15T12:30:45.123Z")],
         [2, new Date("2024-06-20T00:00:00.000Z")],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_dt64 FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_dt64 FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -372,10 +372,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, "ABCD"],
         [2, "XY"], // Will be padded
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_fixedstring FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_fixedstring FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -420,10 +420,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, "550e8400-e29b-41d4-a716-446655440000"],
         [2, "00000000-0000-0000-0000-000000000000"],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_uuid FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_uuid FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -472,10 +472,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, "192.168.1.1", "2001:db8:85a3:0:0:8a2e:370:7334"],
         [2, "10.0.0.1", "::1"],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_ip FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_ip FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -521,10 +521,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, 12345678901234567890n, 98765432109876543210n],
         [2, -12345678901234567890n, 0n],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_int128 FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_int128 FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -570,10 +570,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, bigVal, bigVal],
         [2, -bigVal, 0n],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_int256 FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_int256 FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -611,19 +611,20 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       )) {
       }
 
+      // Must use Decimal(precision, scale) format to match ClickHouse
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
-        { name: "d32", type: "Decimal32(9, 2)" },
-        { name: "d64", type: "Decimal64(18, 4)" },
+        { name: "d32", type: "Decimal(9, 2)" },
+        { name: "d64", type: "Decimal(18, 4)" },
       ];
       const rows = [
         [1, 123.45, 12345.6789],
         [2, -99.99, -0.0001],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_decimal FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_decimal FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -659,20 +660,20 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       )) {
       }
 
-      // Decimal128(10) and Decimal256(20) - scale is in the type parameter
+      // Decimal128/256 must use Decimal(precision, scale) format to match ClickHouse
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
-        { name: "d128", type: "Decimal128(10)" },
-        { name: "d256", type: "Decimal256(20)" },
+        { name: "d128", type: "Decimal(38, 10)" },
+        { name: "d256", type: "Decimal(76, 20)" },
       ];
       const rows = [
         [1, "123456789.1234567890", "1234567890.12345678901234567890"],
         [2, "-999999999.9999999999", "-1.00000000000000000001"],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_decimal_big FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_decimal_big FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -724,10 +725,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [2, 1],
         [3, 2],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_enum8 FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_enum8 FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -775,10 +776,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [2, 100],
         [3, 1000],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_enum16 FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_enum16 FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -827,10 +828,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, ["outer", [1, 2, 3], [3.14, "inner"]]],
         [2, ["test", [], [2.71, "nested"]]],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_nested FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_nested FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -905,10 +906,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [3, { type: 2, value: 3.14 }],
         [4, null],
       ];
-      const data = encodeRowBinaryWithNames(columns, rows);
+      const data = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_variant FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_variant FORMAT RowBinaryWithNamesAndTypes",
         data,
         sessionId,
         { baseUrl, auth },
@@ -959,10 +960,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, "alice", 1.5, true],
         [2, "bob", 2.5, false],
       ];
-      const encoded = encodeRowBinaryWithNames(columns, rows);
+      const encoded = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_decode FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_decode FORMAT RowBinaryWithNamesAndTypes",
         encoded,
         sessionId,
         { baseUrl, auth },
@@ -976,7 +977,7 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         ),
       );
 
-      const decoded = decodeRowBinaryWithNamesAndTypes(data);
+      const decoded = decodeRowBinary(data);
 
       assert.strictEqual(decoded.columns.length, 4);
       assert.strictEqual(decoded.columns[0].name, "id");
@@ -1012,10 +1013,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, ["foo", "bar"], { a: 10, b: 20 }, ["hello", 3.14]],
         [2, [], {}, ["world", 2.71]],
       ];
-      const encoded = encodeRowBinaryWithNames(columns, rows);
+      const encoded = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_decode_complex FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_decode_complex FORMAT RowBinaryWithNamesAndTypes",
         encoded,
         sessionId,
         { baseUrl, auth },
@@ -1029,7 +1030,7 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         ),
       );
 
-      const decoded = decodeRowBinaryWithNamesAndTypes(data);
+      const decoded = decodeRowBinary(data);
 
       assert.strictEqual(decoded.rows.length, 2);
       assert.deepStrictEqual(decoded.rows[0][1], ["foo", "bar"]);
@@ -1069,10 +1070,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [2, { str: "world", num: 100, flag: false, arr: [4, 5] }],
         [3, { str: "test", num: 0, flag: true, arr: [] }],
       ];
-      const encoded = encodeRowBinaryWithNames(columns, rows);
+      const encoded = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_json FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_json FORMAT RowBinaryWithNamesAndTypes",
         encoded,
         sessionId,
         { baseUrl, auth },
@@ -1117,10 +1118,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [1, { name: "alice", value: null }],
         [2, { name: "bob", value: 42 }],
       ];
-      const encoded = encodeRowBinaryWithNames(columns, rows);
+      const encoded = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_json_null FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_json_null FORMAT RowBinaryWithNamesAndTypes",
         encoded,
         sessionId,
         { baseUrl, auth },
@@ -1167,10 +1168,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       ];
       const testDate = new Date("2024-06-15T10:30:00.123Z");
       const rows = [[1, { event: "login", timestamp: testDate }]];
-      const encoded = encodeRowBinaryWithNames(columns, rows);
+      const encoded = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_json_date FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_json_date FORMAT RowBinaryWithNamesAndTypes",
         encoded,
         sessionId,
         { baseUrl, auth },
@@ -1221,10 +1222,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         { name: "data", type: "JSON" },
       ];
       const rows = [[1, { name: "test", count: 5, active: true }]];
-      const encoded = encodeRowBinaryWithNames(columns, rows);
+      const encoded = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_json_rt FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_json_rt FORMAT RowBinaryWithNamesAndTypes",
         encoded,
         sessionId,
         { baseUrl, auth },
@@ -1239,7 +1240,7 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         ),
       );
 
-      const decoded = decodeRowBinaryWithNamesAndTypes(data);
+      const decoded = decodeRowBinary(data);
       assert.strictEqual(decoded.rows.length, 1);
       assert.strictEqual(decoded.rows[0][0], 1);
       // The JSON column should be decoded as an object
@@ -1276,10 +1277,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [4, 3.14], // Float64
         [5, null], // Nothing
       ];
-      const encoded = encodeRowBinaryWithNames(columns, rows);
+      const encoded = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_dynamic FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_dynamic FORMAT RowBinaryWithNamesAndTypes",
         encoded,
         sessionId,
         { baseUrl, auth },
@@ -1331,10 +1332,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [2, { type: "Int16", value: -1000 }],
         [3, { type: "Array(String)", value: ["a", "b", "c"] }],
       ];
-      const encoded = encodeRowBinaryWithNames(columns, rows);
+      const encoded = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_dynamic_explicit FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_dynamic_explicit FORMAT RowBinaryWithNamesAndTypes",
         encoded,
         sessionId,
         { baseUrl, auth },
@@ -1382,10 +1383,10 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [2, "hello"],
         [3, null],
       ];
-      const encoded = encodeRowBinaryWithNames(columns, rows);
+      const encoded = encodeRowBinary(columns, rows);
 
       await insert(
-        "INSERT INTO test_rb_dynamic_rt FORMAT RowBinaryWithNames",
+        "INSERT INTO test_rb_dynamic_rt FORMAT RowBinaryWithNamesAndTypes",
         encoded,
         sessionId,
         { baseUrl, auth },
@@ -1399,7 +1400,7 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         ),
       );
 
-      const decoded = decodeRowBinaryWithNamesAndTypes(data);
+      const decoded = decodeRowBinary(data);
       assert.strictEqual(decoded.rows.length, 3);
       // Dynamic values come back as {type, value}
       const row0data = decoded.rows[0][1] as { type: string; value: unknown };

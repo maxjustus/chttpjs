@@ -141,12 +141,12 @@ const bytes = await collectBytes(
 
 ## RowBinary Format (Experimental)
 
-Binary format that's ~7x faster to encode than JSON for simple data, with ~3x smaller payloads:
+Binary format that's ~7x faster to encode than JSON for simple data, with ~3x smaller payloads. Uses `RowBinaryWithNamesAndTypes` format (self-describing with column names and types in header).
 
 ```ts
 import {
   insert,
-  encodeRowBinaryWithNames,
+  encodeRowBinary,
   type ColumnDef,
 } from "@maxjustus/chttp";
 
@@ -161,10 +161,10 @@ const rows = [
   [2, "bob", 2.5],
 ];
 
-const data = encodeRowBinaryWithNames(columns, rows);
+const data = encodeRowBinary(columns, rows);
 
 await insert(
-  "INSERT INTO table FORMAT RowBinaryWithNames",
+  "INSERT INTO table FORMAT RowBinaryWithNamesAndTypes",
   data,
   "session123",
   config,
@@ -210,31 +210,67 @@ const rows = [
 ];
 ```
 
-### Decoding Query Results
+### Streaming Insert
 
-Use `collectBytes` with `RowBinaryWithNamesAndTypes` format to decode query results:
+For large inserts, use `streamEncodeRowBinary` to generate chunks on demand:
 
 ```ts
-import {
-  query,
-  collectBytes,
-  decodeRowBinaryWithNamesAndTypes,
-} from "@maxjustus/chttp";
+import { insert, streamEncodeRowBinary, type ColumnDef } from "@maxjustus/chttp";
 
-const data = await collectBytes(
-  query(
-    "SELECT * FROM table FORMAT RowBinaryWithNamesAndTypes",
-    "session123",
-    config,
-  ),
+const columns: ColumnDef[] = [
+  { name: "id", type: "UInt32" },
+  { name: "value", type: "Float64" },
+];
+
+async function* generateRows() {
+  for (let i = 0; i < 1000000; i++) {
+    yield [i, Math.random()];
+  }
+}
+
+await insert(
+  "INSERT INTO table FORMAT RowBinaryWithNamesAndTypes",
+  streamEncodeRowBinary(columns, generateRows()),
+  "session123",
+  config,
 );
-
-const { columns, rows } = decodeRowBinaryWithNamesAndTypes(data);
-// columns: [{ name: "id", type: "UInt32" }, { name: "name", type: "String" }, ...]
-// rows: [[1, "alice"], [2, "bob"], ...]
 ```
 
-The `decodeRowBinaryWithNamesAndTypes` function returns column names, types, and row data. For `RowBinaryWithNames` format (types not included), use `decodeRowBinaryWithNames(data, types)` and provide column types.
+Options: `chunkSize` (default 64KB), `includeHeader` (default true).
+
+### Streaming Select
+
+Use `streamDecodeRowBinary` to decode rows as they arrive (yields batches per chunk):
+
+```ts
+import { query, streamDecodeRowBinary } from "@maxjustus/chttp";
+
+const stream = query(
+  "SELECT * FROM table FORMAT RowBinaryWithNamesAndTypes",
+  "session123",
+  config,
+);
+
+for await (const { columns, rows } of streamDecodeRowBinary(stream)) {
+  for (const row of rows) {
+    console.log(row);
+  }
+}
+```
+
+### Buffered Decode
+
+For smaller results, buffer the entire response:
+
+```ts
+import { query, collectBytes, decodeRowBinary } from "@maxjustus/chttp";
+
+const data = await collectBytes(
+  query("SELECT * FROM table FORMAT RowBinaryWithNamesAndTypes", "session123", config),
+);
+
+const { columns, rows } = decodeRowBinary(data);
+```
 
 ## JSONCompactEachRowWithNames Format
 

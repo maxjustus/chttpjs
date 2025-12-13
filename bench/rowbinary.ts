@@ -4,11 +4,10 @@
 
 import { init, encodeBlock, decodeBlock, Method } from "../compression.ts";
 import {
-  encodeRowBinaryWithNames,
-  decodeRowBinaryWithNames,
-  decodeRowBinaryWithNamesAndTypes,
-  streamDecodeRowBinaryWithNamesAndTypesAll,
-  streamEncodeRowBinaryWithNames,
+  encodeRowBinary,
+  decodeRowBinary,
+  streamDecodeRowBinary,
+  streamEncodeRowBinary,
   type ColumnDef,
 } from "../rowbinary.ts";
 
@@ -162,6 +161,17 @@ async function collectChunks(gen: AsyncIterable<Uint8Array>): Promise<Uint8Array
   return result;
 }
 
+// Helper to collect all rows from streaming decode
+async function collectRowBinary(chunks: AsyncIterable<Uint8Array>): Promise<{ columns: ColumnDef[]; rows: unknown[][] }> {
+  let columns: ColumnDef[] = [];
+  const rows: unknown[][] = [];
+  for await (const batch of streamDecodeRowBinary(chunks)) {
+    columns = batch.columns;
+    rows.push(...batch.rows);
+  }
+  return { columns, rows };
+}
+
 // --- JSONEachRow helpers ---
 
 const encoder = new TextEncoder();
@@ -218,7 +228,7 @@ async function main() {
 
   // Pre-encode for decode benchmarks
   const simpleJsonEncoded = encodeJsonEachRow(simpleData);
-  const simpleRowBinaryEncoded = encodeRowBinaryWithNames(
+  const simpleRowBinaryEncoded = encodeRowBinary(
     simpleColumns,
     simpleRowsArray,
   );
@@ -242,7 +252,7 @@ async function main() {
   const rbEncodeSimple = bench(
     "RowBinary encode",
     () => {
-      encodeRowBinaryWithNames(simpleColumns, simpleRowsArray);
+      encodeRowBinary(simpleColumns, simpleRowsArray);
     },
     50,
     ITERATIONS,
@@ -264,10 +274,7 @@ async function main() {
   const rbDecodeSimple = bench(
     "RowBinary decode",
     () => {
-      decodeRowBinaryWithNames(
-        simpleRowBinaryEncoded,
-        simpleColumns.map((c) => c.type),
-      );
+      decodeRowBinary(simpleRowBinaryEncoded);
     },
     50,
     ITERATIONS,
@@ -296,7 +303,7 @@ async function main() {
   const rbFullSimple = bench(
     "RowBinary + LZ4",
     () => {
-      const data = encodeRowBinaryWithNames(simpleColumns, simpleRowsArray);
+      const data = encodeRowBinary(simpleColumns, simpleRowsArray);
       encodeBlock(data, Method.LZ4);
     },
     50,
@@ -319,7 +326,7 @@ async function main() {
   const escapeRowsArray = escapeData.map((r) => [r.id, r.name, r.desc, r.path]);
 
   const escapeJsonEncoded = encodeJsonEachRow(escapeData);
-  const escapeRowBinaryEncoded = encodeRowBinaryWithNames(
+  const escapeRowBinaryEncoded = encodeRowBinary(
     escapeColumns,
     escapeRowsArray,
   );
@@ -342,7 +349,7 @@ async function main() {
   const rbEncodeEscape = bench(
     "RowBinary encode",
     () => {
-      encodeRowBinaryWithNames(escapeColumns, escapeRowsArray);
+      encodeRowBinary(escapeColumns, escapeRowsArray);
     },
     50,
     ITERATIONS,
@@ -371,7 +378,7 @@ async function main() {
   const rbFullEscape = bench(
     "RowBinary + LZ4",
     () => {
-      const data = encodeRowBinaryWithNames(escapeColumns, escapeRowsArray);
+      const data = encodeRowBinary(escapeColumns, escapeRowsArray);
       encodeBlock(data, Method.LZ4);
     },
     50,
@@ -397,7 +404,7 @@ async function main() {
   ]);
 
   const complexJsonEncoded = encodeJsonEachRow(complexData);
-  const complexRowBinaryEncoded = encodeRowBinaryWithNames(
+  const complexRowBinaryEncoded = encodeRowBinary(
     complexColumns,
     complexRowsArray,
   );
@@ -420,7 +427,7 @@ async function main() {
   const rbEncodeComplex = bench(
     "RowBinary encode",
     () => {
-      encodeRowBinaryWithNames(complexColumns, complexRowsArray);
+      encodeRowBinary(complexColumns, complexRowsArray);
     },
     50,
     ITERATIONS,
@@ -441,10 +448,7 @@ async function main() {
   const rbDecodeComplex = bench(
     "RowBinary decode",
     () => {
-      decodeRowBinaryWithNames(
-        complexRowBinaryEncoded,
-        complexColumns.map((c) => c.type),
-      );
+      decodeRowBinary(complexRowBinaryEncoded);
     },
     50,
     ITERATIONS,
@@ -473,7 +477,7 @@ async function main() {
   const rbFullComplex = bench(
     "RowBinary + LZ4",
     () => {
-      const data = encodeRowBinaryWithNames(complexColumns, complexRowsArray);
+      const data = encodeRowBinary(complexColumns, complexRowsArray);
       encodeBlock(data, Method.LZ4);
     },
     50,
@@ -494,7 +498,7 @@ async function main() {
   ]);
 
   const complexTypedJsonEncoded = encodeJsonEachRow(complexTypedData);
-  const complexTypedRowBinaryEncoded = encodeRowBinaryWithNames(
+  const complexTypedRowBinaryEncoded = encodeRowBinary(
     complexColumns,
     complexTypedRowsArray,
   );
@@ -517,7 +521,7 @@ async function main() {
   const rbEncodeComplexTyped = bench(
     "RowBinary encode",
     () => {
-      encodeRowBinaryWithNames(complexColumns, complexTypedRowsArray);
+      encodeRowBinary(complexColumns, complexTypedRowsArray);
     },
     50,
     ITERATIONS,
@@ -538,10 +542,7 @@ async function main() {
   const rbDecodeComplexTyped = bench(
     "RowBinary decode",
     () => {
-      decodeRowBinaryWithNames(
-        complexTypedRowBinaryEncoded,
-        complexColumns.map((c) => c.type),
-      );
+      decodeRowBinary(complexTypedRowBinaryEncoded);
     },
     50,
     ITERATIONS,
@@ -576,7 +577,7 @@ async function main() {
   const rbFullComplexTyped = bench(
     "RowBinary + LZ4",
     () => {
-      const data = encodeRowBinaryWithNames(
+      const data = encodeRowBinary(
         complexColumns,
         complexTypedRowsArray,
       );
@@ -657,29 +658,14 @@ async function main() {
   // === Streaming vs Sync ===
   console.log("\n=== Streaming vs Sync (Simple Data) ===\n");
 
-  // Build RowBinaryWithNamesAndTypes format for streaming decode
-  // First, calculate the header size in RowBinaryWithNames (1 byte count + names)
-  const namesHeaderSize = 1 + simpleColumns.reduce((s, c) => s + 1 + encoder.encode(c.name).length, 0);
-  const rowDataOnly = simpleRowBinaryEncoded.subarray(namesHeaderSize);
-
-  // Now build the WithNamesAndTypes header
-  const headerParts: number[] = [];
-  headerParts.push(simpleColumns.length); // column count
-  for (const col of simpleColumns) {
-    const nameBytes = encoder.encode(col.name);
-    headerParts.push(nameBytes.length, ...nameBytes);
-  }
-  for (const col of simpleColumns) {
-    const typeBytes = encoder.encode(col.type);
-    headerParts.push(typeBytes.length, ...typeBytes);
-  }
-  const simpleWithTypesEncoded = new Uint8Array([...headerParts, ...rowDataOnly]);
+  // encodeRowBinary already produces RowBinaryWithNamesAndTypes format
+  const simpleWithTypesEncoded = simpleRowBinaryEncoded;
 
   console.log("Decoding (sync vs streaming):");
   const syncDecode = bench(
     "Sync decode",
     () => {
-      decodeRowBinaryWithNamesAndTypes(simpleWithTypesEncoded);
+      decodeRowBinary(simpleWithTypesEncoded);
     },
     50,
     ITERATIONS,
@@ -690,7 +676,7 @@ async function main() {
   const streamDecode1Chunk = await benchAsync(
     "Stream decode (1 chunk)",
     async () => {
-      await streamDecodeRowBinaryWithNamesAndTypesAll(chunkedStream(simpleWithTypesEncoded, simpleWithTypesEncoded.length));
+      await collectRowBinary(chunkedStream(simpleWithTypesEncoded, simpleWithTypesEncoded.length));
     },
     50,
     ITERATIONS,
@@ -701,7 +687,7 @@ async function main() {
   const streamDecode64K = await benchAsync(
     "Stream decode (64KB chunks)",
     async () => {
-      await streamDecodeRowBinaryWithNamesAndTypesAll(chunkedStream(simpleWithTypesEncoded, 64 * 1024));
+      await collectRowBinary(chunkedStream(simpleWithTypesEncoded, 64 * 1024));
     },
     50,
     ITERATIONS,
@@ -712,29 +698,18 @@ async function main() {
   const streamDecode4K = await benchAsync(
     "Stream decode (4KB chunks)",
     async () => {
-      await streamDecodeRowBinaryWithNamesAndTypesAll(chunkedStream(simpleWithTypesEncoded, 4 * 1024));
+      await collectRowBinary(chunkedStream(simpleWithTypesEncoded, 4 * 1024));
     },
     50,
     ITERATIONS,
   );
   console.log(formatResult(streamDecode4K, ROWS));
 
-  // Streaming with large batch (reduced async overhead)
-  const streamDecodeBatched = await benchAsync(
-    "Stream decode (batch=1000)",
-    async () => {
-      await streamDecodeRowBinaryWithNamesAndTypesAll(chunkedStream(simpleWithTypesEncoded, simpleWithTypesEncoded.length));
-    },
-    50,
-    ITERATIONS,
-  );
-  console.log(formatResult(streamDecodeBatched, ROWS));
-
   console.log("\nEncoding (sync vs streaming):");
   const syncEncode = bench(
     "Sync encode",
     () => {
-      encodeRowBinaryWithNames(simpleColumns, simpleRowsArray);
+      encodeRowBinary(simpleColumns, simpleRowsArray);
     },
     50,
     ITERATIONS,
@@ -744,7 +719,7 @@ async function main() {
   const streamEncode = await benchAsync(
     "Stream encode",
     async () => {
-      await collectChunks(streamEncodeRowBinaryWithNames(simpleColumns, simpleRowsArray));
+      await collectChunks(streamEncodeRowBinary(simpleColumns, simpleRowsArray));
     },
     50,
     ITERATIONS,
@@ -755,7 +730,6 @@ async function main() {
   console.log(`  Decode (1 chunk): ${((streamDecode1Chunk.ms / syncDecode.ms - 1) * 100).toFixed(1)}% overhead`);
   console.log(`  Decode (64KB):    ${((streamDecode64K.ms / syncDecode.ms - 1) * 100).toFixed(1)}% overhead`);
   console.log(`  Decode (4KB):     ${((streamDecode4K.ms / syncDecode.ms - 1) * 100).toFixed(1)}% overhead`);
-  console.log(`  Decode (batched): ${((streamDecodeBatched.ms / syncDecode.ms - 1) * 100).toFixed(1)}% overhead`);
   console.log(`  Encode:           ${((streamEncode.ms / syncEncode.ms - 1) * 100).toFixed(1)}% overhead`);
 }
 

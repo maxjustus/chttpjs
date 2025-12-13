@@ -1054,7 +1054,7 @@ class DynamicCodec implements Codec {
 // Public API
 // ============================================================================
 
-export function encodeRowBinaryWithNames(
+export function encodeRowBinary(
   columns: ColumnDef[],
   rows: unknown[][],
 ): Uint8Array {
@@ -1066,10 +1066,13 @@ export function encodeRowBinaryWithNames(
   // 2. Names
   for (const col of columns) encoder.string(col.name);
 
-  // 3. Pre-compile codecs
+  // 3. Types
+  for (const col of columns) encoder.string(col.type);
+
+  // 4. Pre-compile codecs
   const codecs = columns.map((c) => createCodec(c.type));
 
-  // 4. Encode rows
+  // 5. Encode rows
   for (const row of rows) {
     for (let i = 0; i < columns.length; i++) {
       codecs[i].encode(encoder, row[i]);
@@ -1079,46 +1082,7 @@ export function encodeRowBinaryWithNames(
   return encoder.finish();
 }
 
-export function decodeRowBinaryWithNames(
-  data: Uint8Array,
-  types: ColumnType[],
-): DecodeResult {
-  const cursor = { offset: 0 };
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-
-  // 1. Count
-  const colCount = readLEB128(data, cursor);
-
-  if (colCount !== types.length) {
-    throw new Error(
-      `Column count mismatch: data has ${colCount}, provided ${types.length}`,
-    );
-  }
-
-  // 2. Names
-  const columns: ColumnDef[] = [];
-  for (let i = 0; i < colCount; i++) {
-    const name = readString(data, cursor);
-    columns.push({ name, type: types[i] });
-  }
-
-  // 3. Codecs
-  const codecs = types.map((t) => createCodec(t));
-
-  // 4. Rows
-  const rows: unknown[][] = [];
-  while (cursor.offset < data.length) {
-    const row = new Array(colCount);
-    for (let i = 0; i < colCount; i++) {
-      row[i] = codecs[i].decode(view, data, cursor);
-    }
-    rows.push(row);
-  }
-
-  return { columns, rows };
-}
-
-export function decodeRowBinaryWithNamesAndTypes(
+export function decodeRowBinary(
   data: Uint8Array,
   options?: DecodeOptions,
 ): DecodeResult {
@@ -1152,10 +1116,8 @@ export function decodeRowBinaryWithNamesAndTypes(
 // Streaming API
 // ============================================================================
 
-export interface StreamDecodeOptions extends DecodeOptions {
-  /** Yield rows in batches of this size (default: 1) */
-  batchSize?: number;
-}
+// StreamDecodeOptions is just DecodeOptions - no batchSize needed
+// Batched mode yields all complete rows from each chunk naturally
 
 export interface StreamDecodeResult {
   columns: ColumnDef[];
@@ -1181,16 +1143,15 @@ async function readStreamString(reader: StreamingReader, options: DecodeOptions 
   }
 }
 
-/** Core row decode loop - shared by both streaming decode functions */
+/** Core row decode loop - shared by both streaming decode functions.
+ * Yields all complete rows from each chunk - natural batching based on decompression output. */
 async function* streamDecodeRows(
   reader: StreamingReader,
   columns: ColumnDef[],
   codecs: Codec[],
-  batchSize: number,
   options: DecodeOptions | undefined,
 ): AsyncGenerator<StreamDecodeResult> {
   const colCount = columns.length;
-  let batch: unknown[][] = [];
 
   while (reader.hasMore()) {
     const slice = reader.getSlice();
@@ -1201,43 +1162,51 @@ async function* streamDecodeRows(
 
     const view = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
     const cursor: Cursor = { offset: 0, options };
+    const batch: unknown[][] = [];
+    let lastRowEnd = 0;
 
     try {
-      const row = new Array(colCount);
-      for (let i = 0; i < colCount; i++) {
-        row[i] = codecs[i].decode(view, slice, cursor);
+      // Decode all complete rows from current buffer
+      while (cursor.offset < slice.length) {
+        const row = new Array(colCount);
+        for (let i = 0; i < colCount; i++) {
+          row[i] = codecs[i].decode(view, slice, cursor);
+        }
+        batch.push(row);
+        lastRowEnd = cursor.offset;
       }
-      reader.advance(cursor.offset);
-      batch.push(row);
-      if (batch.length >= batchSize) {
+      // Advance past all decoded rows and yield batch
+      reader.advance(lastRowEnd);
+      if (batch.length > 0) {
         yield { columns, rows: batch };
-        batch = [];
       }
     } catch (e) {
       if (e instanceof RangeError) {
+        // Advance past completed rows, yield them, pull more for incomplete row
+        if (lastRowEnd > 0) {
+          reader.advance(lastRowEnd);
+          if (batch.length > 0) {
+            yield { columns, rows: batch };
+          }
+        }
         if (!(await reader.pullMore())) throw new Error('Unexpected EOF mid-row');
         continue;
       }
       throw e;
     }
   }
-
-  if (batch.length > 0) {
-    yield { columns, rows: batch };
-  }
 }
 
 /**
  * Streaming decode of RowBinaryWithNamesAndTypes format.
- * Yields rows in batches as they're parsed from the chunk stream.
+ * Yields batches of rows as they arrive from each chunk.
  */
-export async function* streamDecodeRowBinaryWithNamesAndTypes(
+export async function* streamDecodeRowBinary(
   chunks: AsyncIterable<Uint8Array>,
-  options?: StreamDecodeOptions,
+  options?: DecodeOptions,
 ): AsyncGenerator<StreamDecodeResult> {
   const reader = new StreamingReader(chunks);
   reader.options = options;
-  const batchSize = options?.batchSize ?? 1;
 
   if (!(await reader.ensure(1))) return;
 
@@ -1262,72 +1231,7 @@ export async function* streamDecodeRowBinaryWithNamesAndTypes(
       const columns = names.map((name, i) => ({ name, type: types[i] }));
       const codecs = types.map(createCodec);
 
-      yield* streamDecodeRows(reader, columns, codecs, batchSize, options);
-      return;
-    } catch (e) {
-      if (e instanceof RangeError) {
-        if (!(await reader.pullMore())) throw new Error('Unexpected EOF reading header');
-        continue;
-      }
-      throw e;
-    }
-  }
-}
-
-/**
- * Convenience wrapper: collect all rows from streaming decode into DecodeResult.
- */
-export async function streamDecodeRowBinaryWithNamesAndTypesAll(
-  chunks: AsyncIterable<Uint8Array>,
-  options?: DecodeOptions,
-): Promise<DecodeResult> {
-  let columns: ColumnDef[] = [];
-  const rows: unknown[][] = [];
-
-  for await (const { columns: cols, rows: batch } of streamDecodeRowBinaryWithNamesAndTypes(chunks, { ...options, batchSize: 10000 })) {
-    columns = cols;
-    rows.push(...batch);
-  }
-
-  return { columns, rows };
-}
-
-/**
- * Streaming decode of RowBinaryWithNames format.
- * Types must be provided externally.
- */
-export async function* streamDecodeRowBinaryWithNames(
-  chunks: AsyncIterable<Uint8Array>,
-  types: ColumnType[],
-  options?: StreamDecodeOptions,
-): AsyncGenerator<StreamDecodeResult> {
-  const reader = new StreamingReader(chunks);
-  reader.options = options;
-  const batchSize = options?.batchSize ?? 1;
-
-  if (!(await reader.ensure(1))) return;
-
-  while (true) {
-    const slice = reader.getSlice();
-    const cursor: Cursor = { offset: 0, options };
-    try {
-      const colCount = readLEB128(slice, cursor);
-      reader.advance(cursor.offset);
-
-      if (colCount !== types.length) {
-        throw new Error(`Column count mismatch: data has ${colCount}, provided ${types.length}`);
-      }
-
-      // Read names
-      const columns: ColumnDef[] = [];
-      for (let i = 0; i < colCount; i++) {
-        const name = await readStreamString(reader, options, 'Unexpected EOF reading column names');
-        columns.push({ name, type: types[i] });
-      }
-
-      const codecs = types.map(createCodec);
-
-      yield* streamDecodeRows(reader, columns, codecs, batchSize, options);
+      yield* streamDecodeRows(reader, columns, codecs, options);
       return;
     } catch (e) {
       if (e instanceof RangeError) {
@@ -1347,10 +1251,10 @@ export interface StreamingEncodeOptions {
 }
 
 /**
- * Streaming encode rows as RowBinaryWithNames format.
+ * Streaming encode rows as RowBinaryWithNamesAndTypes format.
  * Yields Uint8Array chunks as the buffer fills up.
  */
-export async function* streamEncodeRowBinaryWithNames(
+export async function* streamEncodeRowBinary(
   columns: ColumnDef[],
   rows: AsyncIterable<unknown[]> | Iterable<unknown[]>,
   options?: StreamingEncodeOptions,
@@ -1366,6 +1270,9 @@ export async function* streamEncodeRowBinaryWithNames(
     encoder.leb128(columns.length);
     for (const col of columns) {
       encoder.string(col.name);
+    }
+    for (const col of columns) {
+      encoder.string(col.type);
     }
   }
 
