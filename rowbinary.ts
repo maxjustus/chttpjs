@@ -1,127 +1,42 @@
-/**
- * RowBinary encoder/decoder for ClickHouse
- * Refactored to use pre-compiled Codecs for performance.
- */
+import {
+  type ColumnDef,
+  type DecodeResult,
+  type DecodeOptions,
+  type Cursor,
+  TEXT_ENCODER as textEncoder,
+  HEX_LUT,
+  BYTE_TO_HEX,
+  TYPED_ARRAYS,
+  Float32NaN,
+  Float64NaN,
+  ClickHouseDateTime64,
+  readVarint as readLEB128FromUtils,
+  leb128Size,
+  readString,
+  checkBounds,
+  writeBigInt128,
+  readBigInt128,
+  writeBigInt256,
+  readBigInt256,
+  parseTypeList,
+  parseTupleElements,
+  decimalByteSize,
+  extractDecimalScale,
+  parseDecimalToScaledBigInt,
+  formatScaledBigInt,
+  expandIPv6,
+  inferType,
+} from "./native_utils.ts";
 
-// ============================================================================
-// Types & Constants
-// ============================================================================
-
-export type ScalarType =
-  | "Int8"
-  | "Int16"
-  | "Int32"
-  | "Int64"
-  | "UInt8"
-  | "UInt16"
-  | "UInt32"
-  | "UInt64"
-  | "Float32"
-  | "Float64"
-  | "String"
-  | "Bool"
-  | "Date"
-  | "DateTime"
-  | "UUID"
-  | "IPv4"
-  | "IPv6";
-
-export type ColumnType = string;
-
-export interface ColumnDef {
-  name: string;
-  type: ColumnType;
-}
-
-export interface DecodeResult {
-  columns: ColumnDef[];
-  rows: unknown[][];
-}
-
-export interface DecodeOptions {
-  /** Decode Map types as Array<[K, V]> instead of Map<K, V> to preserve duplicate keys */
-  mapAsArray?: boolean;
-}
-
-export interface Cursor {
-  offset: number;
-  options?: DecodeOptions;
-}
-
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
-
-// 128-bit constants
-const INT128_MAX = (1n << 127n) - 1n;
-const INT128_MIN = -(1n << 127n);
-
-// Hex lookup tables for UUID encode/decode (~11x/~60x speedup vs parseInt/toString)
-const HEX_LUT = new Uint8Array(256); // char code -> nibble value (255 = invalid)
-const BYTE_TO_HEX: string[] = [];    // byte -> "00"-"ff"
-for (let i = 0; i < 256; i++) {
-  HEX_LUT[i] = 255;
-  BYTE_TO_HEX[i] = i.toString(16).padStart(2, "0");
-}
-for (let i = 0; i < 10; i++) HEX_LUT[48 + i] = i;      // '0'-'9'
-for (let i = 0; i < 6; i++) {
-  HEX_LUT[65 + i] = 10 + i; // 'A'-'F'
-  HEX_LUT[97 + i] = 10 + i; // 'a'-'f'
-}
-
-// TypedArray mapping for fast paths
-const TYPED_ARRAYS: Record<
-  string,
-  {
-    new(
-      buffer: ArrayBuffer,
-      byteOffset: number,
-      length: number,
-    ): ArrayBufferView;
-    BYTES_PER_ELEMENT: number;
-  }
-> = {
-  Int8: Int8Array,
-  UInt8: Uint8Array,
-  Int16: Int16Array,
-  UInt16: Uint16Array,
-  Int32: Int32Array,
-  UInt32: Uint32Array,
-  Int64: BigInt64Array,
-  UInt64: BigUint64Array,
-  Float32: Float32Array,
-  Float64: Float64Array,
+export {
+  type ColumnDef,
+  type DecodeResult,
+  type DecodeOptions,
+  type Cursor,
+  Float32NaN,
+  Float64NaN,
+  ClickHouseDateTime64,
 };
-
-// NaN wrapper classes to preserve IEEE 754 bit patterns during round-trips.
-//
-// Problem: JavaScript's DataView.setFloat32/setFloat64 canonicalize all NaN values to a single
-// "quiet NaN" representation (0x7FC00000 for float32). IEEE 754 defines many valid NaN bit
-// patterns - signaling NaNs have bit 22 clear, quiet NaNs have it set. ClickHouse's
-// generateRandom() produces signaling NaNs, which get silently converted:
-//
-//   Signaling NaN: 0xFF8C0839 (bit 22 = 0)
-//   After JS:      0xFFCC0839 (bit 22 = 1) ← canonicalized to quiet NaN
-//
-// Solution: Detect NaN on decode and store raw bytes. On encode, copy bytes directly instead
-// of using setFloat32/setFloat64. The wrapper provides NaN semantics via valueOf() so
-// arithmetic and comparisons work as expected.
-export class Float32NaN {
-  readonly bytes: Uint8Array;
-  constructor(bytes: Uint8Array) { this.bytes = bytes; }
-  valueOf(): number { return NaN; }
-  toString(): string { return "NaN"; }
-  toJSON(): null { return null; }
-  [Symbol.toPrimitive](): number { return NaN; }
-}
-
-export class Float64NaN {
-  readonly bytes: Uint8Array;
-  constructor(bytes: Uint8Array) { this.bytes = bytes; }
-  valueOf(): number { return NaN; }
-  toString(): string { return "NaN"; }
-  toJSON(): null { return null; }
-  [Symbol.toPrimitive](): number { return NaN; }
-}
 
 // ============================================================================
 // Encoder Class
@@ -286,12 +201,6 @@ export class RowBinaryEncoder {
   }
 }
 
-function leb128Size(value: number): number {
-  // Math.clz - count leading zeros in binary representation. Optimizes to single instruction on modern CPUs.
-  const bits = 32 - Math.clz32(value | 1);
-  return Math.ceil(bits / 7);
-}
-
 // ============================================================================
 // StreamingReader - Buffer manager for streaming decode
 // ============================================================================
@@ -393,18 +302,13 @@ export function createCodec(type: string): Codec {
   if (cache.has(type)) return cache.get(type)!;
 
   const codec = createCodecImpl(type);
-  // Cache simple types only to avoid memory leaks with unique complex types if that ever happens,
-  // though for column types it's usually bounded.
-  // For now, caching everything as unique schema count is low.
   cache.set(type, codec);
   return codec;
 }
 
 function createCodecImpl(type: string): Codec {
-  // 1. Simple Scalar Codecs
   if (SCALAR_CODECS[type]) return SCALAR_CODECS[type];
 
-  // 2. Complex Types
   if (type.startsWith('Nullable(')) return new NullableCodec(type.slice(9, -1))
   if (type.startsWith('LowCardinality(')) return createCodec(type.slice(15, -1))
   if (type.startsWith('Array(')) return new ArrayCodec(type.slice(6, -1))
@@ -427,8 +331,6 @@ function createCodecImpl(type: string): Codec {
 
   throw new Error(`Unknown or unsupported type: ${type}`);
 }
-
-// --- Scalar Codecs ---
 
 const SCALAR_CODECS: Record<string, Codec> = {
   UInt8: {
@@ -577,10 +479,10 @@ const SCALAR_CODECS: Record<string, Codec> = {
       checkBounds(b, c, 16);
       const o = c.offset;
       // Read bytes in reverse order for each half
-      const b0=b[o+7], b1=b[o+6], b2=b[o+5], b3=b[o+4];
-      const b4=b[o+3], b5=b[o+2], b6=b[o+1], b7=b[o];
-      const b8=b[o+15], b9=b[o+14], b10=b[o+13], b11=b[o+12];
-      const b12=b[o+11], b13=b[o+10], b14=b[o+9], b15=b[o+8];
+      const b0 = b[o + 7], b1 = b[o + 6], b2 = b[o + 5], b3 = b[o + 4];
+      const b4 = b[o + 3], b5 = b[o + 2], b6 = b[o + 1], b7 = b[o];
+      const b8 = b[o + 15], b9 = b[o + 14], b10 = b[o + 13], b11 = b[o + 12];
+      const b12 = b[o + 11], b13 = b[o + 10], b14 = b[o + 9], b15 = b[o + 8];
       c.offset += 16;
       return (
         BYTE_TO_HEX[b0] + BYTE_TO_HEX[b1] + BYTE_TO_HEX[b2] + BYTE_TO_HEX[b3] + "-" +
@@ -856,53 +758,7 @@ class Date32Codec implements Codec {
   }
 }
 
-export class ClickHouseDateTime64 {
-  public ticks: bigint
-  public precision: number
-  private pow: bigint
-
-  constructor(ticks: bigint, precision: number) {
-    this.ticks = ticks
-    this.precision = precision
-    this.pow = 10n ** BigInt(Math.abs(precision - 3))
-  }
-
-  /**
-   * Convert to native Date object.
-   * Throws if value overflows JS Date range or precision is lost (sub-millisecond components).
-   */
-  toDate(): Date {
-    const ms = this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow
-    // Check for overflow (JS Date range: ±8.64e15 ms)
-    if (ms > 8640000000000000n || ms < -8640000000000000n) {
-      throw new RangeError(`DateTime64 value ${ms}ms overflows JS Date range (±8.64e15ms). Use toClosestDate() to clamp.`)
-    }
-    // Check for precision loss
-    if (this.precision > 3 && this.ticks % this.pow !== 0n) {
-      throw new Error(`Precision loss: DateTime64(${this.precision}) value ${this.ticks} cannot be represented as Date without losing precision. Use toClosestDate() or access .ticks directly.`)
-    }
-    return new Date(Number(ms))
-  }
-
-  /**
-   * Convert to native Date object, truncating sub-millisecond precision and clamping to JS Date range.
-   */
-  toClosestDate(): Date {
-    let ms = this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow
-    // Clamp to JS Date range
-    if (ms > 8640000000000000n) ms = 8640000000000000n
-    if (ms < -8640000000000000n) ms = -8640000000000000n
-    return new Date(Number(ms))
-  }
-
-  toJSON(): string {
-    return this.toClosestDate().toJSON()
-  }
-
-  toString(): string {
-    return this.toClosestDate().toString()
-  }
-}
+// ClickHouseDateTime64 is imported from native_utils.ts
 
 class DateTime64Codec implements Codec {
   private precision: number
@@ -1307,101 +1163,11 @@ export async function* streamEncodeRowBinary(
 }
 
 // ============================================================================
-// Internal Helpers
+// Internal Helpers (imported from native_utils.ts)
 // ============================================================================
 
-// --- IO Helpers ---
-
-/** Throws RangeError if not enough bytes available - used for streaming retry */
-function checkBounds(b: Uint8Array, c: Cursor, n: number): void {
-  if (c.offset + n > b.length) throw new RangeError('Buffer underflow');
-}
-
-function readLEB128(data: Uint8Array, c: Cursor): number {
-  let value = 0;
-  let shift = 0;
-  while (true) {
-    if (c.offset >= data.length) throw new RangeError('Buffer underflow');
-    const byte = data[c.offset++];
-    value |= (byte & 0x7f) << shift;
-    if ((byte & 0x80) === 0) break;
-    shift += 7;
-  }
-  return value;
-}
-
-function utf8DecodeSmall(data: Uint8Array, start: number, end: number): string {
-  let result = "";
-  let i = start;
-  while (i < end) {
-    const byte = data[i++];
-    if (byte < 0x80) {
-      result += String.fromCharCode(byte);
-    } else if (byte < 0xe0) {
-      result += String.fromCharCode(((byte & 0x1f) << 6) | (data[i++] & 0x3f));
-    } else if (byte < 0xf0) {
-      result += String.fromCharCode(
-        ((byte & 0x0f) << 12) | ((data[i++] & 0x3f) << 6) | (data[i++] & 0x3f),
-      );
-    } else {
-      const cp =
-        ((byte & 0x07) << 18) |
-        ((data[i++] & 0x3f) << 12) |
-        ((data[i++] & 0x3f) << 6) |
-        (data[i++] & 0x3f);
-      result += String.fromCharCode(
-        0xd800 + ((cp - 0x10000) >> 10),
-        0xdc00 + ((cp - 0x10000) & 0x3ff),
-      );
-    }
-  }
-  return result;
-}
-
-function readString(data: Uint8Array, c: Cursor): string {
-  const len = readLEB128(data, c);
-  checkBounds(data, c, len);
-  const end = c.offset + len;
-  // Optimization for short strings
-  const str =
-    len < 12
-      ? utf8DecodeSmall(data, c.offset, end)
-      : textDecoder.decode(data.subarray(c.offset, end));
-  c.offset = end;
-  return str;
-}
-
-// Core 128/256-bit helpers (used by both Int128/256 codecs and Decimal codecs)
-function writeBigInt128(v: DataView, o: number, val: bigint, signed: boolean): void {
-  const low = val & 0xffffffffffffffffn;
-  const high = val >> 64n;
-  v.setBigUint64(o, low, true);
-  if (signed) v.setBigInt64(o + 8, high, true);
-  else v.setBigUint64(o + 8, high, true);
-}
-
-function readBigInt128(v: DataView, o: number, signed: boolean): bigint {
-  const low = v.getBigUint64(o, true);
-  const high = signed ? v.getBigInt64(o + 8, true) : v.getBigUint64(o + 8, true);
-  return (high << 64n) | low;
-}
-
-function writeBigInt256(v: DataView, o: number, val: bigint, signed: boolean): void {
-  for (let i = 0; i < 3; i++) {
-    v.setBigUint64(o + i * 8, val & 0xffffffffffffffffn, true);
-    val >>= 64n;
-  }
-  if (signed) v.setBigInt64(o + 24, val, true);
-  else v.setBigUint64(o + 24, val, true);
-}
-
-function readBigInt256(v: DataView, o: number, signed: boolean): bigint {
-  let val = signed ? v.getBigInt64(o + 24, true) : v.getBigUint64(o + 24, true);
-  for (let i = 2; i >= 0; i--) {
-    val = (val << 64n) | v.getBigUint64(o + i * 8, true);
-  }
-  return val;
-}
+// Re-alias imported functions for local use
+const readLEB128 = readLEB128FromUtils;
 
 function write128(e: RowBinaryEncoder, value: bigint, signed: boolean): void {
   e.ensure(16);
@@ -1427,29 +1193,6 @@ function read256(view: DataView, c: Cursor, signed: boolean): bigint {
   return val;
 }
 
-// --- Decimal Helpers ---
-
-function decimalByteSize(type: string): 4 | 8 | 16 | 32 {
-  if (type.startsWith("Decimal32")) return 4;
-  if (type.startsWith("Decimal64")) return 8;
-  if (type.startsWith("Decimal128")) return 16;
-  if (type.startsWith("Decimal256")) return 32;
-  const match = type.match(/Decimal\((\d+),/);
-  if (match) {
-    const p = parseInt(match[1], 10);
-    if (p <= 9) return 4;
-    if (p <= 18) return 8;
-    if (p <= 38) return 16;
-    return 32;
-  }
-  return 16;
-}
-
-function extractDecimalScale(type: string): number {
-  const match = type.match(/Decimal\d*\((?:\d+,\s*)?(\d+)\)/);
-  return match ? parseInt(match[1], 10) : 0;
-}
-
 function writeScaledInt(v: DataView, o: number, val: bigint, size: number): void {
   switch (size) {
     case 4: v.setInt32(o, Number(val), true); break;
@@ -1469,111 +1212,6 @@ function readScaledInt(v: DataView, o: number, size: number): bigint {
   return 0n;
 }
 
-function parseDecimalToScaledBigInt(str: string, scale: number): bigint {
-  const neg = str.startsWith("-");
-  if (neg) str = str.slice(1);
-  const dot = str.indexOf(".");
-  let intP: string, fracP: string;
-  if (dot === -1) {
-    intP = str;
-    fracP = "";
-  } else {
-    intP = str.slice(0, dot);
-    fracP = str.slice(dot + 1);
-  }
-
-  if (fracP.length < scale) fracP = fracP.padEnd(scale, "0");
-  else if (fracP.length > scale) fracP = fracP.slice(0, scale);
-
-  const val = BigInt(intP + fracP);
-  return neg ? -val : val;
-}
-
-function formatScaledBigInt(val: bigint, scale: number): string {
-  const neg = val < 0n;
-  if (neg) val = -val;
-  let str = val.toString();
-  if (scale === 0) return neg ? "-" + str : str;
-  while (str.length <= scale) str = "0" + str;
-  const intP = str.slice(0, -scale);
-  const fracP = str.slice(-scale);
-  const r = intP + "." + fracP;
-  return neg ? "-" + r : r;
-}
-
-// --- Parse Helpers ---
-
-function parseTypeList(inner: string): string[] {
-  const types: string[] = [];
-  let depth = 0;
-  let current = "";
-  for (const char of inner) {
-    if (char === "(") depth++;
-    if (char === ")") depth--;
-    if (char === "," && depth === 0) {
-      types.push(current.trim());
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-  if (current.trim()) types.push(current.trim());
-  return types;
-}
-
-function parseTupleElements(
-  inner: string,
-): { name: string | null; type: string }[] {
-  const parts = parseTypeList(inner);
-  return parts.map((part) => {
-    // Attempt to match "name Type"
-    // Heuristic: check if first word is a known type prefix. If so, it's unnamed.
-    // If not, it might be a name.
-    const match = part.match(/^([a-z_][a-z0-9_]*)\s+(.+)$/i);
-    if (match) {
-      const name = match[1];
-      const type = match[2];
-      const typeKeywords = [
-        "Int",
-        "UInt",
-        "Float",
-        "String",
-        "Bool",
-        "Date",
-        "DateTime",
-        "Nullable",
-        "Array",
-        "Tuple",
-        "Map",
-        "Enum",
-        "UUID",
-        "IPv",
-        "Decimal",
-        "FixedString",
-        "Variant",
-        "JSON",
-        "Object",
-      ];
-      if (!typeKeywords.some((kw) => name.startsWith(kw))) {
-        return { name, type };
-      }
-    }
-    return { name: null, type: part };
-  });
-}
-
-function expandIPv6(str: string): string[] {
-  let parts = str.split(":");
-  const emptyIdx = parts.indexOf("");
-  if (emptyIdx !== -1) {
-    const before = parts.slice(0, emptyIdx).filter((p) => p);
-    const after = parts.slice(emptyIdx + 1).filter((p) => p);
-    const missing = 8 - before.length - after.length;
-    parts = [...before, ...Array(missing).fill("0"), ...after];
-  }
-  return parts;
-}
-
 function isExplicitDynamic(v: unknown): v is { type: string; value: unknown } {
   return (
     typeof v === "object" &&
@@ -1582,27 +1220,6 @@ function isExplicitDynamic(v: unknown): v is { type: string; value: unknown } {
     "value" in v &&
     Object.keys(v).length === 2
   );
-}
-
-function inferType(value: unknown): string {
-  if (value === null) return "Nothing";
-  if (typeof value === "boolean") return "Bool";
-  if (typeof value === "string") return "String";
-  if (typeof value === "bigint") {
-    if (value >= INT128_MIN && value <= INT128_MAX) return "Int128";
-    return "Int256";
-  }
-  if (typeof value === "number") {
-    if (Number.isInteger(value)) return "Int64";
-    return "Float64";
-  }
-  if (value instanceof Date) return "DateTime64(3)";
-  if (value instanceof ClickHouseDateTime64) return `DateTime64(${value.precision})`;
-  if (Array.isArray(value)) {
-    if (value.length === 0) return "Array(Nothing)";
-    return `Array(${inferType(value[0])})`;
-  }
-  throw new Error(`Cannot infer Dynamic type for: ${typeof value}`);
 }
 
 // ============================================================================

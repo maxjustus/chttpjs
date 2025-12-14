@@ -12,12 +12,18 @@ export {
   streamEncodeRowBinary,
   streamDecodeRowBinary,
   type ColumnDef,
-  type ScalarType,
-  type ColumnType,
   type DecodeResult,
   type StreamDecodeResult,
   ClickHouseDateTime64,
 } from "./rowbinary.ts";
+
+export {
+  encodeNative,
+  decodeNative,
+  streamEncodeNative,
+  streamDecodeNative,
+  type StreamDecodeNativeResult,
+} from "./native.ts";
 
 export type Compression = "lz4" | "zstd" | "none";
 
