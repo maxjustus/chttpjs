@@ -4,7 +4,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { init, insert, query, collectBytes } from "../client.ts";
-import { encodeNative, decodeNative, type ColumnDef } from "../native.ts";
+import { encodeNative, decodeNative, toArrayRows, type ColumnDef } from "../native.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 
 describe("Native format integration", { timeout: 120000 }, () => {
@@ -56,13 +56,14 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY i32 FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 2);
-    assert.strictEqual(decoded.rows[0][0], -1);
-    assert.strictEqual(decoded.rows[0][1], -100n);
-    assert.strictEqual(decoded.rows[1][0], 1);
-    assert.strictEqual(decoded.rows[1][3], "hello");
+    assert.strictEqual(decoded.rowCount, 2);
+    assert.strictEqual(decodedRows[0][0], -1);
+    assert.strictEqual(decodedRows[0][1], -100n);
+    assert.strictEqual(decodedRows[1][0], 1);
+    assert.strictEqual(decodedRows[1][3], "hello");
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -87,12 +88,13 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 3);
-    assert.strictEqual(decoded.rows[0][1], 100);
-    assert.strictEqual(decoded.rows[1][1], null);
-    assert.strictEqual(decoded.rows[2][1], 300);
+    assert.strictEqual(decoded.rowCount, 3);
+    assert.strictEqual(decodedRows[0][1], 100);
+    assert.strictEqual(decodedRows[1][1], null);
+    assert.strictEqual(decodedRows[2][1], 300);
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -117,12 +119,13 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 3);
-    assert.deepStrictEqual([...decoded.rows[0][1] as Int32Array], [1, 2, 3]);
-    assert.deepStrictEqual([...decoded.rows[1][1] as Int32Array], []);
-    assert.deepStrictEqual([...decoded.rows[2][1] as Int32Array], [42]);
+    assert.strictEqual(decoded.rowCount, 3);
+    assert.deepStrictEqual([...decodedRows[0][1] as Int32Array], [1, 2, 3]);
+    assert.deepStrictEqual([...decodedRows[1][1] as Int32Array], []);
+    assert.deepStrictEqual([...decodedRows[2][1] as Int32Array], [42]);
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -147,10 +150,11 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 2);
-    const map = decoded.rows[0][1] as Map<string, number>;
+    assert.strictEqual(decoded.rowCount, 2);
+    const map = decodedRows[0][1] as Map<string, number>;
     assert.strictEqual(map.get("a"), 1);
     assert.strictEqual(map.get("b"), 2);
 
@@ -177,11 +181,12 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 2);
-    assert.deepStrictEqual(decoded.rows[0][1], [100, "a"]);
-    assert.deepStrictEqual(decoded.rows[1][1], [200, "b"]);
+    assert.strictEqual(decoded.rowCount, 2);
+    assert.deepStrictEqual(decodedRows[0][1], [100, "a"]);
+    assert.deepStrictEqual(decodedRows[1][1], [200, "b"]);
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -207,11 +212,12 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 1);
+    assert.strictEqual(decoded.rowCount, 1);
     // DateTime64 returns ClickHouseDateTime64 wrapper
-    const ts = decoded.rows[0][1] as { toDate(): Date };
+    const ts = decodedRows[0][1] as { toDate(): Date };
     assert.strictEqual(ts.toDate().getTime(), date.getTime());
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
@@ -234,10 +240,11 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 1);
-    assert.strictEqual(decoded.rows[0][0], uuid);
+    assert.strictEqual(decoded.rowCount, 1);
+    assert.strictEqual(decodedRows[0][0], uuid);
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -270,14 +277,15 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 5);
-    assert.strictEqual(decoded.rows[0][1], "active");
-    assert.strictEqual(decoded.rows[0][2], "electronics");
-    assert.strictEqual(decoded.rows[1][1], "inactive");
-    assert.strictEqual(decoded.rows[1][2], null);
-    assert.strictEqual(decoded.rows[4][2], null);
+    assert.strictEqual(decoded.rowCount, 5);
+    assert.strictEqual(decodedRows[0][1], "active");
+    assert.strictEqual(decodedRows[0][2], "electronics");
+    assert.strictEqual(decodedRows[1][1], "inactive");
+    assert.strictEqual(decodedRows[1][2], null);
+    assert.strictEqual(decodedRows[4][2], null);
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -309,11 +317,12 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, rowCount);
-    assert.strictEqual(decoded.rows[0][0], 0);
-    assert.strictEqual(decoded.rows[rowCount - 1][0], rowCount - 1);
+    assert.strictEqual(decoded.rowCount, rowCount);
+    assert.strictEqual(decodedRows[0][0], 0);
+    assert.strictEqual(decodedRows[rowCount - 1][0], rowCount - 1);
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -338,12 +347,13 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 3);
-    assert.deepStrictEqual(decoded.rows[0][1], [1.5, 2.5]);
-    assert.deepStrictEqual(decoded.rows[1][1], [-10.0, 20.0]);
-    assert.deepStrictEqual(decoded.rows[2][1], [0.0, 0.0]);
+    assert.strictEqual(decoded.rowCount, 3);
+    assert.deepStrictEqual(decodedRows[0][1], [1.5, 2.5]);
+    assert.deepStrictEqual(decodedRows[1][1], [-10.0, 20.0]);
+    assert.deepStrictEqual(decodedRows[2][1], [0.0, 0.0]);
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -370,11 +380,12 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 2);
-    assert.strictEqual((decoded.rows[0][1] as unknown[]).length, 5);
-    assert.strictEqual((decoded.rows[1][1] as unknown[]).length, 4);
+    assert.strictEqual(decoded.rowCount, 2);
+    assert.strictEqual((decodedRows[0][1] as unknown[]).length, 5);
+    assert.strictEqual((decodedRows[1][1] as unknown[]).length, 4);
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -401,11 +412,12 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 2);
-    assert.strictEqual((decoded.rows[0][1] as unknown[][]).length, 2); // outer + hole
-    assert.strictEqual((decoded.rows[1][1] as unknown[][]).length, 1); // outer only
+    assert.strictEqual(decoded.rowCount, 2);
+    assert.strictEqual((decodedRows[0][1] as unknown[][]).length, 2); // outer + hole
+    assert.strictEqual((decodedRows[1][1] as unknown[][]).length, 1); // outer only
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -435,13 +447,14 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 4);
-    assert.deepStrictEqual(decoded.rows[0][1], [0, "hello"]);
-    assert.deepStrictEqual(decoded.rows[1][1], [1, 42n]);
-    assert.strictEqual(decoded.rows[2][1], null);
-    assert.deepStrictEqual(decoded.rows[3][1], [0, "world"]);
+    assert.strictEqual(decoded.rowCount, 4);
+    assert.deepStrictEqual(decodedRows[0][1], [0, "hello"]);
+    assert.deepStrictEqual(decodedRows[1][1], [1, 42n]);
+    assert.strictEqual(decodedRows[2][1], null);
+    assert.deepStrictEqual(decodedRows[3][1], [0, "world"]);
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -472,13 +485,14 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     // Use V3 format setting for Dynamic type (requires ClickHouse 25.6+)
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native SETTINGS output_format_native_use_flattened_dynamic_and_json_serialization=1`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 4);
-    assert.strictEqual(decoded.rows[0][1], "hello");
-    assert.strictEqual(decoded.rows[1][1], 42n);  // Int64 decoded as bigint
-    assert.strictEqual(decoded.rows[2][1], null);
-    assert.strictEqual(decoded.rows[3][1], "world");
+    assert.strictEqual(decoded.rowCount, 4);
+    assert.strictEqual(decodedRows[0][1], "hello");
+    assert.strictEqual(decodedRows[1][1], 42n);  // Int64 decoded as bigint
+    assert.strictEqual(decodedRows[2][1], null);
+    assert.strictEqual(decodedRows[3][1], "world");
 
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
@@ -508,12 +522,13 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     // Use V3 format setting for JSON type (requires ClickHouse 25.6+)
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native SETTINGS output_format_native_use_flattened_dynamic_and_json_serialization=1`, sessionId, { baseUrl, auth }));
-    const decoded = decodeNative(data);
+    const decoded = await decodeNative(data);
+    const decodedRows = toArrayRows(decoded);
 
-    assert.strictEqual(decoded.rows.length, 3);
-    const obj0 = decoded.rows[0][1] as Record<string, unknown>;
-    const obj1 = decoded.rows[1][1] as Record<string, unknown>;
-    const obj2 = decoded.rows[2][1] as Record<string, unknown>;
+    assert.strictEqual(decoded.rowCount, 3);
+    const obj0 = decodedRows[0][1] as Record<string, unknown>;
+    const obj1 = decodedRows[1][1] as Record<string, unknown>;
+    const obj2 = decodedRows[2][1] as Record<string, unknown>;
 
     assert.strictEqual(obj0.name, "alice");
     assert.strictEqual(obj0.age, 30n);

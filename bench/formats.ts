@@ -1,6 +1,6 @@
-// Benchmark: RowBinary vs JSONEachRow for insert and query
+// Benchmark: Native vs RowBinary vs JSONEachRow
 //
-// Tests encoding/decoding performance for both formats with various data types.
+// Tests encoding/decoding performance for all formats with various data types.
 
 import { init, encodeBlock, decodeBlock, Method } from "../compression.ts";
 import {
@@ -10,6 +10,7 @@ import {
   streamEncodeRowBinary,
   type ColumnDef,
 } from "../rowbinary.ts";
+import { encodeNative, decodeNative, toArrayRows } from "../native.ts";
 
 // --- Test data generators ---
 
@@ -232,9 +233,10 @@ async function main() {
     simpleColumns,
     simpleRowsArray,
   );
+  const simpleNativeEncoded = encodeNative(simpleColumns, simpleRowsArray);
 
   console.log(
-    `  Encoded sizes: JSON=${simpleJsonEncoded.length} bytes, RowBinary=${simpleRowBinaryEncoded.length} bytes (${((simpleRowBinaryEncoded.length / simpleJsonEncoded.length) * 100).toFixed(1)}%)\n`,
+    `  Encoded sizes: JSON=${simpleJsonEncoded.length}, RowBinary=${simpleRowBinaryEncoded.length} (${((simpleRowBinaryEncoded.length / simpleJsonEncoded.length) * 100).toFixed(1)}%), Native=${simpleNativeEncoded.length} (${((simpleNativeEncoded.length / simpleJsonEncoded.length) * 100).toFixed(1)}%)\n`,
   );
 
   // Encoding benchmarks
@@ -259,6 +261,16 @@ async function main() {
   );
   console.log(formatResult(rbEncodeSimple, ROWS));
 
+  const nativeEncodeSimple = bench(
+    "Native encode",
+    () => {
+      encodeNative(simpleColumns, simpleRowsArray);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(nativeEncodeSimple, ROWS));
+
   // Decoding benchmarks
   console.log("\nDecoding:");
   const jsonDecodeSimple = bench(
@@ -281,11 +293,22 @@ async function main() {
   );
   console.log(formatResult(rbDecodeSimple, ROWS));
 
+  const nativeDecodeSimple = await benchAsync(
+    "Native decode",
+    async () => {
+      await decodeNative(simpleNativeEncoded);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(nativeDecodeSimple, ROWS));
+
   // Full path with compression
   const simpleJsonCompressed = encodeBlock(simpleJsonEncoded, Method.LZ4);
   const simpleRbCompressed = encodeBlock(simpleRowBinaryEncoded, Method.LZ4);
+  const simpleNativeCompressed = encodeBlock(simpleNativeEncoded, Method.LZ4);
   console.log(
-    `\nCompressed sizes: JSON+LZ4=${simpleJsonCompressed.length} bytes, RowBinary+LZ4=${simpleRbCompressed.length} bytes (${((simpleRbCompressed.length / simpleJsonCompressed.length) * 100).toFixed(1)}%)`,
+    `\nCompressed sizes: JSON+LZ4=${simpleJsonCompressed.length}, RowBinary+LZ4=${simpleRbCompressed.length} (${((simpleRbCompressed.length / simpleJsonCompressed.length) * 100).toFixed(1)}%), Native+LZ4=${simpleNativeCompressed.length} (${((simpleNativeCompressed.length / simpleJsonCompressed.length) * 100).toFixed(1)}%)`,
   );
 
   console.log("\nFull path (encode + LZ4 compress):");
@@ -311,6 +334,17 @@ async function main() {
   );
   console.log(formatResult(rbFullSimple, ROWS));
 
+  const nativeFullSimple = bench(
+    "Native + LZ4",
+    () => {
+      const data = encodeNative(simpleColumns, simpleRowsArray);
+      encodeBlock(data, Method.LZ4);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(nativeFullSimple, ROWS));
+
   // === Escape data ===
   console.log(
     "\n=== Escape Data (strings with quotes, newlines, backslashes) ===\n",
@@ -330,9 +364,10 @@ async function main() {
     escapeColumns,
     escapeRowsArray,
   );
+  const escapeNativeEncoded = encodeNative(escapeColumns, escapeRowsArray);
 
   console.log(
-    `  Encoded sizes: JSON=${escapeJsonEncoded.length} bytes, RowBinary=${escapeRowBinaryEncoded.length} bytes (${((escapeRowBinaryEncoded.length / escapeJsonEncoded.length) * 100).toFixed(1)}%)\n`,
+    `  Encoded sizes: JSON=${escapeJsonEncoded.length}, RowBinary=${escapeRowBinaryEncoded.length} (${((escapeRowBinaryEncoded.length / escapeJsonEncoded.length) * 100).toFixed(1)}%), Native=${escapeNativeEncoded.length} (${((escapeNativeEncoded.length / escapeJsonEncoded.length) * 100).toFixed(1)}%)\n`,
   );
 
   console.log("Encoding:");
@@ -356,11 +391,22 @@ async function main() {
   );
   console.log(formatResult(rbEncodeEscape, ROWS));
 
+  const nativeEncodeEscape = bench(
+    "Native encode",
+    () => {
+      encodeNative(escapeColumns, escapeRowsArray);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(nativeEncodeEscape, ROWS));
+
   // Full path with compression
   const escapeJsonCompressed = encodeBlock(escapeJsonEncoded, Method.LZ4);
   const escapeRbCompressed = encodeBlock(escapeRowBinaryEncoded, Method.LZ4);
+  const escapeNativeCompressed = encodeBlock(escapeNativeEncoded, Method.LZ4);
   console.log(
-    `\nCompressed sizes: JSON+LZ4=${escapeJsonCompressed.length} bytes, RowBinary+LZ4=${escapeRbCompressed.length} bytes (${((escapeRbCompressed.length / escapeJsonCompressed.length) * 100).toFixed(1)}%)`,
+    `\nCompressed sizes: JSON+LZ4=${escapeJsonCompressed.length}, RowBinary+LZ4=${escapeRbCompressed.length} (${((escapeRbCompressed.length / escapeJsonCompressed.length) * 100).toFixed(1)}%), Native+LZ4=${escapeNativeCompressed.length} (${((escapeNativeCompressed.length / escapeJsonCompressed.length) * 100).toFixed(1)}%)`,
   );
 
   console.log("\nFull path (encode + LZ4 compress):");
@@ -386,6 +432,17 @@ async function main() {
   );
   console.log(formatResult(rbFullEscape, ROWS));
 
+  const nativeFullEscape = bench(
+    "Native + LZ4",
+    () => {
+      const data = encodeNative(escapeColumns, escapeRowsArray);
+      encodeBlock(data, Method.LZ4);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(nativeFullEscape, ROWS));
+
   // === Complex data ===
   console.log("\n=== Complex Data (arrays, nullable) ===\n");
 
@@ -408,9 +465,10 @@ async function main() {
     complexColumns,
     complexRowsArray,
   );
+  const complexNativeEncoded = encodeNative(complexColumns, complexRowsArray);
 
   console.log(
-    `  Encoded sizes: JSON=${complexJsonEncoded.length} bytes, RowBinary=${complexRowBinaryEncoded.length} bytes (${((complexRowBinaryEncoded.length / complexJsonEncoded.length) * 100).toFixed(1)}%)\n`,
+    `  Encoded sizes: JSON=${complexJsonEncoded.length}, RowBinary=${complexRowBinaryEncoded.length} (${((complexRowBinaryEncoded.length / complexJsonEncoded.length) * 100).toFixed(1)}%), Native=${complexNativeEncoded.length} (${((complexNativeEncoded.length / complexJsonEncoded.length) * 100).toFixed(1)}%)\n`,
   );
 
   console.log("Encoding:");
@@ -434,6 +492,16 @@ async function main() {
   );
   console.log(formatResult(rbEncodeComplex, ROWS));
 
+  const nativeEncodeComplex = bench(
+    "Native encode",
+    () => {
+      encodeNative(complexColumns, complexRowsArray);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(nativeEncodeComplex, ROWS));
+
   console.log("\nDecoding:");
   const jsonDecodeComplex = bench(
     "JSONEachRow decode",
@@ -455,11 +523,22 @@ async function main() {
   );
   console.log(formatResult(rbDecodeComplex, ROWS));
 
+  const nativeDecodeComplex = await benchAsync(
+    "Native decode",
+    async () => {
+      await decodeNative(complexNativeEncoded);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(nativeDecodeComplex, ROWS));
+
   // Full path with compression
   const complexJsonCompressed = encodeBlock(complexJsonEncoded, Method.LZ4);
   const complexRbCompressed = encodeBlock(complexRowBinaryEncoded, Method.LZ4);
+  const complexNativeCompressed = encodeBlock(complexNativeEncoded, Method.LZ4);
   console.log(
-    `\nCompressed sizes: JSON+LZ4=${complexJsonCompressed.length} bytes, RowBinary+LZ4=${complexRbCompressed.length} bytes (${((complexRbCompressed.length / complexJsonCompressed.length) * 100).toFixed(1)}%)`,
+    `\nCompressed sizes: JSON+LZ4=${complexJsonCompressed.length}, RowBinary+LZ4=${complexRbCompressed.length} (${((complexRbCompressed.length / complexJsonCompressed.length) * 100).toFixed(1)}%), Native+LZ4=${complexNativeCompressed.length} (${((complexNativeCompressed.length / complexJsonCompressed.length) * 100).toFixed(1)}%)`,
   );
 
   console.log("\nFull path (encode + LZ4 compress):");
@@ -485,6 +564,17 @@ async function main() {
   );
   console.log(formatResult(rbFullComplex, ROWS));
 
+  const nativeFullComplex = bench(
+    "Native + LZ4",
+    () => {
+      const data = encodeNative(complexColumns, complexRowsArray);
+      encodeBlock(data, Method.LZ4);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(nativeFullComplex, ROWS));
+
   // === Complex Data (Typed) ===
   console.log("\n=== Complex Data (Typed) (arrays as TypedArrays) ===\n");
 
@@ -502,9 +592,10 @@ async function main() {
     complexColumns,
     complexTypedRowsArray,
   );
+  const complexTypedNativeEncoded = encodeNative(complexColumns, complexTypedRowsArray);
 
   console.log(
-    `  Encoded sizes: JSON=${complexTypedJsonEncoded.length} bytes, RowBinary=${complexTypedRowBinaryEncoded.length} bytes (${((complexTypedRowBinaryEncoded.length / complexTypedJsonEncoded.length) * 100).toFixed(1)}%)\n`,
+    `  Encoded sizes: JSON=${complexTypedJsonEncoded.length}, RowBinary=${complexTypedRowBinaryEncoded.length} (${((complexTypedRowBinaryEncoded.length / complexTypedJsonEncoded.length) * 100).toFixed(1)}%), Native=${complexTypedNativeEncoded.length} (${((complexTypedNativeEncoded.length / complexTypedJsonEncoded.length) * 100).toFixed(1)}%)\n`,
   );
 
   console.log("Encoding:");
@@ -528,6 +619,16 @@ async function main() {
   );
   console.log(formatResult(rbEncodeComplexTyped, ROWS));
 
+  const nativeEncodeComplexTyped = bench(
+    "Native encode",
+    () => {
+      encodeNative(complexColumns, complexTypedRowsArray);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(nativeEncodeComplexTyped, ROWS));
+
   console.log("\nDecoding:");
   const jsonDecodeComplexTyped = bench(
     "JSONEachRow decode",
@@ -549,17 +650,22 @@ async function main() {
   );
   console.log(formatResult(rbDecodeComplexTyped, ROWS));
 
+  const nativeDecodeComplexTyped = await benchAsync(
+    "Native decode",
+    async () => {
+      await decodeNative(complexTypedNativeEncoded);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(nativeDecodeComplexTyped, ROWS));
+
   // Full path with compression
-  const complexTypedJsonCompressed = encodeBlock(
-    complexTypedJsonEncoded,
-    Method.LZ4,
-  );
-  const complexTypedRbCompressed = encodeBlock(
-    complexTypedRowBinaryEncoded,
-    Method.LZ4,
-  );
+  const complexTypedJsonCompressed = encodeBlock(complexTypedJsonEncoded, Method.LZ4);
+  const complexTypedRbCompressed = encodeBlock(complexTypedRowBinaryEncoded, Method.LZ4);
+  const complexTypedNativeCompressed = encodeBlock(complexTypedNativeEncoded, Method.LZ4);
   console.log(
-    `\nCompressed sizes: JSON+LZ4=${complexTypedJsonCompressed.length} bytes, RowBinary+LZ4=${complexTypedRbCompressed.length} bytes (${((complexTypedRbCompressed.length / complexTypedJsonCompressed.length) * 100).toFixed(1)}%)`,
+    `\nCompressed sizes: JSON+LZ4=${complexTypedJsonCompressed.length}, RowBinary+LZ4=${complexTypedRbCompressed.length} (${((complexTypedRbCompressed.length / complexTypedJsonCompressed.length) * 100).toFixed(1)}%), Native+LZ4=${complexTypedNativeCompressed.length} (${((complexTypedNativeCompressed.length / complexTypedJsonCompressed.length) * 100).toFixed(1)}%)`,
   );
 
   console.log("\nFull path (encode + LZ4 compress):");
@@ -577,10 +683,7 @@ async function main() {
   const rbFullComplexTyped = bench(
     "RowBinary + LZ4",
     () => {
-      const data = encodeRowBinary(
-        complexColumns,
-        complexTypedRowsArray,
-      );
+      const data = encodeRowBinary(complexColumns, complexTypedRowsArray);
       encodeBlock(data, Method.LZ4);
     },
     50,
@@ -588,72 +691,47 @@ async function main() {
   );
   console.log(formatResult(rbFullComplexTyped, ROWS));
 
+  const nativeFullComplexTyped = bench(
+    "Native + LZ4",
+    () => {
+      const data = encodeNative(complexColumns, complexTypedRowsArray);
+      encodeBlock(data, Method.LZ4);
+    },
+    50,
+    ITERATIONS,
+  );
+  console.log(formatResult(nativeFullComplexTyped, ROWS));
+
   // === Summary ===
-  console.log("\n=== Summary ===\n");
+  console.log("\n=== Summary (speedup vs JSON) ===\n");
+
+  const fmtSpeed = (json: number, rb: number, native: number) =>
+    `RB ${(json / rb).toFixed(2)}x, Native ${(json / native).toFixed(2)}x`;
+  const fmtSize = (json: number, rb: number, native: number) =>
+    `RB ${(json / rb).toFixed(2)}x, Native ${(json / native).toFixed(2)}x smaller`;
+
   console.log("Simple data:");
-  console.log(
-    `  Encode: RowBinary is ${(jsonEncodeSimple.ms / rbEncodeSimple.ms).toFixed(2)}x ${rbEncodeSimple.ms < jsonEncodeSimple.ms ? "faster" : "slower"}`,
-  );
-  console.log(
-    `  Decode: RowBinary is ${(jsonDecodeSimple.ms / rbDecodeSimple.ms).toFixed(2)}x ${rbDecodeSimple.ms < jsonDecodeSimple.ms ? "faster" : "slower"}`,
-  );
-  console.log(
-    `  Size: RowBinary is ${(simpleJsonEncoded.length / simpleRowBinaryEncoded.length).toFixed(2)}x smaller`,
-  );
-  console.log(
-    `  Size+LZ4: RowBinary is ${(simpleJsonCompressed.length / simpleRbCompressed.length).toFixed(2)}x smaller`,
-  );
-  console.log(
-    `  Full path: RowBinary+LZ4 is ${(jsonFullSimple.ms / rbFullSimple.ms).toFixed(2)}x ${rbFullSimple.ms < jsonFullSimple.ms ? "faster" : "slower"}`,
-  );
+  console.log(`  Encode: ${fmtSpeed(jsonEncodeSimple.ms, rbEncodeSimple.ms, nativeEncodeSimple.ms)}`);
+  console.log(`  Decode: ${fmtSpeed(jsonDecodeSimple.ms, rbDecodeSimple.ms, nativeDecodeSimple.ms)}`);
+  console.log(`  Size:   ${fmtSize(simpleJsonEncoded.length, simpleRowBinaryEncoded.length, simpleNativeEncoded.length)}`);
+  console.log(`  +LZ4:   ${fmtSize(simpleJsonCompressed.length, simpleRbCompressed.length, simpleNativeCompressed.length)}`);
 
   console.log("\nEscape data:");
-  console.log(
-    `  Encode: RowBinary is ${(jsonEncodeEscape.ms / rbEncodeEscape.ms).toFixed(2)}x ${rbEncodeEscape.ms < jsonEncodeEscape.ms ? "faster" : "slower"}`,
-  );
-  console.log(
-    `  Size: RowBinary is ${(escapeJsonEncoded.length / escapeRowBinaryEncoded.length).toFixed(2)}x smaller`,
-  );
-  console.log(
-    `  Size+LZ4: RowBinary is ${(escapeJsonCompressed.length / escapeRbCompressed.length).toFixed(2)}x smaller`,
-  );
-  console.log(
-    `  Full path: RowBinary+LZ4 is ${(jsonFullEscape.ms / rbFullEscape.ms).toFixed(2)}x ${rbFullEscape.ms < jsonFullEscape.ms ? "faster" : "slower"}`,
-  );
+  console.log(`  Encode: ${fmtSpeed(jsonEncodeEscape.ms, rbEncodeEscape.ms, nativeEncodeEscape.ms)}`);
+  console.log(`  Size:   ${fmtSize(escapeJsonEncoded.length, escapeRowBinaryEncoded.length, escapeNativeEncoded.length)}`);
+  console.log(`  +LZ4:   ${fmtSize(escapeJsonCompressed.length, escapeRbCompressed.length, escapeNativeCompressed.length)}`);
 
   console.log("\nComplex data:");
-  console.log(
-    `  Encode: RowBinary is ${(jsonEncodeComplex.ms / rbEncodeComplex.ms).toFixed(2)}x ${rbEncodeComplex.ms < jsonEncodeComplex.ms ? "faster" : "slower"}`,
-  );
-  console.log(
-    `  Decode: RowBinary is ${(jsonDecodeComplex.ms / rbDecodeComplex.ms).toFixed(2)}x ${rbDecodeComplex.ms < jsonDecodeComplex.ms ? "faster" : "slower"}`,
-  );
-  console.log(
-    `  Size: RowBinary is ${(complexJsonEncoded.length / complexRowBinaryEncoded.length).toFixed(2)}x smaller`,
-  );
-  console.log(
-    `  Size+LZ4: RowBinary is ${(complexJsonCompressed.length / complexRbCompressed.length).toFixed(2)}x smaller`,
-  );
-  console.log(
-    `  Full path: RowBinary+LZ4 is ${(jsonFullComplex.ms / rbFullComplex.ms).toFixed(2)}x ${rbFullComplex.ms < jsonFullComplex.ms ? "faster" : "slower"}`,
-  );
+  console.log(`  Encode: ${fmtSpeed(jsonEncodeComplex.ms, rbEncodeComplex.ms, nativeEncodeComplex.ms)}`);
+  console.log(`  Decode: ${fmtSpeed(jsonDecodeComplex.ms, rbDecodeComplex.ms, nativeDecodeComplex.ms)}`);
+  console.log(`  Size:   ${fmtSize(complexJsonEncoded.length, complexRowBinaryEncoded.length, complexNativeEncoded.length)}`);
+  console.log(`  +LZ4:   ${fmtSize(complexJsonCompressed.length, complexRbCompressed.length, complexNativeCompressed.length)}`);
 
   console.log("\nComplex data (Typed):");
-  console.log(
-    `  Encode: RowBinary is ${(jsonEncodeComplexTyped.ms / rbEncodeComplexTyped.ms).toFixed(2)}x ${rbEncodeComplexTyped.ms < jsonEncodeComplexTyped.ms ? "faster" : "slower"}`,
-  );
-  console.log(
-    `  Decode: RowBinary is ${(jsonDecodeComplexTyped.ms / rbDecodeComplexTyped.ms).toFixed(2)}x ${rbDecodeComplexTyped.ms < jsonDecodeComplexTyped.ms ? "faster" : "slower"}`,
-  );
-  console.log(
-    `  Size: RowBinary is ${(complexTypedJsonEncoded.length / complexTypedRowBinaryEncoded.length).toFixed(2)}x smaller`,
-  );
-  console.log(
-    `  Size+LZ4: RowBinary is ${(complexTypedJsonCompressed.length / complexTypedRbCompressed.length).toFixed(2)}x smaller`,
-  );
-  console.log(
-    `  Full path: RowBinary+LZ4 is ${(jsonFullComplexTyped.ms / rbFullComplexTyped.ms).toFixed(2)}x ${rbFullComplexTyped.ms < jsonFullComplexTyped.ms ? "faster" : "slower"}`,
-  );
+  console.log(`  Encode: ${fmtSpeed(jsonEncodeComplexTyped.ms, rbEncodeComplexTyped.ms, nativeEncodeComplexTyped.ms)}`);
+  console.log(`  Decode: ${fmtSpeed(jsonDecodeComplexTyped.ms, rbDecodeComplexTyped.ms, nativeDecodeComplexTyped.ms)}`);
+  console.log(`  Size:   ${fmtSize(complexTypedJsonEncoded.length, complexTypedRowBinaryEncoded.length, complexTypedNativeEncoded.length)}`);
+  console.log(`  +LZ4:   ${fmtSize(complexTypedJsonCompressed.length, complexTypedRbCompressed.length, complexTypedNativeCompressed.length)}`);
 
   // === Streaming vs Sync ===
   console.log("\n=== Streaming vs Sync (Simple Data) ===\n");

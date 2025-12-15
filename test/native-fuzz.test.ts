@@ -7,7 +7,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { encodeNative, decodeNative, streamDecodeNative, type ColumnDef } from "../native.ts";
+import { encodeNative, decodeNative, streamDecodeNative, toArrayRows, type ColumnDef } from "../native.ts";
 
 // ============================================================================
 // Unit Fuzz Tests (no ClickHouse required)
@@ -133,7 +133,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
     }
   }
 
-  it("fuzz scalar types", () => {
+  it("fuzz scalar types", async () => {
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "50", 10);
     for (let iter = 0; iter < iterations; iter++) {
       // Pick random subset of scalar types
@@ -143,40 +143,40 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 
       const { columns, rows, types } = generateRows(selectedTypes, rowCount);
       const encoded = encodeNative(columns, rows);
-      const decoded = decodeNative(encoded);
+      const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, decoded.rows, types);
+      compareRows(rows, toArrayRows(decoded), types);
     }
   });
 
-  it("fuzz date types", () => {
+  it("fuzz date types", async () => {
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "50", 10);
     for (let iter = 0; iter < iterations; iter++) {
       const rowCount = randomInt(1, 100);
       const { columns, rows, types } = generateRows(dateTypes, rowCount);
       const encoded = encodeNative(columns, rows);
-      const decoded = decodeNative(encoded);
+      const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, decoded.rows, types);
+      compareRows(rows, toArrayRows(decoded), types);
     }
   });
 
-  it("fuzz IP types", () => {
+  it("fuzz IP types", async () => {
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "50", 10);
     for (let iter = 0; iter < iterations; iter++) {
       const rowCount = randomInt(1, 100);
       const { columns, rows, types } = generateRows(ipTypes, rowCount);
       const encoded = encodeNative(columns, rows);
-      const decoded = decodeNative(encoded);
+      const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, decoded.rows, types);
+      compareRows(rows, toArrayRows(decoded), types);
     }
   });
 
-  it("fuzz Nullable types", () => {
+  it("fuzz Nullable types", async () => {
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "50", 10);
     for (let iter = 0; iter < iterations; iter++) {
       // Pick a random base type and make it nullable
@@ -194,14 +194,14 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(1, 100);
       const { columns, rows, types } = generateRows([nullableType], rowCount);
       const encoded = encodeNative(columns, rows);
-      const decoded = decodeNative(encoded);
+      const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, decoded.rows, types);
+      compareRows(rows, toArrayRows(decoded), types);
     }
   });
 
-  it("fuzz Array types", () => {
+  it("fuzz Array types", async () => {
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "50", 10);
     for (let iter = 0; iter < iterations; iter++) {
       const baseType = scalarTypes[randomInt(0, 5)]; // Limit to simpler types
@@ -226,14 +226,14 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(1, 50);
       const { columns, rows, types } = generateRows([arrayType], rowCount);
       const encoded = encodeNative(columns, rows);
-      const decoded = decodeNative(encoded);
+      const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, decoded.rows, types);
+      compareRows(rows, toArrayRows(decoded), types);
     }
   });
 
-  it("fuzz Tuple types", () => {
+  it("fuzz Tuple types", async () => {
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "50", 10);
     for (let iter = 0; iter < iterations; iter++) {
       // Create random tuple with 2-4 elements
@@ -258,14 +258,14 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(1, 50);
       const { columns, rows, types } = generateRows([tupleType], rowCount);
       const encoded = encodeNative(columns, rows);
-      const decoded = decodeNative(encoded);
+      const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, decoded.rows, types);
+      compareRows(rows, toArrayRows(decoded), types);
     }
   });
 
-  it("fuzz Map types", () => {
+  it("fuzz Map types", async () => {
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "50", 10);
     for (let iter = 0; iter < iterations; iter++) {
       const keyType = scalarTypes[randomInt(0, 2)]; // String or small ints
@@ -314,14 +314,14 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(1, 30);
       const { columns, rows, types } = generateRows([mapType], rowCount);
       const encoded = encodeNative(columns, rows);
-      const decoded = decodeNative(encoded);
+      const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, decoded.rows, types);
+      compareRows(rows, toArrayRows(decoded), types);
     }
   });
 
-  it("fuzz mixed column types", () => {
+  it("fuzz mixed column types", async () => {
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "25", 10);
     for (let iter = 0; iter < iterations; iter++) {
       // Mix different type categories
@@ -332,10 +332,10 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 
       const { columns, rows, types } = generateRows(selectedTypes, rowCount);
       const encoded = encodeNative(columns, rows);
-      const decoded = decodeNative(encoded);
+      const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, decoded.rows, types);
+      compareRows(rows, toArrayRows(decoded), types);
     }
   });
 
@@ -365,7 +365,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       let decodedColumns: ColumnDef[] = [];
       for await (const result of streamDecodeNative(toAsync(blocks))) {
         decodedColumns = result.columns;
-        decodedRows.push(...result.rows);
+        decodedRows.push(...toArrayRows(result));
       }
 
       assert.deepStrictEqual(decodedColumns, columns);
@@ -373,7 +373,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
     }
   });
 
-  it("fuzz LowCardinality(String)", () => {
+  it("fuzz LowCardinality(String)", async () => {
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "50", 10);
     for (let iter = 0; iter < iterations; iter++) {
       // Generate strings with high repetition (good for LowCardinality)
@@ -386,14 +386,14 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(10, 200);
       const { columns, rows, types } = generateRows([lcType], rowCount);
       const encoded = encodeNative(columns, rows);
-      const decoded = decodeNative(encoded);
+      const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, decoded.rows, types);
+      compareRows(rows, toArrayRows(decoded), types);
     }
   });
 
-  it("fuzz empty and single-row edge cases", () => {
+  it("fuzz empty and single-row edge cases", async () => {
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "50", 10);
     for (let iter = 0; iter < iterations; iter++) {
       const typeCount = randomInt(1, 5);
@@ -403,18 +403,18 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       {
         const { columns } = generateRows(selectedTypes, 0);
         const encoded = encodeNative(columns, []);
-        const decoded = decodeNative(encoded);
+        const decoded = await decodeNative(encoded);
         assert.deepStrictEqual(decoded.columns, columns);
-        assert.strictEqual(decoded.rows.length, 0);
+        assert.strictEqual(decoded.rowCount, 0);
       }
 
       // Test single row
       {
         const { columns, rows, types } = generateRows(selectedTypes, 1);
         const encoded = encodeNative(columns, rows);
-        const decoded = decodeNative(encoded);
+        const decoded = await decodeNative(encoded);
         assert.deepStrictEqual(decoded.columns, columns);
-        compareRows(rows, decoded.rows, types);
+        compareRows(rows, toArrayRows(decoded), types);
       }
     }
   });
@@ -474,12 +474,12 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
           // 3. Query source in Native format and decode
           const data = await collectBytes(
             query(
-              `SELECT * FROM ${srcTable} SETTINGS http_receive_timeout=300, http_send_timeout=300 FORMAT Native`,
+              `SELECT * FROM ${srcTable} FORMAT Native`,
               sessionId,
-              { baseUrl, auth, timeout: 300000 },
+              { baseUrl, auth },
             ),
           );
-          const decoded = decodeNative(data, { mapAsArray: true });
+          const decoded = await decodeNative(data, { mapAsArray: true });
 
           // 4. Create empty dest table
           await consume(
@@ -490,18 +490,17 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
             }),
           );
 
-          // 5. Encode and insert in batches to avoid socket timeouts on large payloads
-          // Complex nested schemas can produce huge payloads - use smaller batches
+          // 5. Encode and insert in batches to avoid memory pressure on large payloads
           const BATCH_SIZE = 5000;
-          for (let j = 0; j < decoded.rows.length; j += BATCH_SIZE) {
-            const batch = decoded.rows.slice(j, j + BATCH_SIZE);
+          const decodedRows = toArrayRows(decoded);
+          for (let j = 0; j < decodedRows.length; j += BATCH_SIZE) {
+            const batch = decodedRows.slice(j, j + BATCH_SIZE);
             const encoded = encodeNative(decoded.columns, batch);
-            // Add settings for longer timeouts with large payloads
             await insert(
-              `INSERT INTO ${dstTable} SETTINGS http_receive_timeout=300, http_send_timeout=300 FORMAT Native`,
+              `INSERT INTO ${dstTable} FORMAT Native`,
               encoded,
               sessionId,
-              { baseUrl, auth, timeout: 300000 },
+              { baseUrl, auth },
             );
           }
 

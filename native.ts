@@ -45,6 +45,47 @@ import { createCodec as createRowBinaryCodec, RowBinaryEncoder } from "./rowbina
 
 export { type ColumnDef, type DecodeResult, type DecodeOptions, ClickHouseDateTime64, Float32NaN, Float64NaN };
 
+// Columnar result type (returned by decode functions)
+export interface ColumnarResult {
+  columns: ColumnDef[];
+  columnData: unknown[][];  // columnData[colIndex][rowIndex]
+  rowCount: number;
+}
+
+/**
+ * Lazily iterate rows as objects with column names as keys.
+ * Allocates one object per row on demand.
+ */
+export function* asRows(result: ColumnarResult): Generator<Record<string, unknown>> {
+  const { columns, columnData, rowCount } = result;
+  const numCols = columns.length;
+  for (let i = 0; i < rowCount; i++) {
+    const row: Record<string, unknown> = {};
+    for (let j = 0; j < numCols; j++) {
+      row[columns[j].name] = columnData[j][i];
+    }
+    yield row;
+  }
+}
+
+/**
+ * Convert columnar result to array rows.
+ * Useful for re-encoding or comparison with original row arrays.
+ */
+export function toArrayRows(result: ColumnarResult): unknown[][] {
+  const { columnData, rowCount } = result;
+  const numCols = columnData.length;
+  const rows: unknown[][] = new Array(rowCount);
+  for (let i = 0; i < rowCount; i++) {
+    const row = new Array(numCols);
+    for (let j = 0; j < numCols; j++) {
+      row[j] = columnData[j][i];
+    }
+    rows[i] = row;
+  }
+  return rows;
+}
+
 // Date/time constants
 const MS_PER_DAY = 86400000;
 const MS_PER_SECOND = 1000;
@@ -1141,7 +1182,8 @@ function getZeroValue(codec: Codec): any {
 
 interface BlockResult {
   columns: ColumnDef[];
-  rows: unknown[][];
+  columnData: unknown[][];  // columnData[colIndex][rowIndex]
+  rowCount: number;
   bytesConsumed: number;
   isEndMarker: boolean;
 }
@@ -1166,14 +1208,15 @@ function decodeNativeBlock(
   if (numCols === 0 && numRows === 0) {
     return {
       columns: [],
-      rows: [],
+      columnData: [],
+      rowCount: 0,
       bytesConsumed: reader.offset - startOffset,
       isEndMarker: true,
     };
   }
 
   const columns: ColumnDef[] = [];
-  const colData: unknown[][] = [];
+  const columnData: unknown[][] = [];
 
   // Native format: per-column [name, type, prefix, data]
   for (let i = 0; i < numCols; i++) {
@@ -1183,20 +1226,13 @@ function decodeNativeBlock(
 
     const codec = getCodec(type);
     codec.readPrefix?.(reader);
-    colData.push(codec.decode(reader, numRows));
-  }
-
-  // Convert columnar data to rows
-  const rows: unknown[][] = new Array(numRows);
-  for (let i = 0; i < numRows; i++) {
-    const row = new Array(numCols);
-    for (let j = 0; j < numCols; j++) row[j] = colData[j][i];
-    rows[i] = row;
+    columnData.push(codec.decode(reader, numRows));
   }
 
   return {
     columns,
-    rows,
+    columnData,
+    rowCount: numRows,
     bytesConsumed: reader.offset - startOffset,
     isEndMarker: false,
   };
@@ -1228,37 +1264,41 @@ export function encodeNative(columns: ColumnDef[], rows: unknown[][]): Uint8Arra
   return writer.finish();
 }
 
-export function decodeNative(
+export async function decodeNative(
   data: Uint8Array,
   options?: DecodeOptions,
-): DecodeResult {
+): Promise<ColumnarResult> {
   let columns: ColumnDef[] = [];
-  const allRows: unknown[][] = [];
-  let offset = 0;
+  const allColumnData: unknown[][] = [];
+  let totalRows = 0;
 
-  // Native format can contain multiple blocks - read all of them
-  while (offset < data.length) {
-    const block = decodeNativeBlock(data, offset, options);
-    offset += block.bytesConsumed;
-
-    if (block.isEndMarker) break;
-
-    // Only set columns from first block
-    if (columns.length === 0) {
-      columns = block.columns;
-    }
-
-    allRows.push(...block.rows);
+  // Wrap data in single-chunk async iterable and use streamDecodeNative
+  async function* singleChunk() {
+    yield data;
   }
 
-  return { columns, rows: allRows };
+  for await (const block of streamDecodeNative(singleChunk(), options)) {
+    if (columns.length === 0) {
+      columns = block.columns;
+      for (let i = 0; i < columns.length; i++) {
+        allColumnData.push([]);
+      }
+    }
+    for (let i = 0; i < block.columnData.length; i++) {
+      const col = block.columnData[i];
+      const target = allColumnData[i];
+      for (let j = 0; j < col.length; j++) {
+        target.push(col[j]);
+      }
+    }
+    totalRows += block.rowCount;
+  }
+
+  return { columns, columnData: allColumnData, rowCount: totalRows };
 }
 
 // Stream wrappers
-export interface StreamDecodeNativeResult {
-  columns: ColumnDef[];
-  rows: unknown[][];
-}
+export type StreamDecodeNativeResult = ColumnarResult;
 
 export async function* streamEncodeNative(
   columns: ColumnDef[],
@@ -1278,28 +1318,56 @@ export async function* streamEncodeNative(
   if (batch.length > 0) yield encodeNative(columns, batch);
 }
 
+// Helper: flatten chunk list only when needed
+function flattenChunks(chunks: Uint8Array[], totalLength: number): Uint8Array {
+  if (chunks.length === 1) return chunks[0];
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}
+
+// Helper: consume bytes from chunk list
+function consumeBytes(chunks: Uint8Array[], bytes: number): number {
+  let consumed = 0;
+  while (bytes > 0 && chunks.length > 0) {
+    if (chunks[0].length <= bytes) {
+      bytes -= chunks[0].length;
+      consumed += chunks[0].length;
+      chunks.shift();
+    } else {
+      chunks[0] = chunks[0].subarray(bytes);
+      consumed += bytes;
+      bytes = 0;
+    }
+  }
+  return consumed;
+}
+
 export async function* streamDecodeNative(
   chunks: AsyncIterable<Uint8Array>,
   options?: DecodeOptions,
 ): AsyncGenerator<StreamDecodeNativeResult> {
-  let buffer = new Uint8Array(0);
+  const pendingChunks: Uint8Array[] = [];
+  let pendingLength = 0;
   let columns: ColumnDef[] = [];
 
   for await (const chunk of chunks) {
-    // Append new chunk to buffer
-    const newBuffer = new Uint8Array(buffer.length + chunk.length);
-    newBuffer.set(buffer);
-    newBuffer.set(chunk, buffer.length);
-    buffer = newBuffer;
+    pendingChunks.push(chunk);
+    pendingLength += chunk.length;
 
     // Try to decode as many complete blocks as possible
-    let offset = 0;
-    while (offset < buffer.length) {
+    while (pendingLength > 0) {
+      const buffer = flattenChunks(pendingChunks, pendingLength);
       try {
-        const block = decodeNativeBlock(buffer, offset, options);
+        const block = decodeNativeBlock(buffer, 0, options);
 
         if (block.isEndMarker) {
-          offset += block.bytesConsumed;
+          consumeBytes(pendingChunks, block.bytesConsumed);
+          pendingLength -= block.bytesConsumed;
           break;
         }
 
@@ -1308,26 +1376,19 @@ export async function* streamDecodeNative(
           columns = block.columns;
         }
 
-        offset += block.bytesConsumed;
-        yield { columns, rows: block.rows };
+        consumeBytes(pendingChunks, block.bytesConsumed);
+        pendingLength -= block.bytesConsumed;
+        yield { columns, columnData: block.columnData, rowCount: block.rowCount };
       } catch {
         // Not enough data for a complete block, wait for more chunks
         break;
       }
     }
-
-    // Keep unconsumed bytes for next iteration, release consumed memory
-    if (offset > 0) {
-      if (offset === buffer.length) {
-        buffer = new Uint8Array(0);
-      } else {
-        buffer = buffer.slice(offset);
-      }
-    }
   }
 
   // Handle any remaining data
-  if (buffer.length > 0) {
+  if (pendingLength > 0) {
+    const buffer = flattenChunks(pendingChunks, pendingLength);
     let offset = 0;
     while (offset < buffer.length) {
       try {
@@ -1336,7 +1397,7 @@ export async function* streamDecodeNative(
 
         if (columns.length === 0) columns = block.columns;
         offset += block.bytesConsumed;
-        yield { columns, rows: block.rows };
+        yield { columns, columnData: block.columnData, rowCount: block.rowCount };
       } catch {
         break;
       }
