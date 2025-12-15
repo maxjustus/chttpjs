@@ -414,6 +414,55 @@ describe("LowCardinality", () => {
     assert.deepStrictEqual(decoded.columns, columns);
     assert.strictEqual(decoded.rowCount, 0);
   });
+
+  it("encodes LowCardinality(Int32) with duplicate values", async () => {
+    const columns: ColumnDef[] = [{ name: "lc", type: "LowCardinality(Int32)" }];
+    const rows = [[42], [100], [42], [100], [42]]; // duplicates to test deduplication
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(decoded.columns, columns);
+    assert.strictEqual(decodedRows[0][0], 42);
+    assert.strictEqual(decodedRows[1][0], 100);
+    assert.strictEqual(decodedRows[2][0], 42);
+    assert.strictEqual(decodedRows[3][0], 100);
+    assert.strictEqual(decodedRows[4][0], 42);
+  });
+
+  it("encodes LowCardinality(Date) with duplicate dates", async () => {
+    const columns: ColumnDef[] = [{ name: "lc", type: "LowCardinality(Date)" }];
+    const d1 = new Date("2024-01-15");
+    const d2 = new Date("2024-06-30");
+    const d1dup = new Date("2024-01-15"); // same date, different object
+    const rows = [[d1], [d2], [d1dup], [d2]];
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(decoded.columns, columns);
+    // Date decodes as Date object - compare time values
+    assert.strictEqual((decodedRows[0][0] as Date).getTime(), d1.getTime());
+    assert.strictEqual((decodedRows[1][0] as Date).getTime(), d2.getTime());
+    assert.strictEqual((decodedRows[2][0] as Date).getTime(), d1.getTime());
+    assert.strictEqual((decodedRows[3][0] as Date).getTime(), d2.getTime());
+  });
+
+  it("encodes LowCardinality(DateTime) with duplicate datetimes", async () => {
+    const columns: ColumnDef[] = [{ name: "lc", type: "LowCardinality(DateTime)" }];
+    const dt1 = new Date("2024-01-15T10:30:00Z");
+    const dt2 = new Date("2024-06-30T15:45:00Z");
+    const dt1dup = new Date("2024-01-15T10:30:00Z"); // same datetime, different object
+    const rows = [[dt1], [dt2], [dt1dup]];
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(decoded.columns, columns);
+    assert.strictEqual((decodedRows[0][0] as Date).getTime(), dt1.getTime());
+    assert.strictEqual((decodedRows[1][0] as Date).getTime(), dt2.getTime());
+    assert.strictEqual((decodedRows[2][0] as Date).getTime(), dt1.getTime());
+  });
 });
 
 describe("Geo types", () => {

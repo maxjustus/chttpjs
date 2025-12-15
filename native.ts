@@ -4,12 +4,6 @@
  * Native is ClickHouse's columnar format - more efficient than RowBinary
  * because data doesn't need row-to-column conversion on the server.
  *
- * This implementation uses:
- * - Column-oriented architecture (TypedArrays) for performance
- * - Zero-copy decoding where possible
- * - Registry-based codec factory
- * - Full support for Complex Types (Dynamic V3, JSON V3, Variant, Tuple, Geo, IP, UUID)
- *
  * Note: Only Dynamic/JSON V3 format is supported at present. For ClickHouse 25.6+, enable
  * `output_format_native_use_flattened_dynamic_and_json_serialization` setting.
  *
@@ -23,7 +17,15 @@
   columns—they'll always be decompressed in the native format response.
 
   To receive sparse encoded data via HTTP, the client must explicitly set:
-  ?client_protocol_version=54465 or higher
+  ?client_protocol_version=54465 or higher.
+
+  General notes on data layout:
+    - Columnar format: data is stored column-by-column, not row-by-row.
+    - Each column has its own data block. First comes the column metadata (type, name, etc), then the data for that column.
+      - types are presented as type strings as you would write in DDL or when casting. The interpretation of the data depends on the type string. Some types store their underlying data in the same way, IE: dates and datetimes are both stored as Int32, so parsing the type string is necessary to know how to properly interpret the data.
+      - nested types (Array, Tuple, etc.) store their data within the parent column's data block. In flattened Dynamic/JSON, each variant type's data is stored contiguously within the Dynamic's data section.
+
+I need to make sure I have a solid understand of the data layout for each type. Needs to be clearly documented above each codec class.
  */
 
 import {
@@ -52,39 +54,8 @@ export interface ColumnarResult {
   rowCount: number;
 }
 
-/**
- * Lazily iterate rows as objects with column names as keys.
- * Allocates one object per row on demand.
- */
-export function* asRows(result: ColumnarResult): Generator<Record<string, unknown>> {
-  const { columns, columnData, rowCount } = result;
-  const numCols = columns.length;
-  for (let i = 0; i < rowCount; i++) {
-    const row: Record<string, unknown> = {};
-    for (let j = 0; j < numCols; j++) {
-      row[columns[j].name] = columnData[j][i];
-    }
-    yield row;
-  }
-}
-
-/**
- * Convert columnar result to array rows.
- * Useful for re-encoding or comparison with original row arrays.
- */
-export function toArrayRows(result: ColumnarResult): unknown[][] {
-  const { columnData, rowCount } = result;
-  const numCols = columnData.length;
-  const rows: unknown[][] = new Array(rowCount);
-  for (let i = 0; i < rowCount; i++) {
-    const row = new Array(numCols);
-    for (let j = 0; j < numCols; j++) {
-      row[j] = columnData[j][i];
-    }
-    rows[i] = row;
-  }
-  return rows;
-}
+// consistent with StreamDecodeResult exported by row_binary.ts
+export type StreamDecodeNativeResult = ColumnarResult;
 
 // Date/time constants
 const MS_PER_DAY = 86400000;
@@ -95,39 +66,81 @@ const MS_PER_SECOND = 1000;
 // ============================================================================
 
 class BufferWriter {
-  private chunks: Uint8Array[] = [];
-  private totalSize = 0;
+  private buffer: Uint8Array;
+  private offset = 0;
+
+  constructor(initialSize = 256) {
+    this.buffer = new Uint8Array(initialSize);
+  }
+
+  private ensure(bytes: number) {
+    const needed = this.offset + bytes;
+    if (needed <= this.buffer.length) return;
+    let newSize = this.buffer.length * 2;
+    while (newSize < needed) newSize *= 2;
+    const newBuffer = new Uint8Array(newSize);
+    newBuffer.set(this.buffer.subarray(0, this.offset));
+    this.buffer = newBuffer;
+  }
 
   write(chunk: Uint8Array) {
-    this.chunks.push(chunk);
-    this.totalSize += chunk.length;
+    this.ensure(chunk.length);
+    this.buffer.set(chunk, this.offset);
+    this.offset += chunk.length;
   }
 
   writeVarint(value: number) {
-    const arr: number[] = [];
+    this.ensure(10); // Max varint size
     while (value >= 0x80) {
-      arr.push((value & 0x7f) | 0x80);
+      this.buffer[this.offset++] = (value & 0x7f) | 0x80;
       value >>>= 7;
     }
-    arr.push(value);
-    this.write(new Uint8Array(arr));
+    this.buffer[this.offset++] = value;
   }
 
   writeString(val: string) {
-    const bytes = TEXT_ENCODER.encode(val);
-    this.writeVarint(bytes.length);
-    this.write(bytes);
+    // Worst case: 3 bytes per char (UTF-8) + 5 bytes for length varint
+    const maxLen = val.length * 3;
+    this.ensure(maxLen + 5);
+
+    // Reserve 1 byte for length, encode string directly
+    const lenOffset = this.offset++;
+    const { written } = TEXT_ENCODER.encodeInto(
+      val,
+      this.buffer.subarray(this.offset, this.offset + maxLen)
+    );
+
+    if (written < 128) {
+      // Common case: length fits in 1 byte
+      this.buffer[lenOffset] = written;
+      this.offset += written;
+    } else {
+      // Rare case: need multi-byte varint for length
+      // Calculate varint size and shift string bytes
+      let len = written, varintSize = 1;
+      while (len >= 0x80) { varintSize++; len >>>= 7; }
+
+      // Shift string bytes to make room for longer varint
+      this.buffer.copyWithin(
+        lenOffset + varintSize,
+        lenOffset + 1,
+        this.offset + written
+      );
+
+      // Write varint at lenOffset
+      len = written;
+      let pos = lenOffset;
+      while (len >= 0x80) {
+        this.buffer[pos++] = (len & 0x7f) | 0x80;
+        len >>>= 7;
+      }
+      this.buffer[pos] = len;
+      this.offset = lenOffset + varintSize + written;
+    }
   }
 
   finish(): Uint8Array {
-    if (this.chunks.length === 1) return this.chunks[0];
-    const result = new Uint8Array(this.totalSize);
-    let offset = 0;
-    for (const chunk of this.chunks) {
-      result.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return result;
+    return this.buffer.subarray(0, this.offset);
   }
 }
 
@@ -185,13 +198,11 @@ class BufferReader {
   }
 }
 
-// ============================================================================
-// Codec System
-// ============================================================================
-
 interface Codec {
   encode(values: unknown[]): Uint8Array;
   decode(reader: BufferReader, rows: number): unknown[];
+  // nested types need to handle prefix writing/reading - IE: metadata about the column data block that follows
+  // which will impact/influence how the column data is encoded/decoded.
   writePrefix?(writer: BufferWriter, values: unknown[]): void;
   readPrefix?(reader: BufferReader): void;
 }
@@ -203,7 +214,6 @@ type TypedArrayConstructor<T extends TypedArray> = {
   BYTES_PER_ELEMENT: number;
 };
 
-// 1. Numeric Codecs
 class NumericCodec<T extends TypedArray> implements Codec {
   private Ctor: TypedArrayConstructor<T>;
   private converter?: (v: unknown) => number | bigint;
@@ -264,10 +274,11 @@ class NumericCodec<T extends TypedArray> implements Codec {
   }
 }
 
-// 2. String Codec
 class StringCodec implements Codec {
   encode(values: unknown[]): Uint8Array {
     const writer = new BufferWriter();
+    // thought/question: lets say values is already an array of UInt8Array, we could
+    // optimize for that case maybe?
     for (const v of values) writer.writeString(String(v));
     return writer.finish();
   }
@@ -279,7 +290,6 @@ class StringCodec implements Codec {
   }
 }
 
-// 2b. UUID Codec (ClickHouse specific endianness swap)
 class UUIDCodec implements Codec {
   encode(values: unknown[]): Uint8Array {
     const buf = new Uint8Array(values.length * 16);
@@ -315,7 +325,6 @@ class UUIDCodec implements Codec {
   }
 }
 
-// 3. FixedString Codec
 class FixedStringCodec implements Codec {
   len: number;
   constructor(len: number) {
@@ -345,7 +354,6 @@ class FixedStringCodec implements Codec {
   }
 }
 
-// 3b. Scalar Codec - wraps rowbinary codec for types not yet optimized
 class ScalarCodec implements Codec {
   private codec: ReturnType<typeof createRowBinaryCodec>;
 
@@ -374,7 +382,6 @@ class ScalarCodec implements Codec {
   }
 }
 
-// 3c. DateTime64 Codec
 class DateTime64Codec implements Codec {
   private precision: number;
   constructor(precision: number) {
@@ -410,7 +417,7 @@ class DateTime64Codec implements Codec {
   }
 }
 
-// 3d. Epoch Codec - handles Date, Date32, DateTime (ms since epoch / multiplier)
+// handles Date, Date32, DateTime (ms since epoch / multiplier)
 class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Codec {
   private Ctor: TypedArrayConstructor<T>;
   private multiplier: number;
@@ -423,6 +430,7 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
   encode(values: unknown[]): Uint8Array {
     const arr = new this.Ctor(values.length);
     for (let i = 0; i < values.length; i++) {
+      // new Date() over every value even if that value is already a date?
       arr[i] = Math.floor(new Date(values[i] as any).getTime() / this.multiplier) as any;
     }
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
@@ -438,7 +446,6 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
   }
 }
 
-// 3g. IPv4 Codec - encode/decode string IP addresses
 class IPv4Codec implements Codec {
   encode(values: unknown[]): Uint8Array {
     const arr = new Uint32Array(values.length);
@@ -465,7 +472,6 @@ class IPv4Codec implements Codec {
   }
 }
 
-// 3h. IPv6 Codec - encode/decode string IPv6 addresses
 class IPv6Codec implements Codec {
   encode(values: unknown[]): Uint8Array {
     const result = new Uint8Array(values.length * 16);
@@ -491,9 +497,6 @@ class IPv6Codec implements Codec {
   }
 }
 
-// ipv6ToBytes, bytesToIpv6 imported from native_utils.ts
-
-// 4. Array Codec
 // When used as a column in Map/Tuple, inner codec's prefix needs to be handled
 class ArrayCodec implements Codec {
   private inner: Codec;
@@ -504,9 +507,12 @@ class ArrayCodec implements Codec {
 
   writePrefix(writer: BufferWriter, values: unknown[][]) {
     // Flatten to get inner values for prefix
-    const flat: unknown[] = [];
+    let totalCount = 0;
+    for (const arr of values) totalCount += (arr as unknown[]).length;
+    const flat = new Array(totalCount);
+    let idx = 0;
     for (const arr of values) {
-      for (const item of arr as unknown[]) flat.push(item);
+      for (const item of arr as unknown[]) flat[idx++] = item;
     }
     this.inner.writePrefix?.(writer, flat);
   }
@@ -517,15 +523,23 @@ class ArrayCodec implements Codec {
 
   encode(values: unknown[][]): Uint8Array {
     const writer = new BufferWriter();
-    const flat: unknown[] = [];
     const offsets = new BigUint64Array(values.length);
-    let currentOffset = 0n;
 
+    // First pass: count total elements and compute offsets
+    let totalCount = 0;
+    for (let i = 0; i < values.length; i++) {
+      totalCount += (values[i] as unknown[]).length;
+      offsets[i] = BigInt(totalCount);
+    }
+
+    // Pre-allocate flat array
+    const flat = new Array(totalCount);
+    let idx = 0;
     for (let i = 0; i < values.length; i++) {
       const arr = values[i] as unknown[];
-      currentOffset += BigInt(arr.length);
-      offsets[i] = currentOffset;
-      for (const item of arr) flat.push(item);
+      for (let j = 0; j < arr.length; j++) {
+        flat[idx++] = arr[j];
+      }
     }
 
     writer.write(new Uint8Array(offsets.buffer));
@@ -588,14 +602,16 @@ class NullableCodec implements Codec {
   }
 
   decode(reader: BufferReader, rows: number): unknown[] {
-    const flags = reader.readTypedArray(Uint8Array, rows);
+    const rowIsNullFlags = reader.readTypedArray(Uint8Array, rows);
     const values = this.inner.decode(reader, rows);
-    return values.map((v, i) => flags[i] === 1 ? null : v);
+    return values.map((v, i) => rowIsNullFlags[i] === 1 ? null : v);
   }
 }
 
-// 5b. LowCardinality Codec
-// When inner is Nullable and has_null_in_dict flag is set, dictionary stores unwrapped type
+// LowCardinality stores a dictionary of unique values and indices into that dictionary.
+// When wrapping Nullable(T), the dictionary stores T values (not Nullable(T)) and index 0
+// is reserved for NULL. This avoids storing null flags per dictionary entry - nullness is
+// encoded in the index itself.
 class LowCardinalityCodec implements Codec {
   private inner: Codec;
   private dictCodec: Codec; // Codec to use for dictionary (may differ from inner for Nullable)
@@ -621,13 +637,13 @@ class LowCardinalityCodec implements Codec {
     const writer = new BufferWriter();
     const isNullable = this.inner instanceof NullableCodec;
 
-    const dict = new Map<string, number>();
+    const dict = new Map<unknown, number>();
     const dictValues: unknown[] = [];
     const indices: number[] = [];
 
     // For Nullable types, index 0 is reserved for null
     if (isNullable) {
-      dict.set("null", 0);
+      dict.set(null, 0);
       dictValues.push(getZeroValue(this.dictCodec)); // Placeholder for null
     }
 
@@ -635,7 +651,7 @@ class LowCardinalityCodec implements Codec {
       if (isNullable && v === null) {
         indices.push(0); // Null uses index 0
       } else {
-        const k = JSON.stringify(v);
+        const k = getDictKey(v);
         if (!dict.has(k)) {
           dict.set(k, dictValues.length);
           dictValues.push(v);
@@ -644,18 +660,23 @@ class LowCardinalityCodec implements Codec {
       }
     }
 
-    // Always set HAS_ADDITIONAL_KEYS_BIT (bit 9) for insert data
-    const HAS_ADDITIONAL_KEYS_BIT = 1n << 9n;
-    let typeInfo = 0n;
-    let T: any = Uint8Array;
-    if (dictValues.length > 255) { typeInfo = 1n; T = Uint16Array; }
-    if (dictValues.length > 65535) { typeInfo = 2n; T = Uint32Array; }
+    // Flags (UInt64):
+    // - Bits 0-1: indexType - size of index integers (0=UInt8, 1=UInt16, 2=UInt32, 3=UInt64)
+    // - Bit 9: HAS_ADDITIONAL_KEYS_BIT - if set this means dictionary is inline with data (vs shared global dict)
+    //   global shared dictionaries are not used for the Native wire format, so this bit is always set - meaning
+    //   the dictionary is included inline with the data.
+    const HAS_ADDITIONAL_KEYS_BIT = 1n << 9n; // is there no cleaner way to declare a binary literal in JS/TS?
+    let indexType = 0n;
+    let IndexArray: any = Uint8Array;
+    if (dictValues.length > 255) { indexType = 1n; IndexArray = Uint16Array; }
+    if (dictValues.length > 65535) { indexType = 2n; IndexArray = Uint32Array; }
 
-    writer.write(new Uint8Array(new BigUint64Array([HAS_ADDITIONAL_KEYS_BIT | typeInfo]).buffer));
+    writer.write(new Uint8Array(new BigUint64Array([HAS_ADDITIONAL_KEYS_BIT | indexType]).buffer));
+
     writer.write(new Uint8Array(new BigUint64Array([BigInt(dictValues.length)]).buffer));
     writer.write(this.dictCodec.encode(dictValues));
     writer.write(new Uint8Array(new BigUint64Array([BigInt(values.length)]).buffer));
-    writer.write(new Uint8Array(new T(indices).buffer));
+    writer.write(new Uint8Array(new IndexArray(indices).buffer));
 
     return writer.finish();
   }
@@ -697,16 +718,23 @@ class LowCardinalityCodec implements Codec {
 }
 
 // 6. Map Codec
-// Map is serialized as Array(Tuple(K, V)) for prefix purposes.
+// Map is serialized as Array(Tuple(K, V))
 // Prefixes are written at top level, not inside the data.
-// Uses Array<[K, V]> representation to preserve duplicate keys (which generateRandom can create).
+// Uses Array<[K, V]> representation to preserve duplicate keys.
 class MapCodec implements Codec {
-  private key: Codec;
-  private val: Codec;
+  private keyCodec: Codec;
+  private valCodec: Codec;
 
-  constructor(key: Codec, val: Codec) {
-    this.key = key;
-    this.val = val;
+  constructor(keyCodec: Codec, valCodec: Codec) {
+    this.keyCodec = keyCodec;
+    this.valCodec = valCodec;
+  }
+
+  // Convert Map, Array<[K,V]>, or object to array of [key, value] tuples
+  private static toEntries(value: unknown): [unknown, unknown][] {
+    if (value instanceof Map) return [...value.entries()];
+    if (Array.isArray(value)) return value as [unknown, unknown][];
+    return Object.entries(value as Record<string, unknown>);
   }
 
   // Map prefix = key prefix + value prefix (like Tuple(K, V))
@@ -715,18 +743,18 @@ class MapCodec implements Codec {
     const keys: unknown[] = [];
     const vals: unknown[] = [];
     for (const m of values) {
-      for (const [k, v] of toEntries(m)) {
+      for (const [k, v] of MapCodec.toEntries(m)) {
         keys.push(k);
         vals.push(v);
       }
     }
-    this.key.writePrefix?.(writer, keys);
-    this.val.writePrefix?.(writer, vals);
+    this.keyCodec.writePrefix?.(writer, keys);
+    this.valCodec.writePrefix?.(writer, vals);
   }
 
   readPrefix(reader: BufferReader) {
-    this.key.readPrefix?.(reader);
-    this.val.readPrefix?.(reader);
+    this.keyCodec.readPrefix?.(reader);
+    this.valCodec.readPrefix?.(reader);
   }
 
   encode(values: unknown[]): Uint8Array {
@@ -737,7 +765,7 @@ class MapCodec implements Codec {
     let offset = 0n;
 
     for (let i = 0; i < values.length; i++) {
-      const entries = toEntries(values[i]);
+      const entries = MapCodec.toEntries(values[i]);
       offset += BigInt(entries.length);
       offsets[i] = offset;
       for (const [k, v] of entries) {
@@ -749,8 +777,8 @@ class MapCodec implements Codec {
     // Structure: [offsets] [keys] [values]
     // Prefixes were already written via writePrefix at top level
     writer.write(new Uint8Array(offsets.buffer));
-    writer.write(this.key.encode(keys));
-    writer.write(this.val.encode(vals));
+    writer.write(this.keyCodec.encode(keys));
+    writer.write(this.valCodec.encode(vals));
     return writer.finish();
   }
 
@@ -759,8 +787,8 @@ class MapCodec implements Codec {
     const total = rows > 0 ? Number(offsets[rows - 1]) : 0;
 
     // Prefixes were already read via readPrefix at top level
-    const keys = this.key.decode(reader, total);
-    const vals = this.val.decode(reader, total);
+    const keys = this.keyCodec.decode(reader, total);
+    const vals = this.valCodec.decode(reader, total);
 
     const res = new Array(rows);
     let start = 0;
@@ -797,8 +825,15 @@ class TupleCodec implements Codec {
   }
 
   writePrefix(writer: BufferWriter, values: unknown[]) {
+    const n = values.length;
     for (let i = 0; i < this.elements.length; i++) {
-      const colValues = values.map(v => this.isNamed ? (v as any)[this.elements[i].name!] : (v as any)[i]);
+      const colValues = new Array(n);
+      const name = this.elements[i].name;
+      if (this.isNamed) {
+        for (let j = 0; j < n; j++) colValues[j] = (values[j] as any)[name!];
+      } else {
+        for (let j = 0; j < n; j++) colValues[j] = (values[j] as any)[i];
+      }
       this.elements[i].codec.writePrefix?.(writer, colValues);
     }
   }
@@ -811,8 +846,15 @@ class TupleCodec implements Codec {
 
   encode(values: unknown[]): Uint8Array {
     const writer = new BufferWriter();
+    const n = values.length;
     for (let i = 0; i < this.elements.length; i++) {
-      const colValues = values.map(v => this.isNamed ? (v as any)[this.elements[i].name!] : (v as any)[i]);
+      const colValues = new Array(n);
+      const name = this.elements[i].name;
+      if (this.isNamed) {
+        for (let j = 0; j < n; j++) colValues[j] = (values[j] as any)[name!];
+      } else {
+        for (let j = 0; j < n; j++) colValues[j] = (values[j] as any)[i];
+      }
       writer.write(this.elements[i].codec.encode(colValues));
     }
     return writer.finish();
@@ -835,6 +877,9 @@ class TupleCodec implements Codec {
 }
 
 // 8. Variant Codec
+// Note: COMPACT mode (mode=1) exists for storage optimization but is not sent to HTTP clients.
+// ClickHouse always sends BASIC mode (mode=0) over HTTP. COMPACT mode is only used internally
+// for MergeTree storage. See: https://github.com/ClickHouse/ClickHouse/pull/62774
 class VariantCodec implements Codec {
   private types: Codec[];
   constructor(types: Codec[]) {
@@ -842,15 +887,20 @@ class VariantCodec implements Codec {
   }
 
   writePrefix(writer: BufferWriter) {
-    writer.write(new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0]));
-    // Nested codecs don't have separate prefixes
+    // UInt64 LE mode flag: 0=BASIC (row-by-row), 1=COMPACT (granule-based, storage only)
+    const BASIC_MODE = new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0]);
+    writer.write(BASIC_MODE);
   }
 
   readPrefix(reader: BufferReader) {
-    reader.offset += 8;
-    // Nested codecs don't have separate prefixes
+    reader.offset += 8; // Skip encoding mode flag - always BASIC (0) for HTTP clients
   }
 
+  // Variant encoding:
+  // 1. Write discriminators array (UInt8 per row): type index 0..N-1, or 0xFF for null
+  // 2. Group values by discriminator
+  // 3. Write each type's data block containing only rows of that type
+  // Input values are [discriminator, value] tuples, or null.
   encode(values: unknown[]): Uint8Array {
     const writer = new BufferWriter();
     const discriminators: number[] = [];
@@ -896,7 +946,7 @@ class VariantCodec implements Codec {
   }
 }
 
-// 9. Dynamic Codec (V3 only)
+// 9. Dynamic Codec (V3 FLATTENED only)
 class DynamicCodec implements Codec {
   private types: string[] = [];
   private codecs: Codec[] = [];
@@ -990,7 +1040,7 @@ class DynamicCodec implements Codec {
   }
 }
 
-// 10. JSON Codec (V3 only)
+// 10. JSON Codec (V3 FLATTENED only)
 class JsonCodec implements Codec {
   private paths: string[] = [];
   private pathCodecs: Map<string, DynamicCodec> = new Map();
@@ -1072,30 +1122,30 @@ function getCodec(type: string): Codec {
 }
 
 function createCodec(type: string): Codec {
-  if (type.startsWith("Nullable")) return new NullableCodec(getCodec(unwrap(type)));
-  if (type.startsWith("Array")) return new ArrayCodec(getCodec(unwrap(type)));
-  if (type.startsWith("LowCardinality")) return new LowCardinalityCodec(getCodec(unwrap(type)));
+  if (type.startsWith("Nullable")) return new NullableCodec(getCodec(extractTypeArgs(type)));
+  if (type.startsWith("Array")) return new ArrayCodec(getCodec(extractTypeArgs(type)));
+  if (type.startsWith("LowCardinality")) return new LowCardinalityCodec(getCodec(extractTypeArgs(type)));
   if (type.startsWith("Map")) {
-    const [k, v] = parseArgs(unwrap(type));
+    const [k, v] = parseTypeList(extractTypeArgs(type));
     return new MapCodec(getCodec(k), getCodec(v));
   }
   if (type.startsWith("Tuple")) {
-    const args = parseTupleElements(unwrap(type));
+    const args = parseTupleElements(extractTypeArgs(type));
     const isNamed = args[0].name !== null;
     return new TupleCodec(args.map(a => ({ name: a.name, codec: getCodec(a.type) })), isNamed);
   }
   // Nested is syntactic sugar for Array(Tuple(...))
   // e.g., Nested(id UInt64, val String) -> Array(Tuple(UInt64, String))
   if (type.startsWith("Nested")) {
-    const args = parseTupleElements(unwrap(type));
+    const args = parseTupleElements(extractTypeArgs(type));
     const tupleCodec = new TupleCodec(args.map(a => ({ name: a.name, codec: getCodec(a.type) })), true);
     return new ArrayCodec(tupleCodec);
   }
-  if (type.startsWith("Variant")) return new VariantCodec(parseArgs(unwrap(type)).map(getCodec));
+  if (type.startsWith("Variant")) return new VariantCodec(parseTypeList(extractTypeArgs(type)).map(getCodec));
   if (type === "Dynamic") return new DynamicCodec();
   if (type === "JSON" || type.startsWith("JSON")) return new JsonCodec();
 
-  if (type.startsWith("FixedString")) return new FixedStringCodec(parseInt(unwrap(type)));
+  if (type.startsWith("FixedString")) return new FixedStringCodec(parseInt(extractTypeArgs(type)));
 
   if (type.startsWith("DateTime64")) {
     const precisionMatch = type.match(/DateTime64\((\d+)/);
@@ -1136,12 +1186,10 @@ function createCodec(type: string): Codec {
   return new ScalarCodec(type);
 }
 
-function unwrap(type: string): string {
+// Extracts the content between the outermost parentheses: "Array(Int32)" → "Int32"
+function extractTypeArgs(type: string): string {
   return type.substring(type.indexOf("(") + 1, type.lastIndexOf(")"));
 }
-
-// parseArgs aliased to parseTypeList, parseTupleElements imported from native_utils.ts
-const parseArgs = parseTypeList;
 
 function guessType(value: unknown): string {
   if (value === null) return "String";
@@ -1155,12 +1203,9 @@ function guessType(value: unknown): string {
   return "String";
 }
 
-function toEntries(value: unknown): [unknown, unknown][] {
-  if (value instanceof Map) return [...value.entries()];
-  if (Array.isArray(value)) return value as [unknown, unknown][];
-  return Object.entries(value as Record<string, unknown>);
-}
-
+// Returns a zero/empty value for a codec type. Used by NullableCodec and LowCardinalityCodec
+// to fill placeholder slots. Covers scalar and container types; complex types (Variant, Dynamic,
+// JSON) have their own null handling and wouldn't appear as inner types here.
 function getZeroValue(codec: Codec): any {
   if (codec instanceof NumericCodec) return 0;
   if (codec instanceof StringCodec) return "";
@@ -1174,6 +1219,20 @@ function getZeroValue(codec: Codec): any {
   if (codec instanceof TupleCodec) return [];
   if (codec instanceof MapCodec) return new Map();
   return 0;
+}
+
+// Converts a value to a Map-compatible key for LowCardinality dictionary deduplication.
+// Primitives work directly; objects need conversion since Map uses reference equality.
+function getDictKey(v: unknown): unknown {
+  if (v === null || typeof v !== 'object') return v;
+  if (v instanceof Date) return v.getTime();
+  if (v instanceof Uint8Array) {
+    // FixedString - convert to string for deduplication
+    let s = '';
+    for (let i = 0; i < v.length; i++) s += String.fromCharCode(v[i]);
+    return s;
+  }
+  return JSON.stringify(v); // fallback for unexpected object types
 }
 
 // ============================================================================
@@ -1238,27 +1297,45 @@ function decodeNativeBlock(
   };
 }
 
+/**
+ * Encode row-oriented data to Native format.
+ * Input: rows[rowIndex][colIndex]
+ */
 export function encodeNative(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
-  const writer = new BufferWriter();
   const numRows = rows.length;
 
-  writer.writeVarint(columns.length);
-  writer.writeVarint(numRows);
-
-  // Extract column data once
+  // Transpose rows to columns
   const cols = new Array(columns.length);
   for (let i = 0; i < columns.length; i++) {
     cols[i] = new Array(numRows);
     for (let j = 0; j < numRows; j++) cols[i][j] = rows[j][i];
   }
 
+  return encodeNativeColumnar(columns, cols, numRows);
+}
+
+/**
+ * Encode columnar data to Native format (no transpose needed).
+ * Input: columnData[colIndex][rowIndex]
+ */
+export function encodeNativeColumnar(
+  columns: ColumnDef[],
+  columnData: unknown[][],
+  rowCount?: number,
+): Uint8Array {
+  const writer = new BufferWriter();
+  const numRows = rowCount ?? (columnData[0]?.length ?? 0);
+
+  writer.writeVarint(columns.length);
+  writer.writeVarint(numRows);
+
   // Native format: per-column [name, type, prefix, data]
   for (let i = 0; i < columns.length; i++) {
     const codec = getCodec(columns[i].type);
     writer.writeString(columns[i].name);
     writer.writeString(columns[i].type);
-    codec.writePrefix?.(writer, cols[i]);
-    writer.write(codec.encode(cols[i]));
+    codec.writePrefix?.(writer, columnData[i]);
+    writer.write(codec.encode(columnData[i]));
   }
 
   return writer.finish();
@@ -1297,9 +1374,6 @@ export async function decodeNative(
   return { columns, columnData: allColumnData, rowCount: totalRows };
 }
 
-// Stream wrappers
-export type StreamDecodeNativeResult = ColumnarResult;
-
 export async function* streamEncodeNative(
   columns: ColumnDef[],
   rows: Iterable<unknown[]> | AsyncIterable<unknown[]>,
@@ -1318,7 +1392,6 @@ export async function* streamEncodeNative(
   if (batch.length > 0) yield encodeNative(columns, batch);
 }
 
-// Helper: flatten chunk list only when needed
 function flattenChunks(chunks: Uint8Array[], totalLength: number): Uint8Array {
   if (chunks.length === 1) return chunks[0];
   const result = new Uint8Array(totalLength);
@@ -1330,7 +1403,6 @@ function flattenChunks(chunks: Uint8Array[], totalLength: number): Uint8Array {
   return result;
 }
 
-// Helper: consume bytes from chunk list
 function consumeBytes(chunks: Uint8Array[], bytes: number): number {
   let consumed = 0;
   while (bytes > 0 && chunks.length > 0) {
@@ -1347,10 +1419,44 @@ function consumeBytes(chunks: Uint8Array[], bytes: number): number {
   return consumed;
 }
 
+/**
+ * Lazily iterate rows as objects with column names as keys.
+ * Allocates one object per row on demand.
+ */
+export function* asRows(result: ColumnarResult): Generator<Record<string, unknown>> {
+  const { columns, columnData, rowCount } = result;
+  const numCols = columns.length;
+  for (let i = 0; i < rowCount; i++) {
+    const row: Record<string, unknown> = {};
+    for (let j = 0; j < numCols; j++) {
+      row[columns[j].name] = columnData[j][i];
+    }
+    yield row;
+  }
+}
+
+/**
+ * Convert columnar result to array rows.
+ * Useful for re-encoding or comparison with original row arrays.
+ */
+export function toArrayRows(result: ColumnarResult): unknown[][] {
+  const { columnData, rowCount } = result;
+  const numCols = columnData.length;
+  const rows: unknown[][] = new Array(rowCount);
+  for (let i = 0; i < rowCount; i++) {
+    const row = new Array(numCols);
+    for (let j = 0; j < numCols; j++) {
+      row[j] = columnData[j][i];
+    }
+    rows[i] = row;
+  }
+  return rows;
+}
+
 export async function* streamDecodeNative(
   chunks: AsyncIterable<Uint8Array>,
   options?: DecodeOptions,
-): AsyncGenerator<StreamDecodeNativeResult> {
+): AsyncGenerator<ColumnarResult> {
   const pendingChunks: Uint8Array[] = [];
   let pendingLength = 0;
   let columns: ColumnDef[] = [];

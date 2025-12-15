@@ -322,13 +322,13 @@ function streamJsonEachRow(
   data: Iterable<unknown> | AsyncIterable<unknown>,
 ): Generator<Uint8Array> | AsyncGenerator<Uint8Array> {
   if (Symbol.asyncIterator in data) {
-    return (async function* () {
+    return (async function*() {
       for await (const row of data) {
         yield encoder.encode(JSON.stringify(row) + "\n");
       }
     })();
   }
-  return (function* () {
+  return (function*() {
     for (const row of data as Iterable<unknown>) {
       yield encoder.encode(JSON.stringify(row) + "\n");
     }
@@ -365,7 +365,7 @@ function streamJsonCompactEachRowWithNames(
   columns?: string[],
 ): Generator<Uint8Array> | AsyncGenerator<Uint8Array> {
   if (Symbol.asyncIterator in data) {
-    return (async function* () {
+    return (async function*() {
       let cols = columns;
       for await (const row of data) {
         if (!cols) {
@@ -378,7 +378,7 @@ function streamJsonCompactEachRowWithNames(
       }
     })();
   }
-  return (function* () {
+  return (function*() {
     let cols = columns;
     for (const row of data as Iterable<Record<string, unknown>>) {
       if (!cols) {
