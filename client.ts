@@ -162,7 +162,7 @@ async function insert(
 
     const response = await fetch(url.toString(), {
       method: "POST",
-      headers: { "Content-Type": "application/octet-stream" },
+      headers: { "Content-Type": "application/octet-stream", "Connection": "close" },
       body: compressed,
       signal: createSignal(options.signal, options.timeout),
     });
@@ -198,7 +198,7 @@ async function insert(
 
     const response = await fetch(url.toString(), {
       method: "POST",
-      headers: { "Content-Type": "application/octet-stream" },
+      headers: { "Content-Type": "application/octet-stream", "Connection": "close" },
       body: compressed,
       signal: createSignal(options.signal, options.timeout),
     });
@@ -296,7 +296,7 @@ async function insert(
 
   const response = await fetch(url.toString(), {
     method: "POST",
-    headers: { "Content-Type": "application/octet-stream" },
+    headers: { "Content-Type": "application/octet-stream", "Connection": "close" },
     body: stream,
     duplex: "half",
     signal: createSignal(options.signal, options.timeout),
@@ -453,6 +453,7 @@ async function* query(
   const response = await fetch(url.toString(), {
     method: "POST",
     body: query,
+    headers: { "Connection": "close" },
     signal: createSignal(options.signal, options.timeout),
   });
 
