@@ -10,7 +10,7 @@ import {
   streamEncodeRowBinary,
   type ColumnDef,
 } from "../rowbinary.ts";
-import { encodeNative, decodeNative } from "../native.ts";
+import { encodeNative, encodeNativeColumnar, decodeNative } from "../native.ts";
 
 // --- Benchmark infrastructure ---
 
@@ -228,6 +228,36 @@ function generateComplexTypedData(count: number): { json: Record<string, unknown
   return { json, rows, columns };
 }
 
+function generateColumnarNumericData(count: number) {
+  const columns: ColumnDef[] = [
+    { name: "id", type: "UInt32" },
+    { name: "x", type: "Float64" },
+    { name: "y", type: "Float64" },
+    { name: "z", type: "Float64" },
+  ];
+
+  // Columnar data as TypedArrays
+  const ids = new Uint32Array(count);
+  const xs = new Float64Array(count);
+  const ys = new Float64Array(count);
+  const zs = new Float64Array(count);
+
+  for (let i = 0; i < count; i++) {
+    ids[i] = i;
+    xs[i] = Math.random();
+    ys[i] = Math.random();
+    zs[i] = Math.random();
+  }
+
+  // Row-oriented for comparison
+  const rows: unknown[][] = [];
+  for (let i = 0; i < count; i++) {
+    rows.push([ids[i], xs[i], ys[i], zs[i]]);
+  }
+
+  return { columns, rows, columnar: [ids, xs, ys, zs] as unknown[][] };
+}
+
 // --- Main ---
 
 async function main() {
@@ -299,6 +329,18 @@ async function main() {
   console.log(`  Decode (64KB):    ${((stream64k.ms / syncDec.ms - 1) * 100).toFixed(1)}% overhead`);
   console.log(`  Decode (4KB):     ${((stream4k.ms / syncDec.ms - 1) * 100).toFixed(1)}% overhead`);
   console.log(`  Encode:           ${((streamEnc.ms / syncEnc.ms - 1) * 100).toFixed(1)}% overhead`);
+
+  // Columnar TypedArray benchmarks
+  console.log("\n=== Native Columnar vs Row-based (numeric data) ===\n");
+  const columnar = generateColumnarNumericData(ROWS);
+
+  console.log("Native encode (row-based vs columnar TypedArray):");
+  const nativeRowEnc = bench("Native (row input)", () => encodeNative(columnar.columns, columnar.rows), 50, ITERATIONS);
+  console.log(formatResult(nativeRowEnc, ROWS));
+  const nativeColEnc = bench("Native (TypedArray columnar)", () => encodeNativeColumnar(columnar.columns, columnar.columnar, ROWS), 50, ITERATIONS);
+  console.log(formatResult(nativeColEnc, ROWS));
+
+  console.log(`\nSpeedup: ${(nativeRowEnc.ms / nativeColEnc.ms).toFixed(2)}x faster with TypedArray columnar input`);
 }
 
 main().catch(console.error);

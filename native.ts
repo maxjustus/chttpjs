@@ -34,8 +34,6 @@ import {
   type DecodeOptions,
   TEXT_ENCODER,
   TEXT_DECODER,
-  Float32NaN,
-  Float64NaN,
   ClickHouseDateTime64,
   parseTypeList,
   parseTupleElements,
@@ -45,25 +43,18 @@ import {
 
 import { createCodec as createRowBinaryCodec, RowBinaryEncoder } from "./rowbinary.ts";
 
-export { type ColumnDef, type DecodeResult, type DecodeOptions, ClickHouseDateTime64, Float32NaN, Float64NaN };
+export { type ColumnDef, type DecodeResult, type DecodeOptions, ClickHouseDateTime64 };
 
-// Columnar result type (returned by decode functions)
 export interface ColumnarResult {
   columns: ColumnDef[];
-  columnData: unknown[][];  // columnData[colIndex][rowIndex]
+  columnData: (unknown[] | TypedArray)[];  // columnData[colIndex][rowIndex]
   rowCount: number;
 }
 
-// consistent with StreamDecodeResult exported by row_binary.ts
 export type StreamDecodeNativeResult = ColumnarResult;
 
-// Date/time constants
 const MS_PER_DAY = 86400000;
 const MS_PER_SECOND = 1000;
-
-// ============================================================================
-// Buffer Utilities
-// ============================================================================
 
 class BufferWriter {
   private buffer: Uint8Array;
@@ -199,11 +190,11 @@ class BufferReader {
 }
 
 interface Codec {
-  encode(values: unknown[]): Uint8Array;
-  decode(reader: BufferReader, rows: number): unknown[];
+  encode(values: unknown[] | TypedArray): Uint8Array;
+  decode(reader: BufferReader, rows: number): unknown[] | TypedArray;
   // nested types need to handle prefix writing/reading - IE: metadata about the column data block that follows
   // which will impact/influence how the column data is encoded/decoded.
-  writePrefix?(writer: BufferWriter, values: unknown[]): void;
+  writePrefix?(writer: BufferWriter, values: unknown[] | TypedArray): void;
   readPrefix?(reader: BufferReader): void;
 }
 
@@ -223,54 +214,26 @@ class NumericCodec<T extends TypedArray> implements Codec {
   }
 
   encode(values: unknown[]): Uint8Array {
+    // Fast path: input is already correct TypedArray
+    if (values instanceof this.Ctor) {
+      return new Uint8Array(values.buffer, values.byteOffset, values.byteLength);
+    }
+
     const arr = new this.Ctor(values.length);
-    const result = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
 
     if (this.converter) {
       for (let i = 0; i < values.length; i++) arr[i] = this.converter(values[i]) as any;
-    } else {
-      for (let i = 0; i < values.length; i++) {
-        const v = values[i];
-        // Handle Float32NaN/Float64NaN wrappers - copy raw bytes to preserve NaN bit patterns
-        if (v instanceof Float32NaN) {
-          result.set(v.bytes, i * 4);
-        } else if (v instanceof Float64NaN) {
-          result.set(v.bytes, i * 8);
-        } else {
-          arr[i] = v as any;
-        }
-      }
+      return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
     }
-    return result;
+
+    // TypedArray assignment normalizes NaN to canonical form
+    for (let i = 0; i < values.length; i++) arr[i] = values[i] as any;
+    return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
-    const arr = reader.readTypedArray(this.Ctor, rows);
-
-    // For floats, wrap NaN values in special classes to preserve bit patterns
-    const ctor = this.Ctor as unknown;
-    if (ctor === Float32Array || ctor === Float64Array) {
-      return this.decodeFloatWithNaN(arr as Float32Array | Float64Array, reader);
-    }
-
-    return [...arr];
-  }
-
-  private decodeFloatWithNaN(arr: Float32Array | Float64Array, reader: BufferReader): unknown[] {
-    const bytesPerElement = arr.BYTES_PER_ELEMENT;
-    const NaNClass = bytesPerElement === 4 ? Float32NaN : Float64NaN;
-    const rows = arr.length;
-    const res = new Array(rows);
-    for (let i = 0; i < rows; i++) {
-      const val = arr[i];
-      if (Number.isNaN(val)) {
-        const offset = reader.offset - rows * bytesPerElement + i * bytesPerElement;
-        res[i] = new NaNClass(reader.buffer.slice(offset, offset + bytesPerElement));
-      } else {
-        res[i] = val;
-      }
-    }
-    return res;
+  decode(reader: BufferReader, rows: number): T {
+    // Return TypedArray directly - faster (no spread copy) and preserves NaN bit patterns
+    return reader.readTypedArray(this.Ctor, rows);
   }
 }
 
@@ -284,7 +247,7 @@ class StringCodec implements Codec {
   }
 
   decode(reader: BufferReader, rows: number): unknown[] {
-    const res = new Array(rows);
+    const res = new Array(rows).fill('');
     for (let i = 0; i < rows; i++) res[i] = reader.readString();
     return res;
   }
@@ -309,7 +272,7 @@ class UUIDCodec implements Codec {
   }
 
   decode(reader: BufferReader, rows: number): unknown[] {
-    const res = new Array(rows);
+    const res = new Array(rows).fill('00000000-0000-0000-0000-000000000000'); // zero value of UUID
     for (let i = 0; i < rows; i++) {
       const b = reader.buffer.subarray(reader.offset, reader.offset + 16);
       reader.offset += 16;
@@ -345,7 +308,7 @@ class FixedStringCodec implements Codec {
   }
 
   decode(reader: BufferReader, rows: number): unknown[] {
-    const res = new Array(rows);
+    const res = new Array(rows).fill(null);
     for (let i = 0; i < rows; i++) {
       res[i] = reader.buffer.slice(reader.offset, reader.offset + this.len);
       reader.offset += this.len;
@@ -370,7 +333,7 @@ class ScalarCodec implements Codec {
   }
 
   decode(reader: BufferReader, rows: number): unknown[] {
-    const res = new Array(rows);
+    const res = new Array(rows).fill(null);
     const view = reader.view;
     const data = reader.buffer;
     const cursor = { offset: reader.offset };
@@ -409,7 +372,7 @@ class DateTime64Codec implements Codec {
 
   decode(reader: BufferReader, rows: number): unknown[] {
     const arr = reader.readTypedArray(BigInt64Array, rows);
-    const res = new Array(rows);
+    const res = new Array(rows).fill(null);
     for (let i = 0; i < rows; i++) {
       res[i] = new ClickHouseDateTime64(arr[i], this.precision);
     }
@@ -438,7 +401,7 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
 
   decode(reader: BufferReader, rows: number): unknown[] {
     const arr = reader.readTypedArray(this.Ctor, rows);
-    const res = new Array(rows);
+    const res = new Array(rows).fill(null);
     for (let i = 0; i < rows; i++) {
       res[i] = new Date((arr[i] as number) * this.multiplier);
     }
@@ -461,9 +424,9 @@ class IPv4Codec implements Codec {
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
+  decode(reader: BufferReader, rows: number): string[] {
     const arr = reader.readTypedArray(Uint32Array, rows);
-    const res = new Array(rows);
+    const res = new Array(rows).fill('');
     for (let i = 0; i < rows; i++) {
       const v = arr[i];
       res[i] = `${v & 0xFF}.${(v >> 8) & 0xFF}.${(v >> 16) & 0xFF}.${(v >> 24) & 0xFF}`;
@@ -488,7 +451,7 @@ class IPv6Codec implements Codec {
   }
 
   decode(reader: BufferReader, rows: number): unknown[] {
-    const res = new Array(rows);
+    const res = new Array(rows).fill('::'); // zero value of IPv6
     for (let i = 0; i < rows; i++) {
       const bytes = reader.readBytes(16);
       res[i] = bytesToIpv6(bytes);
@@ -500,16 +463,26 @@ class IPv6Codec implements Codec {
 // When used as a column in Map/Tuple, inner codec's prefix needs to be handled
 class ArrayCodec implements Codec {
   private inner: Codec;
+  private innerCtor: TypedArrayConstructor<TypedArray> | null = null;
 
   constructor(inner: Codec) {
     this.inner = inner;
+    // Fast path for numeric types without converters (direct TypedArray assignment)
+    // Excludes: UInt64/Int64 (converter), Bool (converter)
+    if (inner instanceof NumericCodec) {
+      const ctor = (inner as any).Ctor;
+      const hasConverter = !!(inner as any).converter;
+      if (!hasConverter) {
+        this.innerCtor = ctor;
+      }
+    }
   }
 
   writePrefix(writer: BufferWriter, values: unknown[][]) {
     // Flatten to get inner values for prefix
     let totalCount = 0;
     for (const arr of values) totalCount += (arr as unknown[]).length;
-    const flat = new Array(totalCount);
+    const flat = new Array(totalCount).fill(null);
     let idx = 0;
     for (const arr of values) {
       for (const item of arr as unknown[]) flat[idx++] = item;
@@ -532,18 +505,39 @@ class ArrayCodec implements Codec {
       offsets[i] = BigInt(totalCount);
     }
 
-    // Pre-allocate flat array
-    const flat = new Array(totalCount);
-    let idx = 0;
-    for (let i = 0; i < values.length; i++) {
-      const arr = values[i] as unknown[];
-      for (let j = 0; j < arr.length; j++) {
-        flat[idx++] = arr[j];
+    writer.write(new Uint8Array(offsets.buffer));
+
+    // Fast path: flatten directly into TypedArray for numeric inner types
+    if (this.innerCtor) {
+      const flat = new this.innerCtor(totalCount);
+      let idx = 0;
+      for (let i = 0; i < values.length; i++) {
+        const arr = values[i];
+        if (arr instanceof this.innerCtor) {
+          // Bulk copy TypedArray
+          flat.set(arr as any, idx);
+          idx += arr.length;
+        } else {
+          // Element-by-element for regular arrays
+          for (let j = 0; j < (arr as unknown[]).length; j++) {
+            flat[idx++] = (arr as unknown[])[j] as any;
+          }
+        }
       }
+      writer.write(new Uint8Array(flat.buffer, flat.byteOffset, flat.byteLength));
+    } else {
+      // Slow path: flatten to regular array, delegate to inner codec
+      const flat = new Array(totalCount).fill(null);
+      let idx = 0;
+      for (let i = 0; i < values.length; i++) {
+        const arr = values[i] as unknown[];
+        for (let j = 0; j < arr.length; j++) {
+          flat[idx++] = arr[j];
+        }
+      }
+      writer.write(this.inner.encode(flat));
     }
 
-    writer.write(new Uint8Array(offsets.buffer));
-    writer.write(this.inner.encode(flat));
     return writer.finish();
   }
 
@@ -552,7 +546,7 @@ class ArrayCodec implements Codec {
     const totalCount = rows > 0 ? Number(offsets[rows - 1]) : 0;
     const flat = this.inner.decode(reader, totalCount);
 
-    const res = new Array(rows);
+    const res = new Array(rows).fill(null); // PACKED, avoid shared ref for arrays
     let start = 0;
     for (let i = 0; i < rows; i++) {
       const end = Number(offsets[i]);
@@ -585,7 +579,7 @@ class NullableCodec implements Codec {
   encode(values: unknown[]): Uint8Array {
     const writer = new BufferWriter();
     const flags = new Uint8Array(values.length);
-    const cleanValues = new Array(values.length);
+    const cleanValues = new Array(values.length).fill(null);
 
     for (let i = 0; i < values.length; i++) {
       if (values[i] === null) {
@@ -604,7 +598,12 @@ class NullableCodec implements Codec {
   decode(reader: BufferReader, rows: number): unknown[] {
     const rowIsNullFlags = reader.readTypedArray(Uint8Array, rows);
     const values = this.inner.decode(reader, rows);
-    return values.map((v, i) => rowIsNullFlags[i] === 1 ? null : v);
+    // Must convert to regular array since TypedArray can't store null
+    const result = new Array(rows).fill(null);
+    for (let i = 0; i < rows; i++) {
+      result[i] = rowIsNullFlags[i] === 1 ? null : values[i];
+    }
+    return result;
   }
 }
 
@@ -707,7 +706,8 @@ class LowCardinalityCodec implements Codec {
     else if (typeInfo === 2) indices = reader.readTypedArray(Uint32Array, count);
     else indices = reader.readTypedArray(BigUint64Array, count);
 
-    const res = new Array(count);
+    const zeroValue = 0; // TODO: correct zero value for inner type
+    const res = new Array(count).fill(zeroValue);
     for (let i = 0; i < count; i++) {
       const idx = Number(indices[i]);
       // Index 0 is null ONLY when inner type is Nullable
@@ -790,7 +790,7 @@ class MapCodec implements Codec {
     const keys = this.keyCodec.decode(reader, total);
     const vals = this.valCodec.decode(reader, total);
 
-    const res = new Array(rows);
+    const res = new Array(rows).fill(null); // PACKED, avoid shared ref for Map/Array
     let start = 0;
     for (let i = 0; i < rows; i++) {
       const end = Number(offsets[i]);
@@ -827,7 +827,8 @@ class TupleCodec implements Codec {
   writePrefix(writer: BufferWriter, values: unknown[]) {
     const n = values.length;
     for (let i = 0; i < this.elements.length; i++) {
-      const colValues = new Array(n);
+      const zeroValue = 0;
+      const colValues = new Array(n).fill(zeroValue); // preallocate with zero values
       const name = this.elements[i].name;
       if (this.isNamed) {
         for (let j = 0; j < n; j++) colValues[j] = (values[j] as any)[name!];
@@ -848,7 +849,7 @@ class TupleCodec implements Codec {
     const writer = new BufferWriter();
     const n = values.length;
     for (let i = 0; i < this.elements.length; i++) {
-      const colValues = new Array(n);
+      const colValues = new Array(n).fill(null);
       const name = this.elements[i].name;
       if (this.isNamed) {
         for (let j = 0; j < n; j++) colValues[j] = (values[j] as any)[name!];
@@ -862,7 +863,7 @@ class TupleCodec implements Codec {
 
   decode(reader: BufferReader, rows: number): unknown[] {
     const cols = this.elements.map(e => e.codec.decode(reader, rows));
-    const res = new Array(rows);
+    const res = new Array(rows).fill(null); // PACKED, avoid shared ref for objects/arrays
     for (let i = 0; i < rows; i++) {
       if (this.isNamed) {
         const obj: any = {};
@@ -926,12 +927,12 @@ class VariantCodec implements Codec {
     const groups = new Map<number, number>();
     for (const d of discriminators) if (d !== 0xFF) groups.set(d, (groups.get(d) || 0) + 1);
 
-    const decoded = new Map<number, unknown[]>();
+    const decoded = new Map<number, unknown[] | TypedArray>();
     for (let i = 0; i < this.types.length; i++) {
       if (groups.has(i)) decoded.set(i, this.types[i].decode(reader, groups.get(i)!));
     }
 
-    const res = new Array(rows);
+    const res = new Array(rows).fill(null);
     const counters = new Map<number, number>();
     for (let i = 0; i < rows; i++) {
       const d = discriminators[i];
@@ -1020,12 +1021,12 @@ class DynamicCodec implements Codec {
     const groups = new Map<number, number>();
     for (const d of discriminators) if (d !== nullDisc) groups.set(d, (groups.get(d) || 0) + 1);
 
-    const decoded = new Map<number, unknown[]>();
+    const decoded = new Map<number, unknown[] | TypedArray>();
     for (let i = 0; i < this.types.length; i++) {
       if (groups.has(i)) decoded.set(i, this.codecs[i].decode(reader, groups.get(i)!));
     }
 
-    const res = new Array(rows);
+    const res = new Array(rows).fill(null);
     const counters = new Map<number, number>();
     for (let i = 0; i < rows; i++) {
       const d = discriminators[i];
@@ -1095,7 +1096,7 @@ class JsonCodec implements Codec {
       pathCols.set(path, this.pathCodecs.get(path)!.decode(reader, rows));
     }
 
-    const res = new Array(rows);
+    const res = new Array(rows).fill(null);
     for (let i = 0; i < rows; i++) {
       const obj: any = {};
       for (const path of this.paths) {
@@ -1241,7 +1242,7 @@ function getDictKey(v: unknown): unknown {
 
 interface BlockResult {
   columns: ColumnDef[];
-  columnData: unknown[][];  // columnData[colIndex][rowIndex]
+  columnData: (unknown[] | TypedArray)[];  // columnData[colIndex][rowIndex]
   rowCount: number;
   bytesConsumed: number;
   isEndMarker: boolean;
@@ -1275,7 +1276,7 @@ function decodeNativeBlock(
   }
 
   const columns: ColumnDef[] = [];
-  const columnData: unknown[][] = [];
+  const columnData: (unknown[] | TypedArray)[] = [];
 
   // Native format: per-column [name, type, prefix, data]
   for (let i = 0; i < numCols; i++) {
@@ -1305,9 +1306,9 @@ export function encodeNative(columns: ColumnDef[], rows: unknown[][]): Uint8Arra
   const numRows = rows.length;
 
   // Transpose rows to columns
-  const cols = new Array(columns.length);
+  const cols = new Array(columns.length).fill(null);
   for (let i = 0; i < columns.length; i++) {
-    cols[i] = new Array(numRows);
+    cols[i] = new Array(numRows).fill(null);
     for (let j = 0; j < numRows; j++) cols[i][j] = rows[j][i];
   }
 
@@ -1320,7 +1321,7 @@ export function encodeNative(columns: ColumnDef[], rows: unknown[][]): Uint8Arra
  */
 export function encodeNativeColumnar(
   columns: ColumnDef[],
-  columnData: unknown[][],
+  columnData: (unknown[] | TypedArray)[],
   rowCount?: number,
 ): Uint8Array {
   const writer = new BufferWriter();
@@ -1444,9 +1445,9 @@ export function* asRows(result: ColumnarResult): Generator<Record<string, unknow
 export function toArrayRows(result: ColumnarResult): unknown[][] {
   const { columnData, rowCount } = result;
   const numCols = columnData.length;
-  const rows: unknown[][] = new Array(rowCount);
+  const rows: unknown[][] = new Array(rowCount).fill(null);
   for (let i = 0; i < rowCount; i++) {
-    const row = new Array(numCols);
+    const row = new Array(numCols).fill(null);
     for (let j = 0; j < numCols; j++) {
       row[j] = columnData[j][i];
     }

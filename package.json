@@ -51,6 +51,7 @@
     "fast-json-stringify": "^6.1.1",
     "flatstr": "^1.0.12",
     "testcontainers": "^11.5.1",
+    "typescript": "^5.9.3",
     "zstd-wasm-decoder": "^0.2.2"
   }
 }

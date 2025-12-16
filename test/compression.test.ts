@@ -14,7 +14,7 @@ import {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-function concat(arrays: Uint8Array[]): Uint8Array {
+function concat(arrays: Uint8Array<ArrayBufferLike>[]): Uint8Array {
   const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
   const result = new Uint8Array(totalLength);
   let offset = 0;
@@ -137,7 +137,7 @@ describe("Compression", () => {
 
       // Simulate the decompression logic with partial chunks
       async function processChunks(chunks: Uint8Array[]) {
-        let buffer = new Uint8Array(0);
+        let buffer: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
         let result = "";
 
         for (const chunk of chunks) {

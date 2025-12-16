@@ -585,9 +585,10 @@ describe("Variant", () => {
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
-    assert.deepStrictEqual(decodedRows[0][0], [0, [1, 2, 3]]);
+    // Numeric arrays now return TypedArrays
+    assert.deepStrictEqual(decodedRows[0][0], [0, Int32Array.from([1, 2, 3])]);
     assert.deepStrictEqual(decodedRows[1][0], [1, "test"]);
-    assert.deepStrictEqual(decodedRows[2][0], [0, []]);
+    assert.deepStrictEqual(decodedRows[2][0], [0, Int32Array.from([])]);
   });
 });
 
@@ -902,5 +903,156 @@ describe("Deep nested structure edge cases", () => {
 
     assert.strictEqual(decoded.rowCount, 3);
     assert.deepStrictEqual(decodedRows[1][0], []); // Empty array preserved
+  });
+});
+
+// Tests for ArrayCodec code paths (fast path vs converter/NaN paths)
+describe("ArrayCodec code paths", () => {
+  // Fast path: Array of integers with TypedArray input
+  it("Array(Int32) with Int32Array input (fast path)", async () => {
+    const columns: ColumnDef[] = [{ name: "arr", type: "Array(Int32)" }];
+    const rows = [
+      [new Int32Array([1, 2, 3])],
+      [new Int32Array([])],
+      [new Int32Array([-2147483648, 0, 2147483647])],
+    ];
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(Array.from(decodedRows[0][0] as Int32Array), [1, 2, 3]);
+    assert.deepStrictEqual(Array.from(decodedRows[1][0] as Int32Array), []);
+    assert.deepStrictEqual(Array.from(decodedRows[2][0] as Int32Array), [-2147483648, 0, 2147483647]);
+  });
+
+  it("Array(UInt32) with Uint32Array input (fast path)", async () => {
+    const columns: ColumnDef[] = [{ name: "arr", type: "Array(UInt32)" }];
+    const rows = [
+      [new Uint32Array([0, 100, 4294967295])],
+      [new Uint32Array([42])],
+    ];
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(Array.from(decodedRows[0][0] as Uint32Array), [0, 100, 4294967295]);
+    assert.deepStrictEqual(Array.from(decodedRows[1][0] as Uint32Array), [42]);
+  });
+
+  it("Array(Int16) with regular array (fast path, non-TypedArray input)", async () => {
+    const columns: ColumnDef[] = [{ name: "arr", type: "Array(Int16)" }];
+    const rows = [
+      [[-32768, 0, 32767]],
+      [[1, 2, 3]],
+    ];
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(Array.from(decodedRows[0][0] as Int16Array), [-32768, 0, 32767]);
+    assert.deepStrictEqual(Array.from(decodedRows[1][0] as Int16Array), [1, 2, 3]);
+  });
+
+  // Converter path: Array(Int64) requires BigInt conversion
+  it("Array(Int64) with BigInt values (converter path)", async () => {
+    const columns: ColumnDef[] = [{ name: "arr", type: "Array(Int64)" }];
+    const rows = [
+      [[1n, 2n, 3n]],
+      [[-9223372036854775808n, 0n, 9223372036854775807n]],
+      [[]],
+    ];
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(Array.from(decodedRows[0][0] as BigInt64Array), [1n, 2n, 3n]);
+    assert.deepStrictEqual(
+      Array.from(decodedRows[1][0] as BigInt64Array),
+      [-9223372036854775808n, 0n, 9223372036854775807n]
+    );
+    assert.deepStrictEqual(Array.from(decodedRows[2][0] as BigInt64Array), []);
+  });
+
+  it("Array(UInt64) with BigInt values (converter path)", async () => {
+    const columns: ColumnDef[] = [{ name: "arr", type: "Array(UInt64)" }];
+    const rows = [
+      [[0n, 18446744073709551615n]],
+    ];
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(Array.from(decodedRows[0][0] as BigUint64Array), [0n, 18446744073709551615n]);
+  });
+
+  // Converter path: Array(Bool) requires boolean to number conversion
+  it("Array(Bool) with boolean values (converter path)", async () => {
+    const columns: ColumnDef[] = [{ name: "arr", type: "Array(Bool)" }];
+    const rows = [
+      [[true, false, true]],
+      [[false]],
+      [[]],
+    ];
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    // Bool decodes to Uint8Array with 0/1 values
+    assert.deepStrictEqual(Array.from(decodedRows[0][0] as Uint8Array), [1, 0, 1]);
+    assert.deepStrictEqual(Array.from(decodedRows[1][0] as Uint8Array), [0]);
+    assert.deepStrictEqual(Array.from(decodedRows[2][0] as Uint8Array), []);
+  });
+
+  // NaN path: Array(Float64) requires NaN bit pattern preservation
+  it("Array(Float64) with regular floats (NaN path, no actual NaN)", async () => {
+    const columns: ColumnDef[] = [{ name: "arr", type: "Array(Float64)" }];
+    const rows = [
+      [[1.5, -2.5, 0, Infinity, -Infinity]],
+      [new Float64Array([3.14, 2.718])],
+    ];
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(Array.from(decodedRows[0][0] as Float64Array), [1.5, -2.5, 0, Infinity, -Infinity]);
+    assert.deepStrictEqual(Array.from(decodedRows[1][0] as Float64Array), [3.14, 2.718]);
+  });
+
+  it("Array(Float64) with NaN values", async () => {
+    const columns: ColumnDef[] = [{ name: "arr", type: "Array(Float64)" }];
+    const rows = [
+      [[1.0, NaN, 2.0]],
+    ];
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    // NaN is normalized to canonical form and round-trips correctly
+    const arr = decodedRows[0][0] as number[];
+    assert.strictEqual(arr[0], 1.0);
+    assert.ok(Number.isNaN(arr[1]), "NaN should round-trip as NaN");
+    assert.strictEqual(arr[2], 2.0);
+  });
+
+  it("Array(Float32) with NaN values", async () => {
+    const columns: ColumnDef[] = [{ name: "arr", type: "Array(Float32)" }];
+    const rows = [
+      [new Float32Array([1.5, -2.5, 0])],
+      [[3.14, NaN, Infinity]],
+    ];
+    const encoded = encodeNative(columns, rows);
+    const decoded = await decodeNative(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    const arr0 = decodedRows[0][0] as number[];
+    assert.strictEqual(arr0.length, 3);
+    assert.ok(Math.abs(arr0[0] - 1.5) < 0.0001);
+    assert.ok(Math.abs(arr0[1] - (-2.5)) < 0.0001);
+    assert.strictEqual(arr0[2], 0);
+
+    const arr1 = decodedRows[1][0] as number[];
+    assert.ok(Math.abs(arr1[0] - 3.14) < 0.01);
+    assert.ok(Number.isNaN(arr1[1]), "NaN should round-trip as NaN");
+    assert.strictEqual(arr1[2], Infinity);
   });
 });

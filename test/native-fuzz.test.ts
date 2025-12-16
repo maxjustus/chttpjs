@@ -59,16 +59,20 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
     { type: "UInt16", gen: () => randomInt(0, 65535) },
     { type: "UInt32", gen: () => randomInt(0, 4294967295) },
     { type: "UInt64", gen: () => BigInt(randomInt(0, Number.MAX_SAFE_INTEGER)) },
-    { type: "Float32", gen: () => randomFloat() * 1e-5, compare: (a, b) => {
-      if (Number.isNaN(a) && Number.isNaN(b)) return true;
-      const relDiff = Math.abs((a as number) - (b as number)) / Math.max(Math.abs(a as number), Math.abs(b as number), 1);
-      return relDiff < 1e-5;
-    }},
-    { type: "Float64", gen: randomFloat, compare: (a, b) => {
-      if (Number.isNaN(a) && Number.isNaN(b)) return true;
-      const relDiff = Math.abs((a as number) - (b as number)) / Math.max(Math.abs(a as number), Math.abs(b as number), 1);
-      return relDiff < 1e-10;
-    }},
+    {
+      type: "Float32", gen: () => randomFloat() * 1e-5, compare: (a, b) => {
+        if (Number.isNaN(a) && Number.isNaN(b)) return true;
+        const relDiff = Math.abs((a as number) - (b as number)) / Math.max(Math.abs(a as number), Math.abs(b as number), 1);
+        return relDiff < 1e-5;
+      }
+    },
+    {
+      type: "Float64", gen: randomFloat, compare: (a, b) => {
+        if (Number.isNaN(a) && Number.isNaN(b)) return true;
+        const relDiff = Math.abs((a as number) - (b as number)) / Math.max(Math.abs(a as number), Math.abs(b as number), 1);
+        return relDiff < 1e-10;
+      }
+    },
     { type: "String", gen: () => randomString() },
     { type: "String", gen: () => randomUnicode() }, // Unicode variant
     { type: "UUID", gen: randomUUID },
@@ -114,6 +118,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
     if (typeof v === "bigint") return `${v}n`;
     if (v instanceof Date) return v.toISOString();
     if (v instanceof Map) return `Map(${[...v.entries()].map(([k, val]) => `${stringify(k)}=>${stringify(val)}`).join(", ")})`;
+    if (ArrayBuffer.isView(v) && !(v instanceof DataView)) return `[${[...v as any].map(stringify).join(", ")}]`;
     if (Array.isArray(v)) return `[${v.map(stringify).join(", ")}]`;
     return JSON.stringify(v);
   };
@@ -473,7 +478,7 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
             ),
           );
 
-          // 3. Create empty dest table first
+          // 2. Create empty dest table first
           await consume(
             query(`CREATE TABLE ${dstTable} EMPTY AS ${srcTable}`, sessionId, {
               baseUrl,
@@ -523,7 +528,8 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
           console.log(`  [${i + 1}/${N}] done: ${rowsProcessed.toLocaleString()} rows, ${blocksProcessed} blocks (${elapsed}s)`);
 
-          // 5. Verify using cityHash64(*) to handle NaN values
+          // 5. Verify exact row equality using cityHash64(*)
+          // NaN bit patterns are preserved through round-trip since we return TypedArray from decode
           const diff1 = await collectText(
             query(
               `SELECT count() FROM (SELECT cityHash64(*) AS h FROM ${srcTable} EXCEPT SELECT cityHash64(*) AS h FROM ${dstTable}) FORMAT TabSeparated`,
