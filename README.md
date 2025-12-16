@@ -321,9 +321,14 @@ for (const row of asRows(result)) {
 ### Streaming
 
 ```ts
-import { streamEncodeNative, streamDecodeNative, streamNativeRows } from "@maxjustus/chttp";
+import {
+  streamEncodeNative,
+  streamEncodeNativeColumnar,
+  streamDecodeNative,
+  streamNativeRows,
+} from "@maxjustus/chttp";
 
-// Streaming insert
+// Streaming insert from rows
 await insert(
   "INSERT INTO table FORMAT Native",
   streamEncodeNative(columns, generateRows()),
@@ -347,6 +352,31 @@ for await (const batch of streamDecodeNative(
     console.log(row);
   }
 }
+
+// Produce columnar batches directly (most efficient for large inserts)
+async function* generateColumnarBatches() {
+  const batchSize = 10000;
+  for (let batch = 0; batch < 100; batch++) {
+    const ids = new Uint32Array(batchSize);
+    const values = new Float64Array(batchSize);
+    for (let i = 0; i < batchSize; i++) {
+      ids[i] = batch * batchSize + i;
+      values[i] = Math.random();
+    }
+    yield {
+      columns: [{ name: "id", type: "UInt32" }, { name: "value", type: "Float64" }],
+      columnData: [ids, values],
+      rowCount: batchSize,
+    };
+  }
+}
+
+await insert(
+  "INSERT INTO table FORMAT Native",
+  streamEncodeNativeColumnar(generateColumnarBatches()),
+  "session123",
+  config,
+);
 ```
 
 Supports the same types as RowBinary.

@@ -33,11 +33,14 @@ export {
 } from "./rowbinary.ts";
 export {
   encodeNative,
+  encodeNativeColumnar,
   decodeNative,
   streamEncodeNative,
+  streamEncodeNativeColumnar,
   streamDecodeNative,
   streamNativeRows,
   toArrayRows,
   asRows,
   type StreamDecodeNativeResult,
+  type ColumnarResult,
 } from "./native.ts";

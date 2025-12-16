@@ -7,7 +7,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { encodeNative, decodeNative, streamDecodeNative, toArrayRows, type ColumnDef } from "../native.ts";
+import { encodeNative, encodeNativeColumnar, decodeNative, streamDecodeNative, toArrayRows, type ColumnDef } from "../native.ts";
 
 // ============================================================================
 // Unit Fuzz Tests (no ClickHouse required)
@@ -498,9 +498,8 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
 
           for await (const block of streamDecodeNative(queryStream, { mapAsArray: true })) {
             columns = block.columns;
-            const rows = toArrayRows(block);
             blocksProcessed++;
-            rowsProcessed += rows.length;
+            rowsProcessed += block.rowCount;
 
             // Log progress every 3 seconds
             const now = Date.now();
@@ -510,7 +509,8 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
               lastProgressTime = now;
             }
 
-            const encoded = encodeNative(block.columns, rows);
+            // Use encodeNativeColumnar directly - no row conversion needed
+            const encoded = encodeNativeColumnar(block.columns, block.columnData, block.rowCount);
             await insert(
               `INSERT INTO ${dstTable} FORMAT Native`,
               encoded,

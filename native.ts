@@ -1533,3 +1533,21 @@ export async function* streamNativeRows(
     yield* asRows(block);
   }
 }
+
+/**
+ * Stream encode columnar blocks to Native format.
+ * Each yielded ColumnarResult produces one Native block (no re-batching).
+ *
+ * @example
+ * // Round-trip: decode -> transform -> re-encode
+ * insert("INSERT INTO t FORMAT Native",
+ *   streamEncodeNativeColumnar(streamDecodeNative(query(...))),
+ *   session, config);
+ */
+export async function* streamEncodeNativeColumnar(
+  blocks: AsyncIterable<ColumnarResult>,
+): AsyncGenerator<Uint8Array> {
+  for await (const block of blocks) {
+    yield encodeNativeColumnar(block.columns, block.columnData, block.rowCount);
+  }
+}
