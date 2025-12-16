@@ -139,7 +139,7 @@ const bytes = await collectBytes(
 );
 ```
 
-## RowBinary Format (Experimental)
+## RowBinary Format
 
 Binary format that's ~7x faster to encode than JSON for simple data, with ~3x smaller payloads. Uses `RowBinaryWithNamesAndTypes` format (self-describing with column names and types in header).
 
@@ -179,6 +179,7 @@ Supported types:
 - Strings: `String`, `FixedString(N)`
 - Date/Time: `Date`, `Date32`, `DateTime`, `DateTime64(precision)`
 - Other: `Bool`, `UUID`, `IPv4`, `IPv6`, `Enum8(...)`, `Enum16(...)`
+- Geo: `Point`, `Ring`, `Polygon`, `MultiPolygon`
 - Containers: `Nullable(T)`, `Array(T)`, `Tuple(T1, T2, ...)`, `Map(K, V)`, `Variant(T1, T2, ...)`
 - Self-describing: `Dynamic`, `JSON`, `Object('json')`
 
@@ -236,7 +237,9 @@ await insert(
 );
 ```
 
-Options: `chunkSize` (default 64KB), `includeHeader` (default true).
+Options:
+- `chunkSize`: Target bytes per yielded chunk (default 64KB). Larger = fewer chunks, smaller = lower memory.
+- `includeHeader`: Emit column names/types in first chunk (default true). Set false if appending to existing stream.
 
 ### Streaming Select
 
@@ -271,6 +274,76 @@ const data = await collectBytes(
 
 const { columns, rows } = decodeRowBinary(data);
 ```
+
+## Native Format
+
+ClickHouse's internal wire format. Returns columnar data (arrays per column) rather than rows, which can be more efficient for analytical workloads.
+
+```ts
+import {
+  insert,
+  query,
+  collectBytes,
+  encodeNative,
+  decodeNative,
+  asRows,
+} from "@maxjustus/chttp";
+
+const columns = [
+  { name: "id", type: "UInt32" },
+  { name: "name", type: "String" },
+];
+
+const rows = [
+  [1, "alice"],
+  [2, "bob"],
+];
+
+// Encode and insert
+const data = encodeNative(columns, rows);
+await insert("INSERT INTO table FORMAT Native", data, "session123", config);
+
+// Query returns columnar data
+const bytes = await collectBytes(
+  query("SELECT * FROM table FORMAT Native", "session123", config),
+);
+const result = decodeNative(bytes);
+// result.columns: [{name: "id", type: "UInt32"}, {name: "name", type: "String"}]
+// result.columnData: [Uint32Array([1, 2]), ["alice", "bob"]]
+// result.rowCount: 2
+
+// Convert to rows if needed
+for (const row of asRows(result)) {
+  console.log(row); // [1, "alice"], [2, "bob"]
+}
+```
+
+### Streaming
+
+```ts
+import { streamEncodeNative, streamDecodeNative } from "@maxjustus/chttp";
+
+// Streaming insert
+await insert(
+  "INSERT INTO table FORMAT Native",
+  streamEncodeNative(columns, generateRows()),
+  "session123",
+  config,
+);
+
+// Streaming decode (yields columnar batches)
+for await (const batch of streamDecodeNative(
+  query("SELECT * FROM table FORMAT Native", "session123", config),
+)) {
+  for (const row of asRows(batch)) {
+    console.log(row);
+  }
+}
+```
+
+Supports the same types as RowBinary.
+
+**Limitation**: `Dynamic` and `JSON` types require V3 flattened format. On ClickHouse 25.6+, set `output_format_native_use_flattened_dynamic_and_json_serialization=1`.
 
 ## JSONCompactEachRowWithNames Format
 

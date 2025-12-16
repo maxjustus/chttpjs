@@ -1392,8 +1392,10 @@ export async function* streamEncodeNative(
   if (batch.length > 0) yield encodeNative(columns, batch);
 }
 
-function flattenChunks(chunks: Uint8Array[], totalLength: number): Uint8Array {
+function flattenChunks(chunks: Uint8Array[]): Uint8Array {
+  if (chunks.length === 0) return new Uint8Array(0);
   if (chunks.length === 1) return chunks[0];
+  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
   const result = new Uint8Array(totalLength);
   let offset = 0;
   for (const chunk of chunks) {
@@ -1458,23 +1460,24 @@ export async function* streamDecodeNative(
   options?: DecodeOptions,
 ): AsyncGenerator<ColumnarResult> {
   const pendingChunks: Uint8Array[] = [];
-  let pendingLength = 0;
   let columns: ColumnDef[] = [];
+  let totalBytesReceived = 0;
+  let blocksDecoded = 0;
 
   for await (const chunk of chunks) {
     pendingChunks.push(chunk);
-    pendingLength += chunk.length;
+    totalBytesReceived += chunk.length;
 
     // Try to decode as many complete blocks as possible
-    while (pendingLength > 0) {
-      const buffer = flattenChunks(pendingChunks, pendingLength);
+    while (pendingChunks.length > 0) {
+      const buffer = flattenChunks(pendingChunks);
       try {
         const block = decodeNativeBlock(buffer, 0, options);
 
         if (block.isEndMarker) {
           consumeBytes(pendingChunks, block.bytesConsumed);
-          pendingLength -= block.bytesConsumed;
-          break;
+          // Don't break - continue processing any remaining data after end marker
+          continue;
         }
 
         // Set columns from first block
@@ -1483,7 +1486,7 @@ export async function* streamDecodeNative(
         }
 
         consumeBytes(pendingChunks, block.bytesConsumed);
-        pendingLength -= block.bytesConsumed;
+        blocksDecoded++;
         yield { columns, columnData: block.columnData, rowCount: block.rowCount };
       } catch {
         // Not enough data for a complete block, wait for more chunks
@@ -1493,16 +1496,20 @@ export async function* streamDecodeNative(
   }
 
   // Handle any remaining data
-  if (pendingLength > 0) {
-    const buffer = flattenChunks(pendingChunks, pendingLength);
+  if (pendingChunks.length > 0) {
+    const buffer = flattenChunks(pendingChunks);
     let offset = 0;
     while (offset < buffer.length) {
       try {
         const block = decodeNativeBlock(buffer, offset, options);
-        if (block.isEndMarker) break;
+        if (block.isEndMarker) {
+          offset += block.bytesConsumed;
+          continue;  // Continue processing after end marker
+        }
 
         if (columns.length === 0) columns = block.columns;
         offset += block.bytesConsumed;
+        blocksDecoded++;
         yield { columns, columnData: block.columnData, rowCount: block.rowCount };
       } catch {
         break;

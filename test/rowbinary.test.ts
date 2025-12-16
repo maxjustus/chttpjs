@@ -1792,6 +1792,55 @@ describe("decodeRowBinary", () => {
     });
     assert.deepStrictEqual(decoded.rows[3][0], { type: "Float32", value: 1.5 });
   });
+
+  it("Point (round-trip)", () => {
+    const columns: ColumnDef[] = [{ name: "p", type: "Point" }];
+    const rows = [
+      [[1.5, 2.5]],
+      [[-180.0, 90.0]],
+    ];
+    const encoded = encodeRowBinary(columns, rows);
+    const decoded = decodeRowBinary(encoded);
+    assert.deepStrictEqual(decoded.rows, rows);
+  });
+
+  it("Ring (round-trip)", () => {
+    const columns: ColumnDef[] = [{ name: "r", type: "Ring" }];
+    const rows = [
+      [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+      [[[0, 0], [10, 0], [10, 10], [0, 0]]],
+    ];
+    const encoded = encodeRowBinary(columns, rows);
+    const decoded = decodeRowBinary(encoded);
+    assert.deepStrictEqual(decoded.rows, rows);
+  });
+
+  it("Polygon (round-trip)", () => {
+    const columns: ColumnDef[] = [{ name: "p", type: "Polygon" }];
+    // Polygon with outer ring and one hole
+    const rows = [
+      [[
+        [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]],
+        [[2, 2], [8, 2], [8, 8], [2, 8], [2, 2]],
+      ]],
+    ];
+    const encoded = encodeRowBinary(columns, rows);
+    const decoded = decodeRowBinary(encoded);
+    assert.deepStrictEqual(decoded.rows, rows);
+  });
+
+  it("MultiPolygon (round-trip)", () => {
+    const columns: ColumnDef[] = [{ name: "mp", type: "MultiPolygon" }];
+    const rows = [
+      [[
+        [[[0, 0], [1, 0], [1, 1], [0, 0]]],
+        [[[5, 5], [6, 5], [6, 6], [5, 5]]],
+      ]],
+    ];
+    const encoded = encodeRowBinary(columns, rows);
+    const decoded = decodeRowBinary(encoded);
+    assert.deepStrictEqual(decoded.rows, rows);
+  });
 });
 
 describe("ClickHouseDateTime64 class", () => {

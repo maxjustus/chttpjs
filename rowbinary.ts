@@ -130,7 +130,6 @@ export class RowBinaryEncoder {
     this.offset += this.leb128At(value, this.offset);
   }
 
-  // returns number of bytes written
   private leb128At(value: number, bytePosition: number): number {
     if (value < 128) {
       this.buffer[bytePosition] = value;
@@ -328,6 +327,12 @@ function createCodecImpl(type: string): Codec {
     return new JsonCodec();
   if (type === "Dynamic") return new DynamicCodec();
   if (type.startsWith("Variant(")) return new VariantCodec(type.slice(8, -1));
+
+  // Geo types - aliases for underlying container types
+  if (type === "Point") return new TupleCodec("Float64, Float64");
+  if (type === "Ring") return new ArrayCodec("Point");
+  if (type === "Polygon") return new ArrayCodec("Ring");
+  if (type === "MultiPolygon") return new ArrayCodec("Polygon");
 
   throw new Error(`Unknown or unsupported type: ${type}`);
 }
@@ -551,8 +556,6 @@ const SCALAR_CODECS: Record<string, Codec> = {
   },
 };
 
-// --- Complex Codecs ---
-
 class NothingCodec implements Codec {
   encode(_e: RowBinaryEncoder, _v: unknown) { }
   decode(_v: DataView, _b: Uint8Array, _c: Cursor) {
@@ -687,7 +690,6 @@ class MapCodec implements Codec {
   }
 
   encode(e: RowBinaryEncoder, v: unknown) {
-    // Accept Map, Object, or Array<[K, V]> for flexibility
     let entries: [unknown, unknown][];
     if (v instanceof Map) {
       entries = [...v.entries()];
@@ -757,8 +759,6 @@ class Date32Codec implements Codec {
     return new Date(days * 86400000)
   }
 }
-
-// ClickHouseDateTime64 is imported from native_utils.ts
 
 class DateTime64Codec implements Codec {
   private precision: number
@@ -915,20 +915,11 @@ export function encodeRowBinary(
   rows: unknown[][],
 ): Uint8Array {
   const encoder = new RowBinaryEncoder();
-
-  // 1. Column count
   encoder.leb128(columns.length);
-
-  // 2. Names
   for (const col of columns) encoder.string(col.name);
-
-  // 3. Types
   for (const col of columns) encoder.string(col.type);
 
-  // 4. Pre-compile codecs
   const codecs = columns.map((c) => createCodec(c.type));
-
-  // 5. Encode rows
   for (const row of rows) {
     for (let i = 0; i < columns.length; i++) {
       codecs[i].encode(encoder, row[i]);
@@ -971,9 +962,6 @@ export function decodeRowBinary(
 // ============================================================================
 // Streaming API
 // ============================================================================
-
-// StreamDecodeOptions is just DecodeOptions - no batchSize needed
-// Batched mode yields all complete rows from each chunk naturally
 
 export interface StreamDecodeResult {
   columns: ColumnDef[];
@@ -1144,7 +1132,6 @@ export async function* streamEncodeRowBinary(
       }
     }
   } else {
-    // Async path
     for await (const row of rows as AsyncIterable<unknown[]>) {
       for (let i = 0; i < columns.length; i++) {
         codecs[i].encode(encoder, row[i]);
@@ -1163,10 +1150,9 @@ export async function* streamEncodeRowBinary(
 }
 
 // ============================================================================
-// Internal Helpers (imported from native_utils.ts)
+// Internal Helpers
 // ============================================================================
 
-// Re-alias imported functions for local use
 const readLEB128 = readLEB128FromUtils;
 
 function write128(e: RowBinaryEncoder, value: bigint, signed: boolean): void {

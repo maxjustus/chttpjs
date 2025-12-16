@@ -425,7 +425,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 // ============================================================================
 
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { init, insert, query, collectText, collectBytes } from "../client.ts";
+import { init, insert, query, collectText } from "../client.ts";
 
 describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
   it("round-trips random data N times", async () => {
@@ -435,6 +435,8 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
     const baseUrl = clickhouse.url + "/";
     const auth = { username: clickhouse.username, password: clickhouse.password };
     const sessionId = "native_fuzz_" + Date.now().toString();
+    // Separate session for inserts to avoid lock contention during streaming
+    const insertSessionId = sessionId + "_insert";
 
     try {
       const N = parseInt(process.env.FUZZ_ITERATIONS ?? "25", 10);
@@ -471,17 +473,7 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
             ),
           );
 
-          // 3. Query source in Native format and decode
-          const data = await collectBytes(
-            query(
-              `SELECT * FROM ${srcTable} FORMAT Native`,
-              sessionId,
-              { baseUrl, auth },
-            ),
-          );
-          const decoded = await decodeNative(data, { mapAsArray: true });
-
-          // 4. Create empty dest table
+          // 3. Create empty dest table first
           await consume(
             query(`CREATE TABLE ${dstTable} EMPTY AS ${srcTable}`, sessionId, {
               baseUrl,
@@ -490,21 +482,48 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
             }),
           );
 
-          // 5. Encode and insert in batches to avoid memory pressure on large payloads
-          const BATCH_SIZE = 5000;
-          const decodedRows = toArrayRows(decoded);
-          for (let j = 0; j < decodedRows.length; j += BATCH_SIZE) {
-            const batch = decodedRows.slice(j, j + BATCH_SIZE);
-            const encoded = encodeNative(decoded.columns, batch);
+          // 4. Stream decode and insert block-by-block to avoid memory pressure
+          // This keeps only 1-2 blocks in memory at a time instead of 80k rows
+          const queryStream = query(
+            `SELECT * FROM ${srcTable} FORMAT Native`,
+            sessionId,
+            { baseUrl, auth },
+          );
+
+          let columns: ColumnDef[] = [];
+          let blocksProcessed = 0;
+          let rowsProcessed = 0;
+          const startTime = Date.now();
+          let lastProgressTime = startTime;
+
+          for await (const block of streamDecodeNative(queryStream, { mapAsArray: true })) {
+            columns = block.columns;
+            const rows = toArrayRows(block);
+            blocksProcessed++;
+            rowsProcessed += rows.length;
+
+            // Log progress every 3 seconds
+            const now = Date.now();
+            if (now - lastProgressTime >= 3000) {
+              const elapsed = ((now - startTime) / 1000).toFixed(1);
+              console.log(`  [${i + 1}/${N}] ${rowsProcessed.toLocaleString()} rows, ${blocksProcessed} blocks (${elapsed}s)`);
+              lastProgressTime = now;
+            }
+
+            const encoded = encodeNative(block.columns, rows);
             await insert(
               `INSERT INTO ${dstTable} FORMAT Native`,
               encoded,
-              sessionId,
+              insertSessionId,
               { baseUrl, auth },
             );
           }
 
-          // 6. Verify using cityHash64(*) to handle NaN values
+          // Final progress
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          console.log(`  [${i + 1}/${N}] done: ${rowsProcessed.toLocaleString()} rows, ${blocksProcessed} blocks (${elapsed}s)`);
+
+          // 5. Verify using cityHash64(*) to handle NaN values
           const diff1 = await collectText(
             query(
               `SELECT count() FROM (SELECT cityHash64(*) AS h FROM ${srcTable} EXCEPT SELECT cityHash64(*) AS h FROM ${dstTable}) FORMAT TabSeparated`,
@@ -523,7 +542,8 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
           if (diff1.trim() !== "0" || diff2.trim() !== "0") {
             // Find first differing column for debugging
             let firstDiffCol = "";
-            for (const col of decoded.columns) {
+            let firstDiffColName = "";
+            for (const col of columns) {
               const colDiff = await collectText(
                 query(
                   `SELECT count() FROM (SELECT cityHash64(\`${col.name}\`) AS h FROM ${srcTable} EXCEPT SELECT cityHash64(\`${col.name}\`) AS h FROM ${dstTable}) FORMAT TabSeparated`,
@@ -532,8 +552,42 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
               );
               if (colDiff.trim() !== "0") {
                 firstDiffCol = `${col.name} (${col.type})`;
+                firstDiffColName = col.name;
                 break;
               }
+            }
+
+            // Sample values from differing column
+            if (firstDiffColName) {
+              const srcSample = await collectText(
+                query(
+                  `SELECT \`${firstDiffColName}\` FROM ${srcTable} LIMIT 10 FORMAT TabSeparated`,
+                  sessionId, { baseUrl, auth },
+                ),
+              );
+              const dstSample = await collectText(
+                query(
+                  `SELECT \`${firstDiffColName}\` FROM ${dstTable} LIMIT 10 FORMAT TabSeparated`,
+                  sessionId, { baseUrl, auth },
+                ),
+              );
+              console.log(`Source ${firstDiffCol} sample:\n${srcSample}`);
+              console.log(`Dest ${firstDiffCol} sample:\n${dstSample}`);
+
+              // Count distinct values
+              const srcDistinct = await collectText(
+                query(
+                  `SELECT count(DISTINCT \`${firstDiffColName}\`) FROM ${srcTable} FORMAT TabSeparated`,
+                  sessionId, { baseUrl, auth },
+                ),
+              );
+              const dstDistinct = await collectText(
+                query(
+                  `SELECT count(DISTINCT \`${firstDiffColName}\`) FROM ${dstTable} FORMAT TabSeparated`,
+                  sessionId, { baseUrl, auth },
+                ),
+              );
+              console.log(`Distinct values - src: ${srcDistinct.trim()}, dst: ${dstDistinct.trim()}`);
             }
 
             throw new Error(
@@ -546,15 +600,16 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
           );
           throw err;
         } finally {
+          // Use insertSessionId for cleanup to avoid session lock from streaming query
           await consume(
-            query(`DROP TABLE IF EXISTS ${srcTable}`, sessionId, {
+            query(`DROP TABLE IF EXISTS ${srcTable}`, insertSessionId, {
               baseUrl,
               auth,
               compression: "none",
             }),
           );
           await consume(
-            query(`DROP TABLE IF EXISTS ${dstTable}`, sessionId, {
+            query(`DROP TABLE IF EXISTS ${dstTable}`, insertSessionId, {
               baseUrl,
               auth,
               compression: "none",
