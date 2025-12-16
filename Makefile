@@ -1,4 +1,4 @@
-.PHONY: build build-full build-lz4 test fuzz bench publish
+.PHONY: build build-full build-lz4 test fuzz bench bench-formats publish
 
 build: build-full build-lz4
 
@@ -16,6 +16,9 @@ fuzz:
 
 bench:
 	npm run bench
+
+bench-formats:
+	node --experimental-strip-types bench/formats.ts
 
 publish:
 	npm publish --access=public
