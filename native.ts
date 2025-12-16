@@ -1517,3 +1517,19 @@ export async function* streamDecodeNative(
     }
   }
 }
+
+/**
+ * Stream rows as objects from decoded Native blocks.
+ *
+ * @example
+ * for await (const row of streamNativeRows(streamDecodeNative(query(...)))) {
+ *   console.log(row.id, row.name);
+ * }
+ */
+export async function* streamNativeRows(
+  blocks: AsyncIterable<ColumnarResult>,
+): AsyncGenerator<Record<string, unknown>> {
+  for await (const block of blocks) {
+    yield* asRows(block);
+  }
+}

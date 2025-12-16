@@ -321,7 +321,7 @@ for (const row of asRows(result)) {
 ### Streaming
 
 ```ts
-import { streamEncodeNative, streamDecodeNative } from "@maxjustus/chttp";
+import { streamEncodeNative, streamDecodeNative, streamNativeRows } from "@maxjustus/chttp";
 
 // Streaming insert
 await insert(
@@ -331,10 +331,18 @@ await insert(
   config,
 );
 
-// Streaming decode (yields columnar batches)
+// Streaming decode - rows as objects
+for await (const row of streamNativeRows(
+  streamDecodeNative(query("SELECT * FROM table FORMAT Native", "session123", config)),
+)) {
+  console.log(row.id, row.name);
+}
+
+// Or work with columnar batches directly
 for await (const batch of streamDecodeNative(
   query("SELECT * FROM table FORMAT Native", "session123", config),
 )) {
+  // batch.columns, batch.columnData, batch.rowCount
   for (const row of asRows(batch)) {
     console.log(row);
   }

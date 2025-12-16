@@ -36,6 +36,8 @@ export {
   decodeNative,
   streamEncodeNative,
   streamDecodeNative,
+  streamNativeRows,
   toArrayRows,
+  asRows,
   type StreamDecodeNativeResult,
 } from "./native.ts";
