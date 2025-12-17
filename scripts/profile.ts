@@ -1,0 +1,288 @@
+#!/usr/bin/env node
+/**
+ * Profiling tool for Native/RowBinary/JSON formats.
+ *
+ * Usage: scripts/profile.ts [options]
+ * Run with -h for help.
+ */
+
+import { parseArgs } from "node:util";
+import { encodeRowBinary, decodeRowBinary, type ColumnDef } from "../formats/rowbinary.ts";
+import { encodeNative, encodeNativeColumnar, decodeNative } from "../formats/native/index.ts";
+
+const DATA_TYPES = ["mixed", "numeric", "strings", "complex", "full"] as const;
+
+const { values } = parseArgs({
+  options: {
+    format: { type: "string", short: "f", default: "native" },
+    operation: { type: "string", short: "o", default: "decode" },
+    data: { type: "string", short: "d", default: "mixed" },
+    rows: { type: "string", short: "r", default: "10000" },
+    iterations: { type: "string", short: "i", default: "500" },
+    columnar: { type: "boolean", short: "c", default: false },
+    help: { type: "boolean", short: "h", default: false },
+  },
+  allowPositionals: false,
+});
+
+if (values.help) {
+  console.log(`
+Profile format encode/decode performance.
+
+Usage: scripts/profile.ts [options]
+
+Options:
+  -f, --format <fmt>      Format: native, rowbinary, json (default: native)
+  -o, --operation <op>    Operation: encode, decode (default: decode)
+  -d, --data <type>       Data type (default: mixed)
+  -r, --rows <n>          Row count (default: 10000)
+  -i, --iterations <n>    Iterations (default: 500)
+  -c, --columnar          Skip row→column transpose (native encode only)
+  -h, --help              Show this help
+
+Data types:
+  mixed     UInt32, String×2, Bool, Float64, DateTime
+  numeric   UInt8/16/32, Int32, Float32/64
+  strings   UInt32, String×3 (varying lengths)
+  complex   Array, Nullable, Tuple, Map
+  full      All codecs: numeric, string, date/time, UUID, IP, LowCardinality, etc.
+
+Examples:
+  scripts/profile.ts -f native -o encode -d complex
+  scripts/profile.ts -f native -o encode -c    # columnar (skip transpose)
+`);
+  process.exit(0);
+}
+
+const format = values.format!.toLowerCase();
+const operation = values.operation!.toLowerCase();
+const dataType = values.data! as typeof DATA_TYPES[number];
+const rowCount = parseInt(values.rows!, 10);
+const iterations = parseInt(values.iterations!, 10);
+const columnar = values.columnar!;
+
+if (!["native", "rowbinary", "json"].includes(format)) {
+  console.error(`Unknown format: ${format}`); process.exit(1);
+}
+if (!["encode", "decode"].includes(operation)) {
+  console.error(`Unknown operation: ${operation}`); process.exit(1);
+}
+if (!DATA_TYPES.includes(dataType)) {
+  console.error(`Unknown data type: ${dataType}. Use: ${DATA_TYPES.join(", ")}`); process.exit(1);
+}
+if (columnar && (format !== "native" || operation !== "encode")) {
+  console.error("--columnar only applies to native encode"); process.exit(1);
+}
+
+// --- Schema-driven data generation ---
+
+type Schema = { columns: ColumnDef[]; generate: (i: number) => unknown[] };
+
+const SCHEMAS: Record<typeof DATA_TYPES[number], Schema> = {
+  mixed: {
+    columns: [
+      { name: "id", type: "UInt32" },
+      { name: "name", type: "String" },
+      { name: "email", type: "String" },
+      { name: "active", type: "Bool" },
+      { name: "score", type: "Float64" },
+      { name: "created", type: "DateTime" },
+    ],
+    generate: (i) => [
+      i, `user_${i}`, `user${i}@example.com`, i % 2 === 0,
+      Math.random() * 100, Math.floor(Date.now() / 1000) - i * 60,
+    ],
+  },
+
+  numeric: {
+    columns: [
+      { name: "a", type: "UInt8" },
+      { name: "b", type: "UInt16" },
+      { name: "c", type: "UInt32" },
+      { name: "d", type: "Int32" },
+      { name: "e", type: "Float32" },
+      { name: "f", type: "Float64" },
+    ],
+    generate: (i) => [i % 256, i % 65536, i, i - 50000, Math.random(), Math.random() * 1000],
+  },
+
+  strings: {
+    columns: [
+      { name: "id", type: "UInt32" },
+      { name: "short", type: "String" },
+      { name: "medium", type: "String" },
+      { name: "long", type: "String" },
+    ],
+    generate: (i) => [
+      i, `s${i}`, `medium_string_value_${i}`,
+      `this_is_a_longer_string_with_more_content_${i}_end`,
+    ],
+  },
+
+  complex: {
+    columns: [
+      { name: "id", type: "UInt32" },
+      { name: "tags", type: "Array(String)" },
+      { name: "scores", type: "Array(Float64)" },
+      { name: "meta", type: "Nullable(String)" },
+      { name: "point", type: "Tuple(Float64, Float64)" },
+      { name: "attrs", type: "Map(String, Int32)" },
+    ],
+    generate: (i) => [
+      i,
+      [`tag_${i % 5}`, `cat_${i % 3}`],
+      [Math.random() * 10, Math.random() * 10, Math.random() * 10],
+      i % 3 === 0 ? null : `meta_${i}`,
+      [Math.random() * 180 - 90, Math.random() * 360 - 180],
+      new Map([["a", i], ["b", i * 2]]),
+    ],
+  },
+
+  full: {
+    columns: [
+      // Numeric
+      { name: "u8", type: "UInt8" },
+      { name: "u32", type: "UInt32" },
+      { name: "i64", type: "Int64" },
+      { name: "f64", type: "Float64" },
+      // Big integers
+      { name: "u128", type: "UInt128" },
+      // Decimal
+      { name: "dec", type: "Decimal64(2)" },
+      // String types
+      { name: "str", type: "String" },
+      { name: "fstr", type: "FixedString(8)" },
+      // Date/time
+      { name: "dt", type: "DateTime" },
+      { name: "dt64", type: "DateTime64(3)" },
+      { name: "date", type: "Date" },
+      // Special
+      { name: "uuid", type: "UUID" },
+      { name: "ipv4", type: "IPv4" },
+      { name: "ipv6", type: "IPv6" },
+      { name: "bool", type: "Bool" },
+      // LowCardinality
+      { name: "lc_str", type: "LowCardinality(String)" },
+      // Composite
+      { name: "arr", type: "Array(Int32)" },
+      { name: "nullable", type: "Nullable(String)" },
+      { name: "tup", type: "Tuple(Int32, String)" },
+      { name: "map", type: "Map(String, Int32)" },
+    ],
+    generate: (i) => {
+      const now = Date.now();
+      return [
+        // Numeric
+        i % 256,
+        i,
+        BigInt(i) * 1000000n,
+        Math.random() * 1000,
+        // Big integers
+        BigInt(i) * 10000000000000000n,
+        // Decimal (as number, codec handles scaling)
+        Math.round(Math.random() * 10000) / 100,
+        // String types
+        `value_${i}`,
+        `fix${(i % 100000).toString().padStart(5, "0")}`,
+        // Date/time
+        Math.floor(now / 1000) - i * 60,
+        now - i * 60000,
+        Math.floor(now / 86400000) - (i % 1000),
+        // Special
+        `${hex(8)}-${hex(4)}-${hex(4)}-${hex(4)}-${hex(12)}`,
+        `${i % 256}.${(i >> 8) % 256}.${(i >> 16) % 256}.${i % 256}`,
+        `2001:db8::${(i % 65536).toString(16)}`,
+        i % 2 === 0,
+        // LowCardinality (repeated values)
+        `category_${i % 10}`,
+        // Composite
+        [i, i + 1, i + 2],
+        i % 4 === 0 ? null : `nullable_${i}`,
+        [i, `tuple_${i}`],
+        new Map([["key", i]]),
+      ];
+    },
+  },
+};
+
+function hex(len: number): string {
+  return Array.from({ length: len }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+}
+
+type DataSet = { columns: ColumnDef[]; rows: unknown[][]; columnarData: unknown[][]; objects: Record<string, unknown>[] };
+
+function generateData(type: typeof DATA_TYPES[number], count: number): DataSet {
+  const schema = SCHEMAS[type];
+  const { columns, generate } = schema;
+  const rows: unknown[][] = [];
+  const objects: Record<string, unknown>[] = [];
+
+  for (let i = 0; i < count; i++) {
+    const row = generate(i);
+    rows.push(row);
+    const obj: Record<string, unknown> = {};
+    for (let j = 0; j < columns.length; j++) {
+      let val = row[j];
+      // JSON can't handle Map/BigInt
+      if (val instanceof Map) val = Object.fromEntries(val);
+      if (typeof val === "bigint") val = val.toString();
+      obj[columns[j].name] = val;
+    }
+    objects.push(obj);
+  }
+
+  const columnarData: unknown[][] = columns.map((_, ci) => rows.map(r => r[ci]));
+  return { columns, rows, columnarData, objects };
+}
+
+// --- JSON helpers ---
+
+const textEnc = new TextEncoder();
+const textDec = new TextDecoder();
+const encodeJson = (rows: Record<string, unknown>[]) => textEnc.encode(rows.map(r => JSON.stringify(r)).join("\n"));
+const decodeJson = (data: Uint8Array) => textDec.decode(data).trim().split("\n").map(l => JSON.parse(l));
+
+// --- Main ---
+
+async function main() {
+  const mode = columnar ? "columnar" : "row";
+  console.log(`Profiling: ${format} ${operation} [${dataType}, ${mode}] ${rowCount} rows, ${iterations} iters\n`);
+
+  const { columns, rows, columnarData, objects } = generateData(dataType, rowCount);
+
+  // Pre-encode for decode
+  const encNative = encodeNative(columns, rows);
+  const encRowBin = encodeRowBinary(columns, rows);
+  const encJson = encodeJson(objects);
+
+  const run = async () => {
+    if (format === "native") {
+      if (operation === "encode") {
+        if (columnar) encodeNativeColumnar(columns, columnarData, rowCount);
+        else encodeNative(columns, rows);
+      } else await decodeNative(encNative);
+    } else if (format === "rowbinary") {
+      if (operation === "encode") encodeRowBinary(columns, rows);
+      else decodeRowBinary(columns, encRowBin);
+    } else {
+      if (operation === "encode") encodeJson(objects);
+      else decodeJson(encJson);
+    }
+  };
+
+  console.log("Warming up...");
+  for (let i = 0; i < 50; i++) await run();
+
+  console.log("Running profiled iterations...\n");
+  const start = performance.now();
+  for (let i = 0; i < iterations; i++) await run();
+  const elapsed = performance.now() - start;
+
+  const avgMs = elapsed / iterations;
+  const rowsPerSec = rowCount / (avgMs / 1000);
+  console.log(`Completed ${iterations} iterations in ${elapsed.toFixed(0)}ms`);
+  console.log(`Average: ${avgMs.toFixed(3)}ms per iteration`);
+  console.log(`Throughput: ${(rowsPerSec / 1_000_000).toFixed(2)}M rows/sec`);
+}
+
+main().catch(console.error);

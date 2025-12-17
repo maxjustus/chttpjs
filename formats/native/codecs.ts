@@ -63,7 +63,7 @@ function decodeGroups(
 const MS_PER_SECOND = 1000;
 
 export interface Codec {
-  encode(col: Column): Uint8Array;
+  encode(col: Column, sizeHint?: number): Uint8Array;
   decode(reader: BufferReader, rows: number): Column;
   fromValues(values: unknown[]): Column;
   zeroValue(): unknown;
@@ -106,8 +106,8 @@ class NumericCodec<T extends TypedArray> implements Codec {
 }
 
 class StringCodec implements Codec {
-  encode(col: Column): Uint8Array {
-    const writer = new BufferWriter();
+  encode(col: Column, sizeHint?: number): Uint8Array {
+    const writer = new BufferWriter(sizeHint ?? this.estimateSize(col.length));
     const values = col.toArray();
     for (let i = 0; i < values.length; i++) {
       writer.writeString(String(values[i]));
@@ -517,15 +517,17 @@ class ArrayCodec implements Codec {
     this.inner.readPrefix?.(reader);
   }
 
-  encode(col: Column): Uint8Array {
+  encode(col: Column, sizeHint?: number): Uint8Array {
     const arr = col as ArrayColumn;
-    const writer = new BufferWriter();
+    const hint = sizeHint ?? this.estimateSize(col.length);
+    const writer = new BufferWriter(hint);
 
     // Write offsets
     writer.write(new Uint8Array(arr.offsets.buffer, arr.offsets.byteOffset, arr.offsets.byteLength));
 
-    // Write inner data
-    writer.write(this.inner.encode(arr.inner));
+    // Write inner data with estimated size
+    const innerHint = this.inner.estimateSize(arr.inner.length);
+    writer.write(this.inner.encode(arr.inner, innerHint));
 
     return writer.finish();
   }
@@ -577,11 +579,13 @@ class NullableCodec implements Codec {
     this.inner.readPrefix?.(reader);
   }
 
-  encode(col: Column): Uint8Array {
+  encode(col: Column, sizeHint?: number): Uint8Array {
     const nc = col as NullableColumn;
-    const writer = new BufferWriter();
+    const hint = sizeHint ?? this.estimateSize(col.length);
+    const writer = new BufferWriter(hint);
     writer.write(nc.nullFlags);
-    writer.write(this.inner.encode(nc.inner));
+    const innerHint = this.inner.estimateSize(nc.inner.length);
+    writer.write(this.inner.encode(nc.inner, innerHint));
     return writer.finish();
   }
 
@@ -633,12 +637,13 @@ class LowCardinalityCodec implements Codec {
     reader.offset += 8;
   }
 
-  encode(col: Column): Uint8Array {
+  encode(col: Column, sizeHint?: number): Uint8Array {
     // LowCardinality encode builds dictionary from column values
     // This is row-oriented by nature - we need to scan values to find uniques
     if (col.length === 0) return new Uint8Array(0);
 
-    const writer = new BufferWriter();
+    const hint = sizeHint ?? this.estimateSize(col.length);
+    const writer = new BufferWriter(hint);
     const isNullable = this.inner instanceof NullableCodec;
 
     const dict = new Map<unknown, number>();
@@ -651,8 +656,10 @@ class LowCardinalityCodec implements Codec {
       dictValues.push(null); // Placeholder for null
     }
 
-    for (let i = 0; i < col.length; i++) {
-      const v = col.get(i);
+    // Materialize column for scanning
+    const values = col.toArray();
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
       if (isNullable && v === null) {
         indices.push(0);
       } else {
@@ -674,7 +681,8 @@ class LowCardinalityCodec implements Codec {
 
     // Build dictionary column from unique values
     writer.write(new Uint8Array(new BigUint64Array([BigInt(dictValues.length)]).buffer));
-    writer.write(this.dictCodec.encode(this.dictCodec.fromValues(dictValues)));
+    const dictHint = this.dictCodec.estimateSize(dictValues.length);
+    writer.write(this.dictCodec.encode(this.dictCodec.fromValues(dictValues), dictHint));
     writer.write(new Uint8Array(new BigUint64Array([BigInt(col.length)]).buffer));
     writer.write(new Uint8Array(new IndexArray(indices).buffer));
 
@@ -705,10 +713,11 @@ class LowCardinalityCodec implements Codec {
     else indices = reader.readTypedArray(BigUint64Array, count);
 
     // Expand dictionary to full column
+    const dictArr = dict.toArray();
     const values: unknown[] = new Array(count);
     for (let i = 0; i < count; i++) {
       const idx = Number(indices[i]);
-      values[i] = isNullable && idx === 0 ? null : dict.get(idx);
+      values[i] = isNullable && idx === 0 ? null : dictArr[idx];
     }
     return new DataColumn(values);
   }
@@ -770,12 +779,15 @@ class MapCodec implements Codec {
     this.valCodec.readPrefix?.(reader);
   }
 
-  encode(col: Column): Uint8Array {
+  encode(col: Column, sizeHint?: number): Uint8Array {
     const map = col as MapColumn;
-    const writer = new BufferWriter();
+    const hint = sizeHint ?? this.estimateSize(col.length);
+    const writer = new BufferWriter(hint);
     writer.write(new Uint8Array(map.offsets.buffer, map.offsets.byteOffset, map.offsets.byteLength));
-    writer.write(this.keyCodec.encode(map.keys));
-    writer.write(this.valCodec.encode(map.values));
+    const keyHint = this.keyCodec.estimateSize(map.keys.length);
+    const valHint = this.valCodec.estimateSize(map.values.length);
+    writer.write(this.keyCodec.encode(map.keys, keyHint));
+    writer.write(this.valCodec.encode(map.values, valHint));
     return writer.finish();
   }
 
@@ -844,11 +856,13 @@ class TupleCodec implements Codec {
     }
   }
 
-  encode(col: Column): Uint8Array {
+  encode(col: Column, sizeHint?: number): Uint8Array {
     const tuple = col as TupleColumn;
-    const writer = new BufferWriter();
+    const hint = sizeHint ?? this.estimateSize(col.length);
+    const writer = new BufferWriter(hint);
     for (let i = 0; i < this.elements.length; i++) {
-      writer.write(this.elements[i].codec.encode(tuple.columns[i]));
+      const elemHint = this.elements[i].codec.estimateSize(tuple.columns[i].length);
+      writer.write(this.elements[i].codec.encode(tuple.columns[i], elemHint));
     }
     return writer.finish();
   }
@@ -909,13 +923,17 @@ class VariantCodec implements Codec {
     reader.offset += 8; // Skip encoding mode flag - always BASIC (0) for HTTP clients
   }
 
-  encode(col: Column): Uint8Array {
+  encode(col: Column, sizeHint?: number): Uint8Array {
     const variant = col as VariantColumn;
-    const writer = new BufferWriter();
+    const hint = sizeHint ?? this.estimateSize(col.length);
+    const writer = new BufferWriter(hint);
     writer.write(variant.discriminators);
     for (let i = 0; i < this.codecs.length; i++) {
       const group = variant.groups.get(i);
-      if (group) writer.write(this.codecs[i].encode(group));
+      if (group) {
+        const groupHint = this.codecs[i].estimateSize(group.length);
+        writer.write(this.codecs[i].encode(group, groupHint));
+      }
     }
     return writer.finish();
   }
@@ -1015,16 +1033,20 @@ class DynamicCodec implements Codec {
     for (const c of this.codecs) c.readPrefix?.(reader);
   }
 
-  encode(col: Column): Uint8Array {
+  encode(col: Column, sizeHint?: number): Uint8Array {
     const dyn = col as DynamicColumn;
-    const writer = new BufferWriter();
+    const hint = sizeHint ?? this.estimateSize(col.length);
+    const writer = new BufferWriter(hint);
 
     // Write discriminators as-is (already the right type)
     writer.write(new Uint8Array(dyn.discriminators.buffer, dyn.discriminators.byteOffset, dyn.discriminators.byteLength));
 
     for (let i = 0; i < this.codecs.length; i++) {
       const group = dyn.groups.get(i);
-      if (group) writer.write(this.codecs[i].encode(group));
+      if (group) {
+        const groupHint = this.codecs[i].estimateSize(group.length);
+        writer.write(this.codecs[i].encode(group, groupHint));
+      }
     }
     return writer.finish();
   }
@@ -1130,12 +1152,15 @@ class JsonCodec implements Codec {
     }
   }
 
-  encode(col: Column): Uint8Array {
+  encode(col: Column, sizeHint?: number): Uint8Array {
     const json = col as JsonColumn;
-    const writer = new BufferWriter();
+    const hint = sizeHint ?? this.estimateSize(col.length);
+    const writer = new BufferWriter(hint);
     for (const path of this.paths) {
       const pathCol = json.pathColumns.get(path)!;
-      writer.write(this.pathCodecs.get(path)!.encode(pathCol));
+      const pathCodec = this.pathCodecs.get(path)!;
+      const pathHint = pathCodec.estimateSize(pathCol.length);
+      writer.write(pathCodec.encode(pathCol, pathHint));
     }
     return writer.finish();
   }

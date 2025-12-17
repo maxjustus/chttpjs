@@ -31,12 +31,13 @@ export function countAndIndexDiscriminators(
 
 /**
  * Base interface for all column types.
+ * Note: No get(i) method - use toArray() to access values.
+ * This makes the materialization cost explicit.
  */
 export interface Column {
   readonly length: number;
-  get(i: number): unknown;
-  /** Materialize all values to a plain array. Faster than calling get() in a loop. */
-  toArray(): unknown[];
+  /** Materialize all values to an array (TypedArray for numeric types, plain array otherwise). */
+  toArray(): unknown[] | TypedArray;
 }
 
 export class DataColumn<T extends TypedArray | unknown[]> implements Column {
@@ -48,18 +49,8 @@ export class DataColumn<T extends TypedArray | unknown[]> implements Column {
 
   get length() { return this.data.length; }
 
-  get(i: number): unknown {
-    return (this.data as any)[i];
-  }
-
-  toArray(): unknown[] {
-    // TypedArrays need Array.from; plain arrays can be returned directly
-    if (Array.isArray(this.data)) return this.data;
-    // Handle BigInt64Array/BigUint64Array and numeric typed arrays
-    const arr = this.data as TypedArray;
-    const result = new Array(arr.length);
-    for (let i = 0; i < arr.length; i++) result[i] = arr[i];
-    return result;
+  toArray(): T {
+    return this.data;
   }
 }
 
@@ -81,10 +72,6 @@ export class TupleColumn implements Column {
 
   get length(): number {
     return this.columns[0]?.length ?? 0;
-  }
-
-  get(i: number): unknown {
-    return this.toArray()[i];
   }
 
   toArray(): unknown[] {
@@ -139,10 +126,6 @@ export class MapColumn implements Column {
     return this.offsets.length;
   }
 
-  get(i: number): Map<unknown, unknown> | [unknown, unknown][] {
-    return this.toArray()[i];
-  }
-
   toArray(): (Map<unknown, unknown> | [unknown, unknown][])[] {
     if (this._cached) return this._cached;
 
@@ -193,10 +176,6 @@ export class VariantColumn implements Column {
     return this.discriminators.length;
   }
 
-  get(i: number): [number, unknown] | null {
-    return this.toArray()[i];
-  }
-
   toArray(): ([number, unknown] | null)[] {
     if (this._cached) return this._cached;
 
@@ -244,10 +223,6 @@ export class DynamicColumn implements Column {
     return this.discriminators.length;
   }
 
-  get(i: number): unknown {
-    return this.toArray()[i];
-  }
-
   toArray(): unknown[] {
     if (this._cached) return this._cached;
 
@@ -286,10 +261,6 @@ export class JsonColumn implements Column {
     return this._length;
   }
 
-  get(i: number): Record<string, unknown> {
-    return this.toArray()[i];
-  }
-
   toArray(): Record<string, unknown>[] {
     if (this._cached) return this._cached;
 
@@ -324,10 +295,6 @@ export class NullableColumn implements Column {
 
   get length() { return this.nullFlags.length; }
 
-  get(i: number): unknown {
-    return this.toArray()[i];
-  }
-
   toArray(): unknown[] {
     if (this._cached) return this._cached;
 
@@ -352,10 +319,6 @@ export class ArrayColumn implements Column {
   }
 
   get length() { return this.offsets.length; }
-
-  get(i: number): unknown[] {
-    return this.toArray()[i];
-  }
 
   toArray(): unknown[][] {
     if (this._cached) return this._cached;

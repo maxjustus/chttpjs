@@ -14,7 +14,7 @@ export class BufferWriter {
   private buffer: Uint8Array;
   private offset = 0;
 
-  constructor(initialSize = 1024 * 1024) {
+  constructor(initialSize = 65536) {  // 64KB default
     this.buffer = new Uint8Array(initialSize);
   }
 
