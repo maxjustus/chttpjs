@@ -7,7 +7,7 @@ import {
   streamDecodeNative,
   toArrayRows,
   type ColumnDef,
-} from "../native.ts";
+} from "../formats/native/index.ts";
 
 // Helper to convert sync iterable to async
 async function* toAsync<T>(iter: Iterable<T>): AsyncIterable<T> {
@@ -585,10 +585,10 @@ describe("Variant", () => {
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
-    // Numeric arrays now return TypedArrays
-    assert.deepStrictEqual(decodedRows[0][0], [0, Int32Array.from([1, 2, 3])]);
+    // Arrays return plain arrays of values
+    assert.deepStrictEqual(decodedRows[0][0], [0, [1, 2, 3]]);
     assert.deepStrictEqual(decodedRows[1][0], [1, "test"]);
-    assert.deepStrictEqual(decodedRows[2][0], [0, Int32Array.from([])]);
+    assert.deepStrictEqual(decodedRows[2][0], [0, []]);
   });
 });
 

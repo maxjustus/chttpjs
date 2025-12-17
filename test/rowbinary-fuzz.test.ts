@@ -5,7 +5,7 @@ import {
   encodeRowBinary,
   streamDecodeRowBinary,
   type ColumnDef,
-} from "../rowbinary.ts";
+} from "../formats/rowbinary.ts";
 
 describe("RowBinary Fuzz Tests", { timeout: 300000 }, () => {
   let clickhouse: Awaited<ReturnType<typeof startClickHouse>>;

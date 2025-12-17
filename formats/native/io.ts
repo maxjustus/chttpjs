@@ -2,7 +2,7 @@
  * Buffer I/O utilities for Native format encoding/decoding.
  */
 
-import { TEXT_ENCODER, TEXT_DECODER, type DecodeOptions } from "../../native_utils.ts";
+import { TEXT_ENCODER, TEXT_DECODER, type DecodeOptions } from "../shared.ts";
 
 type TypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | BigInt64Array | BigUint64Array | Float32Array | Float64Array;
 
@@ -16,7 +16,7 @@ export class BufferWriter {
   private buffer: Uint8Array;
   private offset = 0;
 
-  constructor(initialSize = 256) {
+  constructor(initialSize = 1024 * 1024) {
     this.buffer = new Uint8Array(initialSize);
   }
 

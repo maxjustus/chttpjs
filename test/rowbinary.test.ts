@@ -9,7 +9,7 @@ import {
   ClickHouseDateTime64,
   Float32NaN,
   Float64NaN,
-} from "../rowbinary.ts";
+} from "../formats/rowbinary.ts";
 
 // Helper to compare arrays (works with TypedArrays too)
 function assertArrayEqual(

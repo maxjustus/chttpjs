@@ -26,7 +26,7 @@ import {
   formatScaledBigInt,
   expandIPv6,
   inferType,
-} from "./native_utils.ts";
+} from "./shared.ts";
 
 export {
   type ColumnDef,

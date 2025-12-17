@@ -4,7 +4,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { init, insert, query, collectBytes } from "../client.ts";
-import { encodeNative, decodeNative, toArrayRows, type ColumnDef } from "../native.ts";
+import { encodeNative, decodeNative, toArrayRows, type ColumnDef } from "../formats/native/index.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 
 describe("Native format integration", { timeout: 120000 }, () => {

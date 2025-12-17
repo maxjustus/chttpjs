@@ -10,16 +10,15 @@ import {
   parseTupleElements,
   ipv6ToBytes,
   bytesToIpv6,
-} from "../../native_utils.ts";
+} from "../shared.ts";
 
-import { createCodec as createRowBinaryCodec, RowBinaryEncoder } from "../../rowbinary.ts";
+import { createCodec as createRowBinaryCodec, RowBinaryEncoder } from "../rowbinary.ts";
 
 import { BufferWriter, BufferReader, type TypedArrayConstructor } from "./io.ts";
 import {
   type Column,
   type DiscriminatorArray,
-  TypedColumn,
-  SimpleColumn,
+  DataColumn,
   TupleColumn,
   MapColumn,
   VariantColumn,
@@ -27,11 +26,6 @@ import {
   JsonColumn,
   NullableColumn,
   ArrayColumn,
-  type StringColumn,
-  type BytesColumn,
-  type DateColumn,
-  type DateTime64Column,
-  type ScalarColumn,
   VARIANT_NULL_DISCRIMINATOR,
   countAndIndexDiscriminators,
 } from "./columns.ts";
@@ -82,33 +76,22 @@ class NumericCodec<T extends TypedArray> implements Codec {
   }
 
   encode(col: Column): Uint8Array {
-    // Fast path: input is TypedColumn with correct underlying type
-    if (col instanceof TypedColumn && col.data instanceof this.Ctor) {
-      return new Uint8Array(col.data.buffer, col.data.byteOffset, col.data.byteLength);
-    }
-    // Slow path: convert from any Column type
-    const len = col.length;
-    const arr = new this.Ctor(len);
-    if (this.converter) {
-      for (let i = 0; i < len; i++) arr[i] = this.converter(col.get(i)) as any;
-    } else {
-      for (let i = 0; i < len; i++) arr[i] = col.get(i) as any;
-    }
-    return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+    const dc = col as DataColumn<T>;
+    return new Uint8Array(dc.data.buffer, dc.data.byteOffset, dc.data.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): TypedColumn<T> {
-    return new TypedColumn(reader.readTypedArray(this.Ctor, rows));
+  decode(reader: BufferReader, rows: number): DataColumn<T> {
+    return new DataColumn(reader.readTypedArray(this.Ctor, rows));
   }
 
-  fromValues(values: unknown[]): TypedColumn<T> {
+  fromValues(values: unknown[]): DataColumn<T> {
     const arr = new this.Ctor(values.length);
     if (this.converter) {
       for (let i = 0; i < values.length; i++) arr[i] = this.converter(values[i]) as any;
     } else {
       for (let i = 0; i < values.length; i++) arr[i] = values[i] as any;
     }
-    return new TypedColumn(arr);
+    return new DataColumn(arr);
   }
 
   zeroValue() { return 0; }
@@ -123,14 +106,14 @@ class StringCodec implements Codec {
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): StringColumn {
+  decode(reader: BufferReader, rows: number): DataColumn<string[]> {
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) values[i] = reader.readString();
-    return new SimpleColumn(values);
+    return new DataColumn(values);
   }
 
-  fromValues(values: unknown[]): StringColumn {
-    return new SimpleColumn(values.map(v => String(v ?? "")));
+  fromValues(values: unknown[]): DataColumn<string[]> {
+    return new DataColumn(values.map(v => String(v ?? "")));
   }
 
   zeroValue() { return ""; }
@@ -154,7 +137,7 @@ class UUIDCodec implements Codec {
     return buf;
   }
 
-  decode(reader: BufferReader, rows: number): StringColumn {
+  decode(reader: BufferReader, rows: number): DataColumn<string[]> {
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const b = reader.buffer.subarray(reader.offset, reader.offset + 16);
@@ -167,11 +150,11 @@ class UUIDCodec implements Codec {
       const hex = Array.from(bytes).map(x => x.toString(16).padStart(2, '0')).join('');
       values[i] = `${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}`;
     }
-    return new SimpleColumn(values);
+    return new DataColumn(values);
   }
 
-  fromValues(values: unknown[]): StringColumn {
-    return new SimpleColumn(values.map(v => String(v ?? "")));
+  fromValues(values: unknown[]): DataColumn<string[]> {
+    return new DataColumn(values.map(v => String(v ?? "")));
   }
 
   zeroValue() { return "00000000-0000-0000-0000-000000000000"; }
@@ -197,16 +180,16 @@ class FixedStringCodec implements Codec {
     return buf;
   }
 
-  decode(reader: BufferReader, rows: number): BytesColumn {
+  decode(reader: BufferReader, rows: number): DataColumn<Uint8Array[]> {
     const values: Uint8Array[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       values[i] = reader.buffer.slice(reader.offset, reader.offset + this.len);
       reader.offset += this.len;
     }
-    return new SimpleColumn(values);
+    return new DataColumn(values);
   }
 
-  fromValues(values: unknown[]): BytesColumn {
+  fromValues(values: unknown[]): DataColumn<Uint8Array[]> {
     const result: Uint8Array[] = new Array(values.length);
     for (let i = 0; i < values.length; i++) {
       const v = values[i];
@@ -221,7 +204,7 @@ class FixedStringCodec implements Codec {
         result[i] = new Uint8Array(this.len);
       }
     }
-    return new SimpleColumn(result);
+    return new DataColumn(result);
   }
 
   zeroValue() { return new Uint8Array(this.len); }
@@ -235,7 +218,7 @@ class ScalarCodec implements Codec {
   }
 
   encode(col: Column): Uint8Array {
-    const values = col as ScalarColumn;
+    const values = col as DataColumn<unknown[]>;
     const encoder = new RowBinaryEncoder();
     for (let i = 0; i < values.length; i++) {
       this.codec.encode(encoder, values.get(i));
@@ -243,7 +226,7 @@ class ScalarCodec implements Codec {
     return encoder.finish();
   }
 
-  decode(reader: BufferReader, rows: number): ScalarColumn {
+  decode(reader: BufferReader, rows: number): DataColumn<unknown[]> {
     const values: unknown[] = new Array(rows);
     const view = reader.view;
     const data = reader.buffer;
@@ -252,11 +235,11 @@ class ScalarCodec implements Codec {
       values[i] = this.codec.decode(view, data, cursor);
     }
     reader.offset = cursor.offset;
-    return new SimpleColumn(values);
+    return new DataColumn(values);
   }
 
-  fromValues(values: unknown[]): ScalarColumn {
-    return new SimpleColumn(values);
+  fromValues(values: unknown[]): DataColumn<unknown[]> {
+    return new DataColumn(values);
   }
 
   zeroValue() { return 0; }
@@ -287,16 +270,16 @@ class DateTime64Codec implements Codec {
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): DateTime64Column {
+  decode(reader: BufferReader, rows: number): DataColumn<ClickHouseDateTime64[]> {
     const arr = reader.readTypedArray(BigInt64Array, rows);
     const values: ClickHouseDateTime64[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       values[i] = new ClickHouseDateTime64(arr[i], this.precision);
     }
-    return new SimpleColumn(values);
+    return new DataColumn(values);
   }
 
-  fromValues(values: unknown[]): DateTime64Column {
+  fromValues(values: unknown[]): DataColumn<ClickHouseDateTime64[]> {
     const result: ClickHouseDateTime64[] = new Array(values.length);
     for (let i = 0; i < values.length; i++) {
       const v = values[i] as any;
@@ -313,7 +296,7 @@ class DateTime64Codec implements Codec {
         result[i] = new ClickHouseDateTime64(0n, this.precision);
       }
     }
-    return new SimpleColumn(result);
+    return new DataColumn(result);
   }
 
   zeroValue() { return new Date(0); }
@@ -338,16 +321,16 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): DateColumn {
+  decode(reader: BufferReader, rows: number): DataColumn<Date[]> {
     const arr = reader.readTypedArray(this.Ctor, rows);
     const values: Date[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       values[i] = new Date((arr[i] as number) * this.multiplier);
     }
-    return new SimpleColumn(values);
+    return new DataColumn(values);
   }
 
-  fromValues(values: unknown[]): DateColumn {
+  fromValues(values: unknown[]): DataColumn<Date[]> {
     const result: Date[] = new Array(values.length);
     for (let i = 0; i < values.length; i++) {
       const v = values[i];
@@ -359,7 +342,7 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
         result[i] = new Date(0);
       }
     }
-    return new SimpleColumn(result);
+    return new DataColumn(result);
   }
 
   zeroValue() { return new Date(0); }
@@ -376,18 +359,18 @@ class IPv4Codec implements Codec {
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): StringColumn {
+  decode(reader: BufferReader, rows: number): DataColumn<string[]> {
     const arr = reader.readTypedArray(Uint32Array, rows);
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const v = arr[i];
       values[i] = `${v & 0xFF}.${(v >> 8) & 0xFF}.${(v >> 16) & 0xFF}.${(v >> 24) & 0xFF}`;
     }
-    return new SimpleColumn(values);
+    return new DataColumn(values);
   }
 
-  fromValues(values: unknown[]): StringColumn {
-    return new SimpleColumn(values.map(v => String(v ?? "")));
+  fromValues(values: unknown[]): DataColumn<string[]> {
+    return new DataColumn(values.map(v => String(v ?? "")));
   }
 
   zeroValue() { return "0.0.0.0"; }
@@ -404,17 +387,17 @@ class IPv6Codec implements Codec {
     return result;
   }
 
-  decode(reader: BufferReader, rows: number): StringColumn {
+  decode(reader: BufferReader, rows: number): DataColumn<string[]> {
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const bytes = reader.readBytes(16);
       values[i] = bytesToIpv6(bytes);
     }
-    return new SimpleColumn(values);
+    return new DataColumn(values);
   }
 
-  fromValues(values: unknown[]): StringColumn {
-    return new SimpleColumn(values.map(v => String(v ?? "")));
+  fromValues(values: unknown[]): DataColumn<string[]> {
+    return new DataColumn(values.map(v => String(v ?? "")));
   }
 
   zeroValue() { return "::"; }
@@ -590,7 +573,7 @@ class LowCardinalityCodec implements Codec {
 
     // Build dictionary column from unique values
     writer.write(new Uint8Array(new BigUint64Array([BigInt(dictValues.length)]).buffer));
-    writer.write(this.dictCodec.encode(new SimpleColumn(dictValues)));
+    writer.write(this.dictCodec.encode(this.dictCodec.fromValues(dictValues)));
     writer.write(new Uint8Array(new BigUint64Array([BigInt(col.length)]).buffer));
     writer.write(new Uint8Array(new IndexArray(indices).buffer));
 
@@ -598,7 +581,7 @@ class LowCardinalityCodec implements Codec {
   }
 
   decode(reader: BufferReader, rows: number): Column {
-    if (rows === 0) return new SimpleColumn([]);
+    if (rows === 0) return new DataColumn([]);
 
     const flags = reader.view.getBigUint64(reader.offset, true);
     reader.offset += 8;
@@ -626,7 +609,7 @@ class LowCardinalityCodec implements Codec {
       const idx = Number(indices[i]);
       values[i] = isNullable && idx === 0 ? null : dict.get(idx);
     }
-    return new SimpleColumn(values);
+    return new DataColumn(values);
   }
 
   fromValues(values: unknown[]): Column {

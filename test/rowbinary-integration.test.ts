@@ -7,7 +7,7 @@ import {
   encodeRowBinary,
   decodeRowBinary,
   type ColumnDef,
-} from "../rowbinary.ts";
+} from "../formats/rowbinary.ts";
 
 describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
   let clickhouse: Awaited<ReturnType<typeof startClickHouse>>;

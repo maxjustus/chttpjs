@@ -30,7 +30,7 @@ export {
   type DecodeResult,
   type StreamDecodeResult,
   ClickHouseDateTime64,
-} from "./rowbinary.ts";
+} from "./formats/rowbinary.ts";
 export {
   encodeNative,
   encodeNativeColumnar,
@@ -43,4 +43,4 @@ export {
   asRows,
   type StreamDecodeNativeResult,
   type ColumnarResult,
-} from "./native.ts";
+} from "./formats/native/index.ts";

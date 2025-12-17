@@ -13,22 +13,20 @@ import {
   type DecodeResult,
   type DecodeOptions,
   ClickHouseDateTime64,
-} from "../../native_utils.ts";
+} from "../shared.ts";
 
 import { BufferWriter, BufferReader } from "./io.ts";
 import { getCodec } from "./codecs.ts";
 import {
   type Column,
-  type BaseColumn,
-  SimpleColumn,
+  DataColumn,
 } from "./columns.ts";
 
 // Re-export types for public API
 export { type ColumnDef, type DecodeResult, type DecodeOptions, ClickHouseDateTime64 };
-export { type Column, type BaseColumn };
+export { type Column };
 export {
-  TypedColumn,
-  SimpleColumn,
+  DataColumn,
   TupleColumn,
   MapColumn,
   VariantColumn,
@@ -36,11 +34,6 @@ export {
   JsonColumn,
   NullableColumn,
   ArrayColumn,
-  type StringColumn,
-  type BytesColumn,
-  type DateColumn,
-  type DateTime64Column,
-  type ScalarColumn,
 } from "./columns.ts";
 
 export interface ColumnarResult {
@@ -204,10 +197,10 @@ export async function decodeNative(
     totalRows += block.rowCount;
   }
 
-  // Wrap merged arrays in SimpleColumn
+  // Wrap merged arrays in DataColumn
   return {
     columns,
-    columnData: allColumnData.map(arr => new SimpleColumn(arr)),
+    columnData: allColumnData.map(arr => new DataColumn(arr)),
     rowCount: totalRows,
   };
 }
@@ -279,14 +272,17 @@ export function* asRows(result: ColumnarResult): Generator<Record<string, unknow
 /**
  * Convert columnar result to array rows.
  * Useful for re-encoding or comparison with original row arrays.
- * Note: May normalize NaN values when accessing float columns.
  */
 export function toArrayRows(result: ColumnarResult): unknown[][] {
   const { columnData, rowCount } = result;
-  const materialized = columnData.map(col => col.materialize());
+  const numCols = columnData.length;
   const rows: unknown[][] = new Array(rowCount);
   for (let i = 0; i < rowCount; i++) {
-    rows[i] = materialized.map(m => m[i]);
+    const row = new Array(numCols);
+    for (let j = 0; j < numCols; j++) {
+      row[j] = columnData[j].get(i);
+    }
+    rows[i] = row;
   }
   return rows;
 }

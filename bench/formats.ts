@@ -9,8 +9,8 @@ import {
   streamDecodeRowBinary,
   streamEncodeRowBinary,
   type ColumnDef,
-} from "../rowbinary.ts";
-import { encodeNative, encodeNativeColumnar, decodeNative } from "../native.ts";
+} from "../formats/rowbinary.ts";
+import { encodeNative, encodeNativeColumnar, decodeNative } from "../formats/native/index.ts";
 
 // --- Benchmark infrastructure ---
 

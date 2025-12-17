@@ -1,9 +1,7 @@
 /**
  * Column data structures for Native format.
- * Columns provide columnar access to data with lazy materialization.
+ * Minimal interface: length + get(i) only.
  */
-
-import { ClickHouseDateTime64 } from "../../native_utils.ts";
 
 type TypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | BigInt64Array | BigUint64Array | Float32Array | Float64Array;
 export type DiscriminatorArray = Uint8Array | Uint16Array | Uint32Array;
@@ -34,56 +32,12 @@ export function countAndIndexDiscriminators(
 /**
  * Base interface for all column types.
  */
-export interface BaseColumn {
+export interface Column {
   readonly length: number;
   get(i: number): unknown;
-  slice(start: number, end: number): BaseColumn;
-  materialize(): unknown[] | TypedArray;
 }
 
-/**
- * Recursively materialize a value to plain JS.
- * Called by column.materialize() implementations.
- */
-export function materializeValue(value: unknown): unknown {
-  if (value === null || value === undefined) return value;
-
-  // If it's a column (has materialize method), materialize it
-  if (value && typeof (value as any).materialize === 'function') {
-    return (value as BaseColumn).materialize();
-  }
-
-  // Map - preserve as Map with materialized entries
-  if (value instanceof Map) {
-    const result = new Map();
-    for (const [k, v] of value) {
-      result.set(materializeValue(k), materializeValue(v));
-    }
-    return result;
-  }
-
-  // Array - materialize each element
-  if (Array.isArray(value)) {
-    return value.map(materializeValue);
-  }
-
-  // Object (like tuple result) - materialize values
-  if (typeof value === 'object' && !(value instanceof Date) && !ArrayBuffer.isView(value)) {
-    const result: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) {
-      result[k] = materializeValue(v);
-    }
-    return result;
-  }
-
-  // Primitives, Date, TypedArray - pass through
-  return value;
-}
-
-/**
- * Wraps a TypedArray as a column with the BaseColumn interface.
- */
-export class TypedColumn<T extends TypedArray> implements BaseColumn {
+export class DataColumn<T extends TypedArray | unknown[]> implements Column {
   readonly data: T;
 
   constructor(data: T) {
@@ -92,49 +46,12 @@ export class TypedColumn<T extends TypedArray> implements BaseColumn {
 
   get length() { return this.data.length; }
 
-  get(i: number): number | bigint {
-    return this.data[i];
-  }
-
-  slice(start: number, end: number): TypedColumn<T> {
-    return new TypedColumn(this.data.slice(start, end) as T);
-  }
-
-  materialize(): T {
-    return this.data;
+  get(i: number): unknown {
+    return (this.data as any)[i];
   }
 }
 
-/**
- * Generic simple column - wraps an array of values.
- * Used for String, Bytes, Date, DateTime64, Scalar (Decimal, Int128, etc.).
- */
-export class SimpleColumn<T> implements BaseColumn {
-  readonly values: T[];
-
-  constructor(values: T[]) {
-    this.values = values;
-  }
-
-  get length() { return this.values.length; }
-
-  get(i: number): T {
-    return this.values[i];
-  }
-
-  slice(start: number, end: number): SimpleColumn<T> {
-    return new SimpleColumn(this.values.slice(start, end));
-  }
-
-  materialize(): T[] {
-    return this.values.slice();
-  }
-}
-
-/**
- * Columnar tuple - stores each element as a separate column.
- */
-export class TupleColumn implements BaseColumn {
+export class TupleColumn implements Column {
   readonly elements: { name: string | null }[];
   readonly columns: Column[];
   readonly isNamed: boolean;
@@ -150,7 +67,7 @@ export class TupleColumn implements BaseColumn {
   }
 
   get length(): number {
-    return this.columns[0].length;
+    return this.columns[0]?.length ?? 0;
   }
 
   get(i: number): unknown {
@@ -163,28 +80,9 @@ export class TupleColumn implements BaseColumn {
     }
     return this.columns.map(c => c.get(i));
   }
-
-  slice(start: number, end: number): TupleColumn {
-    return new TupleColumn(
-      this.elements,
-      this.columns.map(c => c.slice(start, end)),
-      this.isNamed
-    );
-  }
-
-  materialize(): unknown[] {
-    const result = new Array(this.length);
-    for (let i = 0; i < this.length; i++) {
-      result[i] = materializeValue(this.get(i));
-    }
-    return result;
-  }
 }
 
-/**
- * Columnar map - stores keys and values as separate columns with offsets.
- */
-export class MapColumn implements BaseColumn {
+export class MapColumn implements Column {
   readonly offsets: BigUint64Array;
   readonly keys: Column;
   readonly values: Column;
@@ -211,9 +109,9 @@ export class MapColumn implements BaseColumn {
     const end = Number(this.offsets[i]);
 
     if (this.mapAsArray) {
-      const entries: [unknown, unknown][] = [];
+      const entries: [unknown, unknown][] = new Array(end - start);
       for (let j = start; j < end; j++) {
-        entries.push([this.keys.get(j), this.values.get(j)]);
+        entries[j - start] = [this.keys.get(j), this.values.get(j)];
       }
       return entries;
     }
@@ -224,137 +122,40 @@ export class MapColumn implements BaseColumn {
     }
     return map;
   }
-
-  slice(start: number, end: number): MapColumn {
-    const startOffset = start === 0 ? 0 : Number(this.offsets[start - 1]);
-    const endOffset = Number(this.offsets[end - 1]);
-
-    // Adjust offsets for the slice
-    const newOffsets = new BigUint64Array(end - start);
-    for (let i = 0; i < newOffsets.length; i++) {
-      newOffsets[i] = this.offsets[start + i] - BigInt(startOffset);
-    }
-
-    return new MapColumn(
-      newOffsets,
-      this.keys.slice(startOffset, endOffset),
-      this.values.slice(startOffset, endOffset),
-      this.mapAsArray
-    );
-  }
-
-  materialize(): unknown[] {
-    const result = new Array(this.length);
-    for (let i = 0; i < this.length; i++) {
-      result[i] = materializeValue(this.get(i));
-    }
-    return result;
-  }
 }
 
-/**
- * Base class for discriminated columns (Variant, Dynamic).
- * Stores discriminators and grouped values, with pre-computed indices for O(1) access.
- */
-abstract class DiscriminatedColumn<D extends DiscriminatorArray> implements BaseColumn {
-  readonly discriminators: D;
+export class VariantColumn implements Column {
+  readonly discriminators: Uint8Array;
   readonly groups: Map<number, Column>;
-  protected readonly groupIndices: Uint32Array;
-  protected readonly nullDisc: number;
+  private readonly groupIndices: Uint32Array;
 
   constructor(
-    discriminators: D,
+    discriminators: Uint8Array,
     groups: Map<number, Column>,
-    nullDisc: number,
     groupIndices?: Uint32Array
   ) {
     this.discriminators = discriminators;
     this.groups = groups;
-    this.nullDisc = nullDisc;
-    // Use provided indices or compute them (for sliced columns)
-    this.groupIndices = groupIndices ?? countAndIndexDiscriminators(discriminators, nullDisc).indices;
+    this.groupIndices = groupIndices ?? countAndIndexDiscriminators(discriminators, VARIANT_NULL_DISCRIMINATOR).indices;
   }
 
   get length(): number {
     return this.discriminators.length;
   }
 
-  abstract get(i: number): unknown;
-  abstract slice(start: number, end: number): DiscriminatedColumn<D>;
-
-  /** Get the raw value at index i (without discriminator wrapper) */
-  protected getValue(i: number): unknown {
-    const d = this.discriminators[i];
-    if (d === this.nullDisc) return null;
-    return this.groups.get(d)!.get(this.groupIndices[i]);
-  }
-
-  /** Rebuild groups for a slice range */
-  protected sliceGroups(start: number, end: number): Map<number, Column> {
-    const groupValues = new Map<number, unknown[]>();
-    for (let i = start; i < end; i++) {
-      const d = this.discriminators[i];
-      if (d !== this.nullDisc) {
-        if (!groupValues.has(d)) groupValues.set(d, []);
-        groupValues.get(d)!.push(this.groups.get(d)!.get(this.groupIndices[i]));
-      }
-    }
-    const newGroups = new Map<number, Column>();
-    for (const [d, values] of groupValues) {
-      newGroups.set(d, new SimpleColumn(values));
-    }
-    return newGroups;
-  }
-
-  materialize(): unknown[] {
-    const result = new Array(this.length);
-    for (let i = 0; i < this.length; i++) {
-      result[i] = materializeValue(this.get(i));
-    }
-    return result;
-  }
-}
-
-/**
- * Variant column - returns [discriminator, value] tuples.
- */
-export class VariantColumn extends DiscriminatedColumn<Uint8Array> {
-  constructor(
-    discriminators: Uint8Array,
-    groups: Map<number, Column>,
-    groupIndices?: Uint32Array
-  ) {
-    super(discriminators, groups, VARIANT_NULL_DISCRIMINATOR, groupIndices);
-  }
-
   get(i: number): [number, unknown] | null {
     const d = this.discriminators[i];
-    if (d === this.nullDisc) return null;
-    return [d, this.getValue(i)];
-  }
-
-  slice(start: number, end: number): VariantColumn {
-    return new VariantColumn(
-      this.discriminators.slice(start, end),
-      this.sliceGroups(start, end)
-    );
-  }
-
-  materialize(): unknown[] {
-    const result = new Array(this.length);
-    for (let i = 0; i < this.length; i++) {
-      const v = this.get(i);
-      result[i] = v ? [v[0], materializeValue(v[1])] : null;
-    }
-    return result;
+    if (d === VARIANT_NULL_DISCRIMINATOR) return null;
+    return [d, this.groups.get(d)!.get(this.groupIndices[i])];
   }
 }
 
-/**
- * Dynamic column - returns unwrapped values directly.
- */
-export class DynamicColumn extends DiscriminatedColumn<DiscriminatorArray> {
+export class DynamicColumn implements Column {
   readonly types: string[];
+  readonly discriminators: DiscriminatorArray;
+  readonly groups: Map<number, Column>;
+  private readonly groupIndices: Uint32Array;
+  private readonly nullDisc: number;
 
   constructor(
     types: string[],
@@ -362,28 +163,25 @@ export class DynamicColumn extends DiscriminatedColumn<DiscriminatorArray> {
     groups: Map<number, Column>,
     groupIndices?: Uint32Array
   ) {
-    super(discriminators, groups, types.length, groupIndices);
     this.types = types;
+    this.discriminators = discriminators;
+    this.groups = groups;
+    this.nullDisc = types.length;
+    this.groupIndices = groupIndices ?? countAndIndexDiscriminators(discriminators, this.nullDisc).indices;
+  }
+
+  get length(): number {
+    return this.discriminators.length;
   }
 
   get(i: number): unknown {
-    return this.getValue(i);
-  }
-
-  slice(start: number, end: number): DynamicColumn {
-    const DiscCtor = this.discriminators.constructor as { new(len: number): DiscriminatorArray };
-    const newDiscs = new DiscCtor(end - start);
-    for (let i = 0; i < end - start; i++) {
-      newDiscs[i] = this.discriminators[start + i];
-    }
-    return new DynamicColumn(this.types, newDiscs, this.sliceGroups(start, end));
+    const d = this.discriminators[i];
+    if (d === this.nullDisc) return null;
+    return this.groups.get(d)!.get(this.groupIndices[i]);
   }
 }
 
-/**
- * Columnar JSON - stores paths with dynamic columns for each.
- */
-export class JsonColumn implements BaseColumn {
+export class JsonColumn implements Column {
   readonly paths: string[];
   readonly pathColumns: Map<string, DynamicColumn>;
   private _length: number;
@@ -406,30 +204,9 @@ export class JsonColumn implements BaseColumn {
     }
     return obj;
   }
-
-  slice(start: number, end: number): JsonColumn {
-    const newPathColumns = new Map<string, DynamicColumn>();
-    for (const [path, col] of this.pathColumns) {
-      newPathColumns.set(path, col.slice(start, end));
-    }
-    return new JsonColumn(this.paths, newPathColumns, end - start);
-  }
-
-  materialize(): unknown[] {
-    const result = new Array(this.length);
-    for (let i = 0; i < this.length; i++) {
-      result[i] = materializeValue(this.get(i));
-    }
-    return result;
-  }
 }
 
-/**
- * Nullable column for non-float types.
- * Wraps an inner column with null flags.
- * Inner column has same length as nullFlags (includes placeholder values at null positions).
- */
-export class NullableColumn implements BaseColumn {
+export class NullableColumn implements Column {
   readonly nullFlags: Uint8Array;
   readonly inner: Column;
 
@@ -444,28 +221,9 @@ export class NullableColumn implements BaseColumn {
     if (this.nullFlags[i]) return null;
     return this.inner.get(i);
   }
-
-  slice(start: number, end: number): NullableColumn {
-    return new NullableColumn(
-      this.nullFlags.slice(start, end),
-      this.inner.slice(start, end)
-    );
-  }
-
-  materialize(): unknown[] {
-    const result = new Array(this.length);
-    for (let i = 0; i < this.length; i++) {
-      const v = this.get(i);
-      result[i] = v === null ? null : materializeValue(v);
-    }
-    return result;
-  }
 }
 
-/**
- * Array column - stores offsets and inner column.
- */
-export class ArrayColumn implements BaseColumn {
+export class ArrayColumn implements Column {
   readonly offsets: BigUint64Array;
   readonly inner: Column;
 
@@ -476,39 +234,14 @@ export class ArrayColumn implements BaseColumn {
 
   get length() { return this.offsets.length; }
 
-  get(i: number): Column {
+  get(i: number): unknown[] {
     const start = i === 0 ? 0 : Number(this.offsets[i - 1]);
     const end = Number(this.offsets[i]);
-    return this.inner.slice(start, end);
-  }
-
-  slice(start: number, end: number): ArrayColumn {
-    const startOffset = start === 0 ? 0 : Number(this.offsets[start - 1]);
-    const endOffset = Number(this.offsets[end - 1]);
-
-    const newOffsets = new BigUint64Array(end - start);
-    for (let i = 0; i < newOffsets.length; i++) {
-      newOffsets[i] = this.offsets[start + i] - BigInt(startOffset);
-    }
-
-    return new ArrayColumn(newOffsets, this.inner.slice(startOffset, endOffset));
-  }
-
-  materialize(): unknown[] {
-    const result = new Array(this.length);
-    for (let i = 0; i < this.length; i++) {
-      result[i] = materializeValue(this.get(i));
+    const result = new Array(end - start);
+    for (let j = start; j < end; j++) {
+      result[j - start] = this.inner.get(j);
     }
     return result;
   }
 }
 
-// Column type alias
-export type Column = BaseColumn;
-
-// Type aliases for backwards compatibility and readability
-export type StringColumn = SimpleColumn<string>;
-export type BytesColumn = SimpleColumn<Uint8Array>;
-export type DateColumn = SimpleColumn<Date>;
-export type DateTime64Column = SimpleColumn<ClickHouseDateTime64>;
-export type ScalarColumn = SimpleColumn<unknown>;

@@ -15,7 +15,7 @@ export {
   type DecodeResult,
   type StreamDecodeResult,
   ClickHouseDateTime64,
-} from "./rowbinary.ts";
+} from "./formats/rowbinary.ts";
 
 export {
   encodeNative,
@@ -23,7 +23,7 @@ export {
   streamEncodeNative,
   streamDecodeNative,
   type StreamDecodeNativeResult,
-} from "./native.ts";
+} from "./formats/native/index.ts";
 
 export type Compression = "lz4" | "zstd" | "none";
 

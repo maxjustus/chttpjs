@@ -7,7 +7,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { encodeNative, encodeNativeColumnar, decodeNative, streamDecodeNative, toArrayRows, type ColumnDef } from "../native.ts";
+import { encodeNative, encodeNativeColumnar, decodeNative, streamDecodeNative, toArrayRows, type ColumnDef } from "../formats/native/index.ts";
 
 // ============================================================================
 // Unit Fuzz Tests (no ClickHouse required)
