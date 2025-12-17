@@ -501,7 +501,7 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
           const startTime = Date.now();
           let lastProgressTime = startTime;
 
-          for await (const block of streamDecodeNative(queryStream, { mapAsArray: true })) {
+          for await (const block of streamDecodeNative(queryStream, { mapAsArray: true, debug: true })) {
             columns = block.columns;
             blocksProcessed++;
             rowsProcessed += block.rowCount;
@@ -596,8 +596,15 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
               console.log(`Distinct values - src: ${srcDistinct.trim()}, dst: ${dstDistinct.trim()}`);
             }
 
+            // Get specific differing rows
+            const diffRows = await collectText(
+              query(
+                `SELECT * FROM (SELECT cityHash64(*) AS h, * FROM ${srcTable} EXCEPT SELECT cityHash64(*) AS h, * FROM ${dstTable}) LIMIT 5 FORMAT TabSeparated`,
+                sessionId, { baseUrl, auth },
+              ),
+            );
             throw new Error(
-              `Native fuzz mismatch in iteration ${i}: ${diff1.trim()}/${diff2.trim()} rows differ. First differing column: ${firstDiffCol || "unknown"}`,
+              `Native fuzz mismatch in iteration ${i}: ${diff1.trim()}/${diff2.trim()} rows differ. First differing column: ${firstDiffCol || "unknown"}\nSample diff rows:\n${diffRows}`,
             );
           }
         } catch (err) {

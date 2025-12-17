@@ -35,6 +35,8 @@ export function countAndIndexDiscriminators(
 export interface Column {
   readonly length: number;
   get(i: number): unknown;
+  /** Materialize all values to a plain array. Faster than calling get() in a loop. */
+  toArray(): unknown[];
 }
 
 export class DataColumn<T extends TypedArray | unknown[]> implements Column {
@@ -49,12 +51,23 @@ export class DataColumn<T extends TypedArray | unknown[]> implements Column {
   get(i: number): unknown {
     return (this.data as any)[i];
   }
+
+  toArray(): unknown[] {
+    // TypedArrays need Array.from; plain arrays can be returned directly
+    if (Array.isArray(this.data)) return this.data;
+    // Handle BigInt64Array/BigUint64Array and numeric typed arrays
+    const arr = this.data as TypedArray;
+    const result = new Array(arr.length);
+    for (let i = 0; i < arr.length; i++) result[i] = arr[i];
+    return result;
+  }
 }
 
 export class TupleColumn implements Column {
   readonly elements: { name: string | null }[];
   readonly columns: Column[];
   readonly isNamed: boolean;
+  private _cached?: unknown[];
 
   constructor(
     elements: { name: string | null }[],
@@ -71,14 +84,35 @@ export class TupleColumn implements Column {
   }
 
   get(i: number): unknown {
+    return this.toArray()[i];
+  }
+
+  toArray(): unknown[] {
+    if (this._cached) return this._cached;
+
+    const len = this.length;
+    const numElements = this.elements.length;
+    const childArrays = this.columns.map(c => c.toArray());
+    const result = new Array(len);
+
     if (this.isNamed) {
-      const obj: Record<string, unknown> = {};
-      for (let j = 0; j < this.elements.length; j++) {
-        obj[this.elements[j].name!] = this.columns[j].get(i);
+      for (let i = 0; i < len; i++) {
+        const obj: Record<string, unknown> = {};
+        for (let j = 0; j < numElements; j++) {
+          obj[this.elements[j].name!] = childArrays[j][i];
+        }
+        result[i] = obj;
       }
-      return obj;
+    } else {
+      for (let i = 0; i < len; i++) {
+        const arr = new Array(numElements);
+        for (let j = 0; j < numElements; j++) {
+          arr[j] = childArrays[j][i];
+        }
+        result[i] = arr;
+      }
     }
-    return this.columns.map(c => c.get(i));
+    return this._cached = result;
   }
 }
 
@@ -87,6 +121,7 @@ export class MapColumn implements Column {
   readonly keys: Column;
   readonly values: Column;
   private mapAsArray: boolean;
+  private _cached?: (Map<unknown, unknown> | [unknown, unknown][])[];
 
   constructor(
     offsets: BigUint64Array,
@@ -105,22 +140,36 @@ export class MapColumn implements Column {
   }
 
   get(i: number): Map<unknown, unknown> | [unknown, unknown][] {
-    const start = i === 0 ? 0 : Number(this.offsets[i - 1]);
-    const end = Number(this.offsets[i]);
+    return this.toArray()[i];
+  }
 
-    if (this.mapAsArray) {
-      const entries: [unknown, unknown][] = new Array(end - start);
-      for (let j = start; j < end; j++) {
-        entries[j - start] = [this.keys.get(j), this.values.get(j)];
+  toArray(): (Map<unknown, unknown> | [unknown, unknown][])[] {
+    if (this._cached) return this._cached;
+
+    const len = this.offsets.length;
+    const keysArr = this.keys.toArray();
+    const valsArr = this.values.toArray();
+    const result = new Array(len);
+
+    for (let i = 0; i < len; i++) {
+      const start = i === 0 ? 0 : Number(this.offsets[i - 1]);
+      const end = Number(this.offsets[i]);
+
+      if (this.mapAsArray) {
+        const entries: [unknown, unknown][] = new Array(end - start);
+        for (let j = start; j < end; j++) {
+          entries[j - start] = [keysArr[j], valsArr[j]];
+        }
+        result[i] = entries;
+      } else {
+        const map = new Map<unknown, unknown>();
+        for (let j = start; j < end; j++) {
+          map.set(keysArr[j], valsArr[j]);
+        }
+        result[i] = map;
       }
-      return entries;
     }
-
-    const map = new Map<unknown, unknown>();
-    for (let j = start; j < end; j++) {
-      map.set(this.keys.get(j), this.values.get(j));
-    }
-    return map;
+    return this._cached = result;
   }
 }
 
@@ -128,6 +177,7 @@ export class VariantColumn implements Column {
   readonly discriminators: Uint8Array;
   readonly groups: Map<number, Column>;
   private readonly groupIndices: Uint32Array;
+  private _cached?: ([number, unknown] | null)[];
 
   constructor(
     discriminators: Uint8Array,
@@ -144,9 +194,28 @@ export class VariantColumn implements Column {
   }
 
   get(i: number): [number, unknown] | null {
-    const d = this.discriminators[i];
-    if (d === VARIANT_NULL_DISCRIMINATOR) return null;
-    return [d, this.groups.get(d)!.get(this.groupIndices[i])];
+    return this.toArray()[i];
+  }
+
+  toArray(): ([number, unknown] | null)[] {
+    if (this._cached) return this._cached;
+
+    const len = this.discriminators.length;
+    const groupArrays = new Map<number, unknown[]>();
+    for (const [d, col] of this.groups) {
+      groupArrays.set(d, col.toArray());
+    }
+
+    const result = new Array(len);
+    for (let i = 0; i < len; i++) {
+      const d = this.discriminators[i];
+      if (d === VARIANT_NULL_DISCRIMINATOR) {
+        result[i] = null;
+      } else {
+        result[i] = [d, groupArrays.get(d)![this.groupIndices[i]]];
+      }
+    }
+    return this._cached = result;
   }
 }
 
@@ -156,6 +225,7 @@ export class DynamicColumn implements Column {
   readonly groups: Map<number, Column>;
   private readonly groupIndices: Uint32Array;
   private readonly nullDisc: number;
+  private _cached?: unknown[];
 
   constructor(
     types: string[],
@@ -175,9 +245,28 @@ export class DynamicColumn implements Column {
   }
 
   get(i: number): unknown {
-    const d = this.discriminators[i];
-    if (d === this.nullDisc) return null;
-    return this.groups.get(d)!.get(this.groupIndices[i]);
+    return this.toArray()[i];
+  }
+
+  toArray(): unknown[] {
+    if (this._cached) return this._cached;
+
+    const len = this.discriminators.length;
+    const groupArrays = new Map<number, unknown[]>();
+    for (const [d, col] of this.groups) {
+      groupArrays.set(d, col.toArray());
+    }
+
+    const result = new Array(len);
+    for (let i = 0; i < len; i++) {
+      const d = this.discriminators[i];
+      if (d === this.nullDisc) {
+        result[i] = null;
+      } else {
+        result[i] = groupArrays.get(d)![this.groupIndices[i]];
+      }
+    }
+    return this._cached = result;
   }
 }
 
@@ -185,6 +274,7 @@ export class JsonColumn implements Column {
   readonly paths: string[];
   readonly pathColumns: Map<string, DynamicColumn>;
   private _length: number;
+  private _cached?: Record<string, unknown>[];
 
   constructor(paths: string[], pathColumns: Map<string, DynamicColumn>, length: number) {
     this.paths = paths;
@@ -197,18 +287,35 @@ export class JsonColumn implements Column {
   }
 
   get(i: number): Record<string, unknown> {
-    const obj: Record<string, unknown> = {};
+    return this.toArray()[i];
+  }
+
+  toArray(): Record<string, unknown>[] {
+    if (this._cached) return this._cached;
+
+    const len = this._length;
+    const pathArrays = new Map<string, unknown[]>();
     for (const path of this.paths) {
-      const val = this.pathColumns.get(path)!.get(i);
-      if (val !== null) obj[path] = val;
+      pathArrays.set(path, this.pathColumns.get(path)!.toArray());
     }
-    return obj;
+
+    const result = new Array(len);
+    for (let i = 0; i < len; i++) {
+      const obj: Record<string, unknown> = {};
+      for (const path of this.paths) {
+        const val = pathArrays.get(path)![i];
+        if (val !== null) obj[path] = val;
+      }
+      result[i] = obj;
+    }
+    return this._cached = result;
   }
 }
 
 export class NullableColumn implements Column {
   readonly nullFlags: Uint8Array;
   readonly inner: Column;
+  private _cached?: unknown[];
 
   constructor(nullFlags: Uint8Array, inner: Column) {
     this.nullFlags = nullFlags;
@@ -218,14 +325,26 @@ export class NullableColumn implements Column {
   get length() { return this.nullFlags.length; }
 
   get(i: number): unknown {
-    if (this.nullFlags[i]) return null;
-    return this.inner.get(i);
+    return this.toArray()[i];
+  }
+
+  toArray(): unknown[] {
+    if (this._cached) return this._cached;
+
+    const innerArr = this.inner.toArray();
+    const len = this.nullFlags.length;
+    const result = new Array(len);
+    for (let i = 0; i < len; i++) {
+      result[i] = this.nullFlags[i] ? null : innerArr[i];
+    }
+    return this._cached = result;
   }
 }
 
 export class ArrayColumn implements Column {
   readonly offsets: BigUint64Array;
   readonly inner: Column;
+  private _cached?: unknown[][];
 
   constructor(offsets: BigUint64Array, inner: Column) {
     this.offsets = offsets;
@@ -235,13 +354,22 @@ export class ArrayColumn implements Column {
   get length() { return this.offsets.length; }
 
   get(i: number): unknown[] {
-    const start = i === 0 ? 0 : Number(this.offsets[i - 1]);
-    const end = Number(this.offsets[i]);
-    const result = new Array(end - start);
-    for (let j = start; j < end; j++) {
-      result[j - start] = this.inner.get(j);
+    return this.toArray()[i];
+  }
+
+  toArray(): unknown[][] {
+    if (this._cached) return this._cached;
+
+    const len = this.offsets.length;
+    const innerArr = this.inner.toArray();
+    const result = new Array(len);
+
+    for (let i = 0; i < len; i++) {
+      const start = i === 0 ? 0 : Number(this.offsets[i - 1]);
+      const end = Number(this.offsets[i]);
+      result[i] = innerArr.slice(start, end);
     }
-    return result;
+    return this._cached = result;
   }
 }
 

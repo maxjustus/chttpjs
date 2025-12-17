@@ -52,6 +52,48 @@ interface BlockResult {
   isEndMarker: boolean;
 }
 
+interface BlockEstimate {
+  estimatedSize: number;
+  headerSize: number;  // bytes consumed reading header (numCols, numRows, names, types)
+}
+
+/**
+ * Peek at block header to estimate total block size without full decode.
+ * Returns null if not enough data for header, or the estimate.
+ */
+function estimateBlockSize(
+  data: Uint8Array,
+  offset: number,
+): BlockEstimate | null {
+  try {
+    const reader = new BufferReader(data, offset);
+    const startOffset = reader.offset;
+
+    const numCols = reader.readVarint();
+    const numRows = reader.readVarint();
+
+    // End marker - tiny block
+    if (numCols === 0 && numRows === 0) {
+      return { estimatedSize: reader.offset - startOffset, headerSize: reader.offset - startOffset };
+    }
+
+    // Read column names and types to estimate data size
+    let dataEstimate = 0;
+    for (let i = 0; i < numCols; i++) {
+      reader.readString(); // name
+      const type = reader.readString();
+      dataEstimate += getCodec(type).estimateSize(numRows);
+    }
+
+    const headerSize = reader.offset - startOffset;
+    // Add 20% buffer for prefix data, LowCardinality dictionaries, etc.
+    return { estimatedSize: headerSize + Math.ceil(dataEstimate * 1.2), headerSize };
+  } catch {
+    // Not enough data even for header
+    return null;
+  }
+}
+
 /**
  * Decode a single Native format block from a buffer.
  * Returns the decoded data and the number of bytes consumed.
@@ -139,10 +181,14 @@ export function encodeNativeColumnar(
     const codec = getCodec(columns[i].type);
     const data = columnData[i];
 
-    // Convert raw data to Column if needed (duck type check for BaseColumn)
+    // Convert raw data to Column if needed
+    // Fast path: TypedArrays wrap directly in DataColumn (zero-copy)
+    // Duck type check for existing Column objects
     const col: Column = (data && typeof (data as any).get === 'function')
       ? data as Column
-      : codec.fromValues(data as unknown[]);
+      : ArrayBuffer.isView(data) && !(data instanceof DataView)
+        ? new DataColumn(data as any)
+        : codec.fromValues(data as unknown[]);
 
     writer.writeString(columns[i].name);
     writer.writeString(columns[i].type);
@@ -260,10 +306,14 @@ function consumeBytes(chunks: Uint8Array[], bytes: number): number {
 export function* asRows(result: ColumnarResult): Generator<Record<string, unknown>> {
   const { columns, columnData, rowCount } = result;
   const numCols = columns.length;
+
+  // Materialize all columns upfront - avoids virtual calls in the inner loop
+  const cols = columnData.map(c => c.toArray());
+
   for (let i = 0; i < rowCount; i++) {
     const row: Record<string, unknown> = {};
     for (let j = 0; j < numCols; j++) {
-      row[columns[j].name] = columnData[j].get(i);
+      row[columns[j].name] = cols[j][i];
     }
     yield row;
   }
@@ -276,11 +326,15 @@ export function* asRows(result: ColumnarResult): Generator<Record<string, unknow
 export function toArrayRows(result: ColumnarResult): unknown[][] {
   const { columnData, rowCount } = result;
   const numCols = columnData.length;
+
+  // Materialize all columns upfront - avoids virtual calls in the inner loop
+  const cols = columnData.map(c => c.toArray());
+
   const rows: unknown[][] = new Array(rowCount);
   for (let i = 0; i < rowCount; i++) {
     const row = new Array(numCols);
     for (let j = 0; j < numCols; j++) {
-      row[j] = columnData[j].get(i);
+      row[j] = cols[j][i];
     }
     rows[i] = row;
   }
@@ -289,25 +343,50 @@ export function toArrayRows(result: ColumnarResult): unknown[][] {
 
 export async function* streamDecodeNative(
   chunks: AsyncIterable<Uint8Array>,
-  options?: DecodeOptions,
+  options?: DecodeOptions & { debug?: boolean; minBufferSize?: number },
 ): AsyncGenerator<ColumnarResult> {
   const pendingChunks: Uint8Array[] = [];
   let columns: ColumnDef[] = [];
   let totalBytesReceived = 0;
   let blocksDecoded = 0;
+  let bufferUnderruns = 0;
+  let pendingBytes = 0;
+
+  // Minimum bytes to buffer before attempting decode (reduces failed decode attempts)
+  // We track average block size to predict when we have enough data
+  const minBuffer = options?.minBufferSize ?? 2 * 1024 * 1024; // 2MB default
+  let avgBlockSize = 0;
+  let totalBlockBytes = 0;
 
   for await (const chunk of chunks) {
     pendingChunks.push(chunk);
+    pendingBytes += chunk.length;
     totalBytesReceived += chunk.length;
+
+    // Skip decode attempt if we don't have enough data yet
+    // Use 120% of average block size as threshold (conservative to avoid wasted partial decodes)
+    const threshold = blocksDecoded > 0
+      ? Math.max(minBuffer / 4, avgBlockSize * 1.2)  // After first block, use avg + 20% buffer
+      : minBuffer;
+    if (pendingBytes < threshold) continue;
 
     // Try to decode as many complete blocks as possible
     while (pendingChunks.length > 0) {
       const buffer = flattenChunks(pendingChunks);
+
+      // First, estimate if we have enough data (avoids wasted decode attempts)
+      const estimate = estimateBlockSize(buffer, 0);
+      if (estimate === null || buffer.length < estimate.estimatedSize) {
+        // Not enough data - wait for more
+        break;
+      }
+
       try {
         const block = decodeNativeBlock(buffer, 0, options);
 
         if (block.isEndMarker) {
           consumeBytes(pendingChunks, block.bytesConsumed);
+          pendingBytes -= block.bytesConsumed;
           // Don't break - continue processing any remaining data after end marker
           continue;
         }
@@ -317,19 +396,30 @@ export async function* streamDecodeNative(
           columns = block.columns;
         }
 
+        totalBlockBytes += block.bytesConsumed;
         consumeBytes(pendingChunks, block.bytesConsumed);
+        pendingBytes -= block.bytesConsumed;
         blocksDecoded++;
+        avgBlockSize = totalBlockBytes / blocksDecoded;
         yield { columns, columnData: block.columnData, rowCount: block.rowCount };
       } catch {
-        // Not enough data for a complete block, wait for more chunks
+        // Estimate was wrong (e.g., variable-length data larger than expected)
+        // Wait for more chunks
+        bufferUnderruns++;
         break;
       }
     }
   }
 
-  // Handle any remaining data
+  if (options?.debug) {
+    console.log(`[streamDecodeNative] ${blocksDecoded} blocks, ${totalBytesReceived} bytes, ${bufferUnderruns} underruns`);
+  }
+
+  // Handle any remaining data after stream ends
   if (pendingChunks.length > 0) {
     const buffer = flattenChunks(pendingChunks);
+    // After streaming loop ends, all remaining data should be in pendingChunks
+    // If there's substantial data left, try to decode it
     let offset = 0;
     while (offset < buffer.length) {
       try {
@@ -343,7 +433,14 @@ export async function* streamDecodeNative(
         offset += block.bytesConsumed;
         blocksDecoded++;
         yield { columns, columnData: block.columnData, rowCount: block.rowCount };
-      } catch {
+      } catch (e) {
+        // If we have remaining bytes and can't decode, might be trailing data or error
+        // Allow for: end marker (2 bytes), partial block header, padding
+        const remainingBytes = buffer.length - offset;
+        if (remainingBytes > 100) {
+          // Too much remaining data to be trailing junk - real decode error
+          throw new Error(`Native decode error at offset ${offset}/${buffer.length} (${remainingBytes} bytes remaining, ${blocksDecoded} blocks decoded): ${e}`);
+        }
         break;
       }
     }

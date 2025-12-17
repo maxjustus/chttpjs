@@ -62,6 +62,8 @@ export interface Codec {
   decode(reader: BufferReader, rows: number): Column;
   fromValues(values: unknown[]): Column;
   zeroValue(): unknown;
+  // Estimate bytes needed for this column type with given row count
+  estimateSize(rows: number): number;
   // Nested types need to handle prefix writing/reading
   writePrefix?(writer: BufferWriter, col: Column): void;
   readPrefix?(reader: BufferReader): void;
@@ -95,6 +97,7 @@ class NumericCodec<T extends TypedArray> implements Codec {
   }
 
   zeroValue() { return 0; }
+  estimateSize(rows: number) { return rows * this.Ctor.BYTES_PER_ELEMENT; }
 }
 
 class StringCodec implements Codec {
@@ -117,6 +120,8 @@ class StringCodec implements Codec {
   }
 
   zeroValue() { return ""; }
+  // Variable length - assume average 32 bytes per string + 1 byte length prefix
+  estimateSize(rows: number) { return rows * 33; }
 }
 
 class UUIDCodec implements Codec {
@@ -158,6 +163,7 @@ class UUIDCodec implements Codec {
   }
 
   zeroValue() { return "00000000-0000-0000-0000-000000000000"; }
+  estimateSize(rows: number) { return rows * 16; }
 }
 
 class FixedStringCodec implements Codec {
@@ -208,6 +214,7 @@ class FixedStringCodec implements Codec {
   }
 
   zeroValue() { return new Uint8Array(this.len); }
+  estimateSize(rows: number) { return rows * this.len; }
 }
 
 class ScalarCodec implements Codec {
@@ -243,6 +250,8 @@ class ScalarCodec implements Codec {
   }
 
   zeroValue() { return 0; }
+  // ScalarCodec handles Int128/256, Decimal - conservative estimate
+  estimateSize(rows: number) { return rows * 32; }
 }
 
 class DateTime64Codec implements Codec {
@@ -300,6 +309,7 @@ class DateTime64Codec implements Codec {
   }
 
   zeroValue() { return new Date(0); }
+  estimateSize(rows: number) { return rows * 8; }
 }
 
 // handles Date, Date32, DateTime (ms since epoch / multiplier)
@@ -346,6 +356,7 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
   }
 
   zeroValue() { return new Date(0); }
+  estimateSize(rows: number) { return rows * this.Ctor.BYTES_PER_ELEMENT; }
 }
 
 class IPv4Codec implements Codec {
@@ -374,6 +385,7 @@ class IPv4Codec implements Codec {
   }
 
   zeroValue() { return "0.0.0.0"; }
+  estimateSize(rows: number) { return rows * 4; }
 }
 
 class IPv6Codec implements Codec {
@@ -401,6 +413,7 @@ class IPv6Codec implements Codec {
   }
 
   zeroValue() { return "::"; }
+  estimateSize(rows: number) { return rows * 16; }
 }
 
 // When used as a column in Map/Tuple, inner codec's prefix needs to be handled
@@ -454,6 +467,8 @@ class ArrayCodec implements Codec {
   }
 
   zeroValue() { return []; }
+  // 8 bytes per offset + assume average 5 elements per row
+  estimateSize(rows: number) { return rows * 8 + this.inner.estimateSize(rows * 5); }
 }
 
 // Delegates prefix handling to inner codec
@@ -508,6 +523,8 @@ class NullableCodec implements Codec {
   }
 
   zeroValue() { return null; }
+  // null flags (1 byte each) + inner data
+  estimateSize(rows: number) { return rows + this.inner.estimateSize(rows); }
 }
 
 // LowCardinality stores a dictionary of unique values and indices into that dictionary.
@@ -639,6 +656,12 @@ class LowCardinalityCodec implements Codec {
     }
     return v;
   }
+
+  // Dictionary + indices (assume u16 indices, max 65536 unique values)
+  estimateSize(rows: number) {
+    const dictSize = Math.min(rows, 65536);
+    return 8 + 8 + this.dictCodec.estimateSize(dictSize) + 8 + rows * 2;
+  }
 }
 
 // Map is serialized as Array(Tuple(K, V))
@@ -706,6 +729,11 @@ class MapCodec implements Codec {
   }
 
   zeroValue() { return new Map(); }
+  // 8 bytes per offset + assume average 3 entries per row
+  estimateSize(rows: number) {
+    const avgEntries = rows * 3;
+    return rows * 8 + this.keyCodec.estimateSize(avgEntries) + this.valCodec.estimateSize(avgEntries);
+  }
 }
 
 // 7. Tuple Codec
@@ -769,6 +797,10 @@ class TupleCodec implements Codec {
   }
 
   zeroValue() { return []; }
+  // Sum of all element sizes
+  estimateSize(rows: number) {
+    return this.elements.reduce((sum, e) => sum + e.codec.estimateSize(rows), 0);
+  }
 }
 
 // 8. Variant Codec
@@ -844,6 +876,11 @@ class VariantCodec implements Codec {
   }
 
   zeroValue() { return null; }
+  // Discriminators + variant data (assume even distribution)
+  estimateSize(rows: number) {
+    const perVariant = Math.ceil(rows / this.codecs.length);
+    return rows + this.codecs.reduce((sum, c) => sum + c.estimateSize(perVariant), 0);
+  }
 
   findVariantIndex(value: unknown, types: string[]): number {
     // Simple heuristic to match value to variant type
@@ -954,6 +991,11 @@ class DynamicCodec implements Codec {
   }
 
   zeroValue() { return null; }
+  // Discriminators + type data (assume most values are strings)
+  estimateSize(rows: number) {
+    // Dynamic can have variable discriminator size but usually 1-2 bytes + data
+    return rows * 2 + this.codecs.reduce((sum, c) => sum + c.estimateSize(Math.ceil(rows / 3)), 0);
+  }
 
   guessType(value: unknown): string {
     if (value === null) return "String";
@@ -1051,6 +1093,9 @@ class JsonCodec implements Codec {
   }
 
   zeroValue() { return {}; }
+  // JSON columns have per-path Dynamic columns; estimate is sum of path estimates
+  // Since we don't know paths until readPrefix, use Dynamic's estimate per expected path
+  estimateSize(rows: number) { return rows * 32; } // Conservative: ~32 bytes per row
 }
 
 // Codec cache for type string -> codec instance
