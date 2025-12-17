@@ -1,8 +1,3 @@
-/**
- * Column data structures for Native format.
- * Minimal interface: length + get(i) only.
- */
-
 import { type TypedArray } from "../shared.ts";
 export type DiscriminatorArray = Uint8Array | Uint16Array | Uint32Array;
 
@@ -31,40 +26,70 @@ export function countAndIndexDiscriminators(
 
 /**
  * Base interface for all column types.
- * Note: No get(i) method - use toArray() to access values.
- * This makes the materialization cost explicit.
+ * Supports virtual random access and iteration.
  */
-export interface Column {
+export interface Column extends Iterable<unknown> {
   readonly length: number;
-  /** Materialize all values to an array (TypedArray for numeric types, plain array otherwise). */
+  /** Get value at index. */
+  get(index: number): unknown;
+  /** 
+   * Materialize all values. 
+   * Returns the underlying TypedArray directly for numeric columns (zero-copy).
+   */
   toArray(): unknown[] | TypedArray;
 }
 
-export class DataColumn<T extends TypedArray | unknown[]> implements Column {
+/**
+ * Common implementation for iteration and materialization.
+ */
+abstract class AbstractColumn implements Column {
+  abstract readonly length: number;
+  abstract get(index: number): unknown;
+
+  *[Symbol.iterator](): Iterator<unknown> {
+    for (let i = 0; i < this.length; i++) {
+      yield this.get(i);
+    }
+  }
+
+  toArray(): unknown[] | TypedArray {
+    const result = new Array(this.length);
+    for (let i = 0; i < this.length; i++) result[i] = this.get(i);
+    return result;
+  }
+}
+
+export class DataColumn<T extends TypedArray | unknown[]> extends AbstractColumn {
   readonly data: T;
 
   constructor(data: T) {
+    super();
     this.data = data;
   }
 
   get length() { return this.data.length; }
 
+  get(index: number): unknown {
+    return this.data[index];
+  }
+
+  /** returns the underlying TypedArray or Array directly (zero-copy) */
   toArray(): T {
     return this.data;
   }
 }
 
-export class TupleColumn implements Column {
+export class TupleColumn extends AbstractColumn {
   readonly elements: { name: string | null }[];
   readonly columns: Column[];
   readonly isNamed: boolean;
-  private _cached?: unknown[];
 
   constructor(
     elements: { name: string | null }[],
     columns: Column[],
     isNamed: boolean
   ) {
+    super();
     this.elements = elements;
     this.columns = columns;
     this.isNamed = isNamed;
@@ -74,41 +99,29 @@ export class TupleColumn implements Column {
     return this.columns[0]?.length ?? 0;
   }
 
-  toArray(): unknown[] {
-    if (this._cached) return this._cached;
-
-    const len = this.length;
+  get(index: number): unknown {
     const numElements = this.elements.length;
-    const childArrays = this.columns.map(c => c.toArray());
-    const result = new Array(len);
-
     if (this.isNamed) {
-      for (let i = 0; i < len; i++) {
-        const obj: Record<string, unknown> = {};
-        for (let j = 0; j < numElements; j++) {
-          obj[this.elements[j].name!] = childArrays[j][i];
-        }
-        result[i] = obj;
+      const obj: Record<string, unknown> = {};
+      for (let j = 0; j < numElements; j++) {
+        obj[this.elements[j].name!] = this.columns[j].get(index);
       }
+      return obj;
     } else {
-      for (let i = 0; i < len; i++) {
-        const arr = new Array(numElements);
-        for (let j = 0; j < numElements; j++) {
-          arr[j] = childArrays[j][i];
-        }
-        result[i] = arr;
+      const arr = new Array(numElements);
+      for (let j = 0; j < numElements; j++) {
+        arr[j] = this.columns[j].get(index);
       }
+      return arr;
     }
-    return this._cached = result;
   }
 }
 
-export class MapColumn implements Column {
+export class MapColumn extends AbstractColumn {
   readonly offsets: BigUint64Array;
   readonly keys: Column;
   readonly values: Column;
   private mapAsArray: boolean;
-  private _cached?: (Map<unknown, unknown> | [unknown, unknown][])[];
 
   constructor(
     offsets: BigUint64Array,
@@ -116,6 +129,7 @@ export class MapColumn implements Column {
     values: Column,
     mapAsArray = false
   ) {
+    super();
     this.offsets = offsets;
     this.keys = keys;
     this.values = values;
@@ -126,47 +140,37 @@ export class MapColumn implements Column {
     return this.offsets.length;
   }
 
-  toArray(): (Map<unknown, unknown> | [unknown, unknown][])[] {
-    if (this._cached) return this._cached;
+  get(index: number): Map<unknown, unknown> | [unknown, unknown][] {
+    const start = index === 0 ? 0 : Number(this.offsets[index - 1]);
+    const end = Number(this.offsets[index]);
 
-    const len = this.offsets.length;
-    const keysArr = this.keys.toArray();
-    const valsArr = this.values.toArray();
-    const result = new Array(len);
-
-    for (let i = 0; i < len; i++) {
-      const start = i === 0 ? 0 : Number(this.offsets[i - 1]);
-      const end = Number(this.offsets[i]);
-
-      if (this.mapAsArray) {
-        const entries: [unknown, unknown][] = new Array(end - start);
-        for (let j = start; j < end; j++) {
-          entries[j - start] = [keysArr[j], valsArr[j]];
-        }
-        result[i] = entries;
-      } else {
-        const map = new Map<unknown, unknown>();
-        for (let j = start; j < end; j++) {
-          map.set(keysArr[j], valsArr[j]);
-        }
-        result[i] = map;
+    if (this.mapAsArray) {
+      const entries: [unknown, unknown][] = new Array(end - start);
+      for (let j = start; j < end; j++) {
+        entries[j - start] = [this.keys.get(j), this.values.get(j)];
       }
+      return entries;
+    } else {
+      const map = new Map<unknown, unknown>();
+      for (let j = start; j < end; j++) {
+        map.set(this.keys.get(j), this.values.get(j));
+      }
+      return map;
     }
-    return this._cached = result;
   }
 }
 
-export class VariantColumn implements Column {
+export class VariantColumn extends AbstractColumn {
   readonly discriminators: Uint8Array;
   readonly groups: Map<number, Column>;
   private readonly groupIndices: Uint32Array;
-  private _cached?: ([number, unknown] | null)[];
 
   constructor(
     discriminators: Uint8Array,
     groups: Map<number, Column>,
     groupIndices?: Uint32Array
   ) {
+    super();
     this.discriminators = discriminators;
     this.groups = groups;
     this.groupIndices = groupIndices ?? countAndIndexDiscriminators(discriminators, VARIANT_NULL_DISCRIMINATOR).indices;
@@ -176,35 +180,19 @@ export class VariantColumn implements Column {
     return this.discriminators.length;
   }
 
-  toArray(): ([number, unknown] | null)[] {
-    if (this._cached) return this._cached;
-
-    const len = this.discriminators.length;
-    const groupArrays = new Map<number, unknown[]>();
-    for (const [d, col] of this.groups) {
-      groupArrays.set(d, col.toArray());
-    }
-
-    const result = new Array(len);
-    for (let i = 0; i < len; i++) {
-      const d = this.discriminators[i];
-      if (d === VARIANT_NULL_DISCRIMINATOR) {
-        result[i] = null;
-      } else {
-        result[i] = [d, groupArrays.get(d)![this.groupIndices[i]]];
-      }
-    }
-    return this._cached = result;
+  get(index: number): [number, unknown] | null {
+    const d = this.discriminators[index];
+    if (d === VARIANT_NULL_DISCRIMINATOR) return null;
+    return [d, this.groups.get(d)!.get(this.groupIndices[index])];
   }
 }
 
-export class DynamicColumn implements Column {
+export class DynamicColumn extends AbstractColumn {
   readonly types: string[];
   readonly discriminators: DiscriminatorArray;
   readonly groups: Map<number, Column>;
   private readonly groupIndices: Uint32Array;
   private readonly nullDisc: number;
-  private _cached?: unknown[];
 
   constructor(
     types: string[],
@@ -212,6 +200,7 @@ export class DynamicColumn implements Column {
     groups: Map<number, Column>,
     groupIndices?: Uint32Array
   ) {
+    super();
     this.types = types;
     this.discriminators = discriminators;
     this.groups = groups;
@@ -223,35 +212,24 @@ export class DynamicColumn implements Column {
     return this.discriminators.length;
   }
 
-  toArray(): unknown[] {
-    if (this._cached) return this._cached;
-
-    const len = this.discriminators.length;
-    const groupArrays = new Map<number, unknown[]>();
-    for (const [d, col] of this.groups) {
-      groupArrays.set(d, col.toArray());
-    }
-
-    const result = new Array(len);
-    for (let i = 0; i < len; i++) {
-      const d = this.discriminators[i];
-      if (d === this.nullDisc) {
-        result[i] = null;
-      } else {
-        result[i] = groupArrays.get(d)![this.groupIndices[i]];
-      }
-    }
-    return this._cached = result;
+  get(index: number): unknown {
+    const d = this.discriminators[index];
+    if (d === this.nullDisc) return null;
+    return this.groups.get(d)!.get(this.groupIndices[index]);
   }
 }
 
-export class JsonColumn implements Column {
+export class JsonColumn extends AbstractColumn {
   readonly paths: string[];
   readonly pathColumns: Map<string, DynamicColumn>;
   private _length: number;
-  private _cached?: Record<string, unknown>[];
 
-  constructor(paths: string[], pathColumns: Map<string, DynamicColumn>, length: number) {
+  constructor(
+    paths: string[],
+    pathColumns: Map<string, DynamicColumn>,
+    length: number
+  ) {
+    super();
     this.paths = paths;
     this.pathColumns = pathColumns;
     this._length = length;
@@ -261,78 +239,63 @@ export class JsonColumn implements Column {
     return this._length;
   }
 
-  toArray(): Record<string, unknown>[] {
-    if (this._cached) return this._cached;
-
-    const len = this._length;
-    const pathArrays = new Map<string, unknown[]>();
+  get(index: number): Record<string, unknown> {
+    const obj: Record<string, unknown> = {};
     for (const path of this.paths) {
-      pathArrays.set(path, this.pathColumns.get(path)!.toArray());
+      const val = this.pathColumns.get(path)!.get(index);
+      if (val !== null) obj[path] = val;
     }
+    return obj;
+  }
 
-    const result = new Array(len);
-    for (let i = 0; i < len; i++) {
-      const obj: Record<string, unknown> = {};
-      for (const path of this.paths) {
-        const val = pathArrays.get(path)![i];
-        if (val !== null) obj[path] = val;
-      }
-      result[i] = obj;
-    }
-    return this._cached = result;
+  /** Get a specific JSON path as its own virtual column. */
+  getPath(path: string): DynamicColumn | undefined {
+    return this.pathColumns.get(path);
   }
 }
 
-export class NullableColumn implements Column {
+export class NullableColumn extends AbstractColumn {
   readonly nullFlags: Uint8Array;
   readonly inner: Column;
-  private _cached?: unknown[];
 
-  constructor(nullFlags: Uint8Array, inner: Column) {
+  constructor(
+    nullFlags: Uint8Array,
+    inner: Column
+  ) {
+    super();
     this.nullFlags = nullFlags;
     this.inner = inner;
   }
 
   get length() { return this.nullFlags.length; }
 
-  toArray(): unknown[] {
-    if (this._cached) return this._cached;
-
-    const innerArr = this.inner.toArray();
-    const len = this.nullFlags.length;
-    const result = new Array(len);
-    for (let i = 0; i < len; i++) {
-      result[i] = this.nullFlags[i] ? null : innerArr[i];
-    }
-    return this._cached = result;
+  get(index: number): unknown {
+    return this.nullFlags[index] ? null : this.inner.get(index);
   }
 }
 
-export class ArrayColumn implements Column {
+export class ArrayColumn extends AbstractColumn {
   readonly offsets: BigUint64Array;
   readonly inner: Column;
-  private _cached?: unknown[][];
 
-  constructor(offsets: BigUint64Array, inner: Column) {
+  constructor(
+    offsets: BigUint64Array,
+    inner: Column
+  ) {
+    super();
     this.offsets = offsets;
     this.inner = inner;
   }
 
   get length() { return this.offsets.length; }
 
-  toArray(): unknown[][] {
-    if (this._cached) return this._cached;
-
-    const len = this.offsets.length;
-    const innerArr = this.inner.toArray();
-    const result = new Array(len);
-
-    for (let i = 0; i < len; i++) {
-      const start = i === 0 ? 0 : Number(this.offsets[i - 1]);
-      const end = Number(this.offsets[i]);
-      result[i] = innerArr.slice(start, end);
+  get(index: number): unknown[] {
+    const start = index === 0 ? 0 : Number(this.offsets[index - 1]);
+    const end = Number(this.offsets[index]);
+    const result = new Array(end - start);
+    for (let j = 0; j < end - start; j++) {
+      result[j] = this.inner.get(start + j);
     }
-    return this._cached = result;
+    return result;
   }
 }
-

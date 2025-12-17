@@ -107,10 +107,10 @@ class NumericCodec<T extends TypedArray> implements Codec {
 
 class StringCodec implements Codec {
   encode(col: Column, sizeHint?: number): Uint8Array {
-    const writer = new BufferWriter(sizeHint ?? this.estimateSize(col.length));
-    const values = col.toArray();
-    for (let i = 0; i < values.length; i++) {
-      writer.writeString(String(values[i]));
+    const len = col.length;
+    const writer = new BufferWriter(sizeHint ?? this.estimateSize(len));
+    for (let i = 0; i < len; i++) {
+      writer.writeString(String(col.get(i)));
     }
     return writer.finish();
   }
@@ -132,11 +132,11 @@ class StringCodec implements Codec {
 
 class UUIDCodec implements Codec {
   encode(col: Column): Uint8Array {
-    const values = col.toArray();
-    const buf = new Uint8Array(values.length * 16);
+    const len = col.length;
+    const buf = new Uint8Array(len * 16);
 
-    for (let i = 0; i < values.length; i++) {
-      const u = String(values[i]);
+    for (let i = 0; i < len; i++) {
+      const u = String(col.get(i));
       const clean = u.replace(/-/g, '');
       const bytes = new Uint8Array(16);
       for (let j = 0; j < 16; j++) bytes[j] = parseInt(clean.substring(j * 2, j * 2 + 2), 16);
@@ -180,10 +180,10 @@ class FixedStringCodec implements Codec {
   }
 
   encode(col: Column): Uint8Array {
-    const values = col.toArray();
-    const buf = new Uint8Array(values.length * this.len);
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i];
+    const count = col.length;
+    const buf = new Uint8Array(count * this.len);
+    for (let i = 0; i < count; i++) {
+      const v = col.get(i);
       if (v instanceof Uint8Array) {
         buf.set(v.subarray(0, this.len), i * this.len);
       } else {
@@ -235,12 +235,12 @@ class BigIntCodec implements Codec {
   }
 
   encode(col: Column): Uint8Array {
-    const values = col.toArray();
-    const buf = new Uint8Array(values.length * this.byteSize);
+    const len = col.length;
+    const buf = new Uint8Array(len * this.byteSize);
     const view = new DataView(buf.buffer);
     const writer = this.byteSize === 16 ? writeBigInt128 : writeBigInt256;
-    for (let i = 0; i < values.length; i++) {
-      writer(view, i * this.byteSize, BigInt(values[i] as any), this.signed);
+    for (let i = 0; i < len; i++) {
+      writer(view, i * this.byteSize, BigInt(col.get(i) as any), this.signed);
     }
     return buf;
   }
@@ -273,12 +273,12 @@ class DecimalCodec implements Codec {
   }
 
   encode(col: Column): Uint8Array {
-    const values = col.toArray();
-    const buf = new Uint8Array(values.length * this.byteSize);
+    const len = col.length;
+    const buf = new Uint8Array(len * this.byteSize);
     const view = new DataView(buf.buffer);
 
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i];
+    for (let i = 0; i < len; i++) {
+      const v = col.get(i);
       let scaled: bigint;
       if (typeof v === 'bigint') {
         scaled = v;
@@ -341,10 +341,10 @@ class DateTime64Codec implements Codec {
   }
 
   encode(col: Column): Uint8Array {
-    const values = col.toArray();
-    const arr = new BigInt64Array(values.length);
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i];
+    const len = col.length;
+    const arr = new BigInt64Array(len);
+    for (let i = 0; i < len; i++) {
+      const v = col.get(i);
       if (v instanceof ClickHouseDateTime64) {
         arr[i] = v.ticks;
       } else if (typeof v === 'bigint') {
@@ -404,10 +404,10 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
   }
 
   encode(col: Column): Uint8Array {
-    const values = col.toArray();
-    const arr = new this.Ctor(values.length);
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i];
+    const len = col.length;
+    const arr = new this.Ctor(len);
+    for (let i = 0; i < len; i++) {
+      const v = col.get(i);
       arr[i] = Math.floor(new Date(v as any).getTime() / this.multiplier) as any;
     }
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
@@ -443,10 +443,10 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
 
 class IPv4Codec implements Codec {
   encode(col: Column): Uint8Array {
-    const values = col.toArray();
-    const arr = new Uint32Array(values.length);
-    for (let i = 0; i < values.length; i++) {
-      const v = String(values[i]);
+    const len = col.length;
+    const arr = new Uint32Array(len);
+    for (let i = 0; i < len; i++) {
+      const v = String(col.get(i));
       const parts = v.split('.').map(Number);
       arr[i] = (parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24)) >>> 0;
     }
@@ -473,10 +473,10 @@ class IPv4Codec implements Codec {
 
 class IPv6Codec implements Codec {
   encode(col: Column): Uint8Array {
-    const values = col.toArray();
-    const result = new Uint8Array(values.length * 16);
-    for (let i = 0; i < values.length; i++) {
-      const v = String(values[i]);
+    const len = col.length;
+    const result = new Uint8Array(len * 16);
+    for (let i = 0; i < len; i++) {
+      const v = String(col.get(i));
       const bytes = ipv6ToBytes(v);
       result.set(bytes, i * 16);
     }
@@ -640,9 +640,10 @@ class LowCardinalityCodec implements Codec {
   encode(col: Column, sizeHint?: number): Uint8Array {
     // LowCardinality encode builds dictionary from column values
     // This is row-oriented by nature - we need to scan values to find uniques
-    if (col.length === 0) return new Uint8Array(0);
+    const len = col.length;
+    if (len === 0) return new Uint8Array(0);
 
-    const hint = sizeHint ?? this.estimateSize(col.length);
+    const hint = sizeHint ?? this.estimateSize(len);
     const writer = new BufferWriter(hint);
     const isNullable = this.inner instanceof NullableCodec;
 
@@ -656,10 +657,8 @@ class LowCardinalityCodec implements Codec {
       dictValues.push(null); // Placeholder for null
     }
 
-    // Materialize column for scanning
-    const values = col.toArray();
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i];
+    for (let i = 0; i < len; i++) {
+      const v = col.get(i);
       if (isNullable && v === null) {
         indices.push(0);
       } else {
@@ -713,11 +712,10 @@ class LowCardinalityCodec implements Codec {
     else indices = reader.readTypedArray(BigUint64Array, count);
 
     // Expand dictionary to full column
-    const dictArr = dict.toArray();
     const values: unknown[] = new Array(count);
     for (let i = 0; i < count; i++) {
       const idx = Number(indices[i]);
-      values[i] = isNullable && idx === 0 ? null : dictArr[idx];
+      values[i] = isNullable && idx === 0 ? null : dict.get(idx);
     }
     return new DataColumn(values);
   }
@@ -1232,6 +1230,11 @@ function createCodec(type: string): Codec {
   }
   // Nested is syntactic sugar for Array(Tuple(...))
   // e.g., Nested(id UInt64, val String) -> Array(Tuple(UInt64, String))
+  if (type.startsWith("Nested")) {
+    const args = parseTupleElements(extractTypeArgs(type));
+    const tupleCodec = new TupleCodec(args.map(a => ({ name: a.name, codec: getCodec(a.type) })), true);
+    return new ArrayCodec(tupleCodec);
+  }
   if (type.startsWith("Nested")) {
     const args = parseTupleElements(extractTypeArgs(type));
     const tupleCodec = new TupleCodec(args.map(a => ({ name: a.name, codec: getCodec(a.type) })), true);

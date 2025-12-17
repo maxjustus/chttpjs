@@ -21,10 +21,11 @@ import {
   type Column,
   DataColumn,
 } from "./columns.ts";
+import { Table, type Row } from "./table.ts";
 
 // Re-export types for public API
 export { type ColumnDef, type DecodeResult, type DecodeOptions, ClickHouseDateTime64 };
-export { type Column };
+export { type Column, Table, type Row };
 export {
   DataColumn,
   TupleColumn,
@@ -223,9 +224,8 @@ export function encodeNativeColumnar(
     const data = columnData[i];
 
     // Convert raw data to Column if needed
-    // Fast path: TypedArrays wrap directly in DataColumn (zero-copy)
-    // Duck type check for existing Column objects (toArray is the Column interface method)
-    const col: Column = (data && typeof (data as any).toArray === 'function')
+    // Fast path: existing Column objects (duck type check for 'get' and 'length')
+    const col: Column = (data && typeof (data as any).get === 'function' && typeof (data as any).length === 'number')
       ? data as Column
       : ArrayBuffer.isView(data) && !(data instanceof DataView)
         ? new DataColumn(data as any)
@@ -264,30 +264,7 @@ export async function decodeNative(
     return blocks[0];
   }
 
-  // Multi-block: merge by materializing values
-  // Note: This loses byte fidelity for NaN - use streaming for exact round-trip
-  const columns = blocks[0].columns;
-  const numCols = columns.length;
-  const allColumnData: unknown[][] = [];
-  for (let i = 0; i < numCols; i++) {
-    allColumnData.push([]);
-  }
-
-  let totalRows = 0;
-  for (const block of blocks) {
-    for (let i = 0; i < numCols; i++) {
-      const colArr = block.columnData[i].toArray();
-      allColumnData[i].push(...colArr);
-    }
-    totalRows += block.rowCount;
-  }
-
-  // Wrap merged arrays in DataColumn
-  return {
-    columns,
-    columnData: allColumnData.map(arr => new DataColumn(arr)),
-    rowCount: totalRows,
-  };
+  return mergeBlocks(blocks);
 }
 
 /**
@@ -312,7 +289,11 @@ export function mergeBlocks(blocks: Block[]): Block {
   let totalRows = 0;
   for (const block of blocks) {
     for (let i = 0; i < numCols; i++) {
-      merged[i].push(...block.columnData[i].toArray());
+      const col = block.columnData[i];
+      const len = col.length;
+      for (let j = 0; j < len; j++) {
+        merged[i].push(col.get(j));
+      }
     }
     totalRows += block.rowCount;
   }
@@ -407,22 +388,15 @@ class StreamBuffer {
 /**
  * Lazily iterate rows as objects with column names as keys.
  * Allocates one object per row on demand.
- * Note: May normalize NaN values when accessing float columns.
  */
 export function* asRows(result: Block): Generator<Record<string, unknown>> {
   const { columns, columnData, rowCount } = result;
   const numCols = columns.length;
 
-  // Hybrid approach: direct data for DataColumn (avoids TypedArray→JS array copy),
-  // toArray() for composite types (benefits from caching)
-  const cols: unknown[][] = columnData.map(col =>
-    col instanceof DataColumn ? col.data as unknown[] : col.toArray()
-  );
-
   for (let i = 0; i < rowCount; i++) {
     const row: Record<string, unknown> = {};
     for (let j = 0; j < numCols; j++) {
-      row[columns[j].name] = cols[j][i];
+      row[columns[j].name] = columnData[j].get(i);
     }
     yield row;
   }
@@ -436,17 +410,11 @@ export function toArrayRows(result: Block): unknown[][] {
   const { columnData, rowCount } = result;
   const numCols = columnData.length;
 
-  // Hybrid approach: direct data for DataColumn (avoids TypedArray→JS array copy),
-  // toArray() for composite types (benefits from caching)
-  const cols: unknown[][] = columnData.map(col =>
-    col instanceof DataColumn ? col.data as unknown[] : col.toArray()
-  );
-
   const rows: unknown[][] = new Array(rowCount);
   for (let i = 0; i < rowCount; i++) {
     const row = new Array(numCols);
     for (let j = 0; j < numCols; j++) {
-      row[j] = cols[j][i];
+      row[j] = columnData[j].get(i);
     }
     rows[i] = row;
   }

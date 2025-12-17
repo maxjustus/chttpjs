@@ -277,7 +277,7 @@ const { columns, rows } = decodeRowBinary(data);
 
 ## Native Format
 
-ClickHouse's internal wire format. Returns columnar data (arrays per column) rather than rows, which can be more efficient for analytical workloads.
+ClickHouse's internal wire format. Returns columnar data (virtual columns) rather than materializing all rows upfront.
 
 ```ts
 import {
@@ -286,7 +286,7 @@ import {
   collectBytes,
   encodeNative,
   decodeNative,
-  asRows,
+  Table,
 } from "@maxjustus/chttp";
 
 const columns = [
@@ -303,19 +303,24 @@ const rows = [
 const data = encodeNative(columns, rows);
 await insert("INSERT INTO table FORMAT Native", data, "session123", config);
 
-// Query returns columnar data
+// Query returns columnar data wrapped in a Table
 const bytes = await collectBytes(
   query("SELECT * FROM table FORMAT Native", "session123", config),
 );
-const result = decodeNative(bytes);
-// result.columns: [{name: "id", type: "UInt32"}, {name: "name", type: "String"}]
-// result.columnData: [Uint32Array([1, 2]), ["alice", "bob"]]
-// result.rowCount: 2
+const block = await decodeNative(bytes);
+const table = Table.from(block);
 
-// Convert to rows if needed
-for (const row of asRows(result)) {
-  console.log(row); // [1, "alice"], [2, "bob"]
+for (const row of table) {
+  console.log(row.id, row.name);
 }
+
+const ids = table.getColumn("id")!;
+for (let i = 0; i < ids.length; i++) {
+  const id = ids.get(i);
+}
+
+// 3. Slicing (zero-copy views)
+const subset = table.slice(0, 100);
 ```
 
 ### Streaming
@@ -326,6 +331,7 @@ import {
   streamEncodeNativeColumnar,
   streamDecodeNative,
   streamNativeRows,
+  Table,
 } from "@maxjustus/chttp";
 
 // Streaming insert from rows
@@ -336,21 +342,19 @@ await insert(
   config,
 );
 
-// Streaming decode - rows as objects
+// Streaming decode - rows as objects (lazy)
 for await (const row of streamNativeRows(
   streamDecodeNative(query("SELECT * FROM table FORMAT Native", "session123", config)),
 )) {
   console.log(row.id, row.name);
 }
 
-// Or work with columnar batches directly
-for await (const batch of streamDecodeNative(
+// Or work with Table blocks directly
+for await (const block of streamDecodeNative(
   query("SELECT * FROM table FORMAT Native", "session123", config),
 )) {
-  // batch.columns, batch.columnData, batch.rowCount
-  for (const row of asRows(batch)) {
-    console.log(row);
-  }
+  const table = Table.from(block);
+  // ...
 }
 
 // Produce columnar batches directly (most efficient for large inserts)
