@@ -60,7 +60,8 @@ class BufferWriter {
   private buffer: Uint8Array;
   private offset = 0;
 
-  constructor(initialSize = 256) {
+  // Initial size 1MB, will grow as needed by doubling in size
+  constructor(initialSize = 1024 * 1024) {
     this.buffer = new Uint8Array(initialSize);
   }
 
@@ -80,6 +81,11 @@ class BufferWriter {
     this.offset += chunk.length;
   }
 
+  /**
+   * Write a variable length integer using LEB128 encoding.
+   * Used for length-prefixed strings and other varint fields.
+   * variable length integer (LEB128) - write 7 bits per byte, MSB indicates more bytes follow
+   */
   writeVarint(value: number) {
     this.ensure(10); // Max varint size
     while (value >= 0x80) {
@@ -89,12 +95,20 @@ class BufferWriter {
     this.buffer[this.offset++] = value;
   }
 
+  /**
+   * Write a length-prefixed UTF-8 string (ClickHouse String type).
+   * Format: [varint length] [UTF-8 bytes]
+   *
+   * Optimized for the common case where encoded length < 128 bytes (single-byte varint).
+   * Strategy: speculatively reserve 1 byte for length, encode string, then fix up.
+   * For strings >= 128 bytes, shifts data with copyWithin to make room for multi-byte varint.
+   * Benchmarked faster than alternatives (encode-first, temp buffer) across string sizes.
+   */
   writeString(val: string) {
-    // Worst case: 3 bytes per char (UTF-8) + 5 bytes for length varint
-    const maxLen = val.length * 3;
-    this.ensure(maxLen + 5);
+    const maxLen = val.length * 3; // worst case: 3 bytes per char (UTF-8)
+    this.ensure(maxLen + 5);       // + 5 for max varint size
 
-    // Reserve 1 byte for length, encode string directly
+    // Speculatively reserve 1 byte for length, encode directly after it
     const lenOffset = this.offset++;
     const { written } = TEXT_ENCODER.encodeInto(
       val,
@@ -102,23 +116,21 @@ class BufferWriter {
     );
 
     if (written < 128) {
-      // Common case: length fits in 1 byte
+      // Fast path: length fits in 1 byte
       this.buffer[lenOffset] = written;
       this.offset += written;
     } else {
-      // Rare case: need multi-byte varint for length
-      // Calculate varint size and shift string bytes
+      // Slow path: need multi-byte varint, shift string data to make room
       let len = written, varintSize = 1;
       while (len >= 0x80) { varintSize++; len >>>= 7; }
 
-      // Shift string bytes to make room for longer varint
       this.buffer.copyWithin(
-        lenOffset + varintSize,
-        lenOffset + 1,
-        this.offset + written
+        lenOffset + varintSize,  // dest: after full varint
+        lenOffset + 1,           // src: after our 1-byte reservation
+        this.offset + written    // end: end of encoded string
       );
 
-      // Write varint at lenOffset
+      // Write the multi-byte varint
       len = written;
       let pos = lenOffset;
       while (len >= 0x80) {
@@ -147,6 +159,7 @@ class BufferReader {
     this.options = options;
   }
 
+  // variable-length integer (LEB128) - read until MSB is 0
   readVarint(): number {
     let result = 0, shift = 0;
     while (true) {
@@ -165,7 +178,7 @@ class BufferReader {
     return str;
   }
 
-  // Zero-copy if aligned, copy otherwise
+  // Zero-copy if aligned, copy otherwise TODO: what do you mean by "aligned"
   readTypedArray<T extends TypedArray>(Ctor: TypedArrayConstructor<T>, count: number): T {
     const elementSize = Ctor.BYTES_PER_ELEMENT;
     const byteLength = count * elementSize;
@@ -232,7 +245,6 @@ class NumericCodec<T extends TypedArray> implements Codec {
   }
 
   decode(reader: BufferReader, rows: number): T {
-    // Return TypedArray directly - faster (no spread copy) and preserves NaN bit patterns
     return reader.readTypedArray(this.Ctor, rows);
   }
 }
@@ -557,7 +569,6 @@ class ArrayCodec implements Codec {
   }
 }
 
-// 5. Nullable Codec
 // Delegates prefix handling to inner codec
 class NullableCodec implements Codec {
   private inner: Codec;
@@ -706,8 +717,7 @@ class LowCardinalityCodec implements Codec {
     else if (typeInfo === 2) indices = reader.readTypedArray(Uint32Array, count);
     else indices = reader.readTypedArray(BigUint64Array, count);
 
-    const zeroValue = 0; // TODO: correct zero value for inner type
-    const res = new Array(count).fill(zeroValue);
+    const res = new Array(count).fill(null);
     for (let i = 0; i < count; i++) {
       const idx = Number(indices[i]);
       // Index 0 is null ONLY when inner type is Nullable
@@ -717,7 +727,6 @@ class LowCardinalityCodec implements Codec {
   }
 }
 
-// 6. Map Codec
 // Map is serialized as Array(Tuple(K, V))
 // Prefixes are written at top level, not inside the data.
 // Uses Array<[K, V]> representation to preserve duplicate keys.
@@ -813,7 +822,6 @@ class MapCodec implements Codec {
   }
 }
 
-// 7. Tuple Codec
 // Tuple stores each element as a column, so they need their own prefixes
 class TupleCodec implements Codec {
   private elements: { name: string | null, codec: Codec }[];
@@ -827,8 +835,7 @@ class TupleCodec implements Codec {
   writePrefix(writer: BufferWriter, values: unknown[]) {
     const n = values.length;
     for (let i = 0; i < this.elements.length; i++) {
-      const zeroValue = 0;
-      const colValues = new Array(n).fill(zeroValue); // preallocate with zero values
+      const colValues = new Array(n).fill(null);
       const name = this.elements[i].name;
       if (this.isNamed) {
         for (let j = 0; j < n; j++) colValues[j] = (values[j] as any)[name!];
@@ -863,7 +870,7 @@ class TupleCodec implements Codec {
 
   decode(reader: BufferReader, rows: number): unknown[] {
     const cols = this.elements.map(e => e.codec.decode(reader, rows));
-    const res = new Array(rows).fill(null); // PACKED, avoid shared ref for objects/arrays
+    const res = new Array(rows).fill(null);
     for (let i = 0; i < rows; i++) {
       if (this.isNamed) {
         const obj: any = {};
@@ -877,7 +884,7 @@ class TupleCodec implements Codec {
   }
 }
 
-// 8. Variant Codec
+// Variant Codec
 // Note: COMPACT mode (mode=1) exists for storage optimization but is not sent to HTTP clients.
 // ClickHouse always sends BASIC mode (mode=0) over HTTP. COMPACT mode is only used internally
 // for MergeTree storage. See: https://github.com/ClickHouse/ClickHouse/pull/62774
@@ -947,14 +954,14 @@ class VariantCodec implements Codec {
   }
 }
 
-// 9. Dynamic Codec (V3 FLATTENED only)
+// implements V3 FLATTENED format only
 class DynamicCodec implements Codec {
   private types: string[] = [];
   private codecs: Codec[] = [];
 
   writePrefix(writer: BufferWriter, values: unknown[]) {
     const typeSet = new Set<string>();
-    for (const v of values) if (v !== null) typeSet.add(guessType(v));
+    for (const v of values) if (v !== null) typeSet.add(this.guessType(v));
     this.types = [...typeSet].sort();
     this.codecs = this.types.map(t => getCodec(t));
 
@@ -964,7 +971,7 @@ class DynamicCodec implements Codec {
 
     for (let i = 0; i < this.types.length; i++) {
       const typeName = this.types[i];
-      const colValues = values.filter(v => v !== null && guessType(v) === typeName);
+      const colValues = values.filter(v => v !== null && this.guessType(v) === typeName);
       this.codecs[i].writePrefix?.(writer, colValues);
     }
   }
@@ -991,7 +998,7 @@ class DynamicCodec implements Codec {
 
     for (const v of values) {
       if (v === null) { discriminators.push(nullDisc); continue; }
-      const type = guessType(v);
+      const type = this.guessType(v);
       const idx = typeMap.get(type)!;
       discriminators.push(idx);
       if (!groups.has(idx)) groups.set(idx, []);
@@ -1038,6 +1045,18 @@ class DynamicCodec implements Codec {
       }
     }
     return res;
+  }
+
+  guessType(value: unknown): string {
+    if (value === null) return "String";
+    if (typeof value === "string") return "String";
+    if (typeof value === "number") return Number.isInteger(value) ? "Int64" : "Float64";
+    if (typeof value === "bigint") return "Int64";
+    if (typeof value === "boolean") return "Bool";
+    if (value instanceof Date) return "DateTime64(3)";
+    if (Array.isArray(value)) return value.length ? `Array(${this.guessType(value[0])})` : "Array(String)";
+    if (typeof value === "object") return "Map(String,String)";
+    return "String";
   }
 }
 
@@ -1108,10 +1127,6 @@ class JsonCodec implements Codec {
     return res;
   }
 }
-
-// ============================================================================
-// Factory & Utils
-// ============================================================================
 
 const CODEC_CACHE = new Map<string, Codec>();
 
@@ -1192,18 +1207,6 @@ function extractTypeArgs(type: string): string {
   return type.substring(type.indexOf("(") + 1, type.lastIndexOf(")"));
 }
 
-function guessType(value: unknown): string {
-  if (value === null) return "String";
-  if (typeof value === "string") return "String";
-  if (typeof value === "number") return Number.isInteger(value) ? "Int64" : "Float64";
-  if (typeof value === "bigint") return "Int64";
-  if (typeof value === "boolean") return "Bool";
-  if (value instanceof Date) return "DateTime64(3)";
-  if (Array.isArray(value)) return value.length ? `Array(${guessType(value[0])})` : "Array(String)";
-  if (typeof value === "object") return "Map(String,String)";
-  return "String";
-}
-
 // Returns a zero/empty value for a codec type. Used by NullableCodec and LowCardinalityCodec
 // to fill placeholder slots. Covers scalar and container types; complex types (Variant, Dynamic,
 // JSON) have their own null handling and wouldn't appear as inner types here.
@@ -1235,10 +1238,6 @@ function getDictKey(v: unknown): unknown {
   }
   return JSON.stringify(v); // fallback for unexpected object types
 }
-
-// ============================================================================
-// Main API
-// ============================================================================
 
 interface BlockResult {
   columns: ColumnDef[];
@@ -1304,12 +1303,14 @@ function decodeNativeBlock(
  */
 export function encodeNative(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
   const numRows = rows.length;
+  const numCols = columns.length;
 
-  // Transpose rows to columns
-  const cols = new Array(columns.length).fill(null);
-  for (let i = 0; i < columns.length; i++) {
-    cols[i] = new Array(numRows).fill(null);
-    for (let j = 0; j < numRows; j++) cols[i][j] = rows[j][i];
+  const cols = new Array(numCols);
+  for (let c = 0; c < numCols; c++) cols[c] = new Array(numRows);
+
+  for (let r = 0; r < numRows; r++) {
+    const row = rows[r];
+    for (let c = 0; c < numCols; c++) cols[c][r] = row[c];
   }
 
   return encodeNativeColumnar(columns, cols, numRows);
@@ -1393,35 +1394,6 @@ export async function* streamEncodeNative(
   if (batch.length > 0) yield encodeNative(columns, batch);
 }
 
-function flattenChunks(chunks: Uint8Array[]): Uint8Array {
-  if (chunks.length === 0) return new Uint8Array(0);
-  if (chunks.length === 1) return chunks[0];
-  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return result;
-}
-
-function consumeBytes(chunks: Uint8Array[], bytes: number): number {
-  let consumed = 0;
-  while (bytes > 0 && chunks.length > 0) {
-    if (chunks[0].length <= bytes) {
-      bytes -= chunks[0].length;
-      consumed += chunks[0].length;
-      chunks.shift();
-    } else {
-      chunks[0] = chunks[0].subarray(bytes);
-      consumed += bytes;
-      bytes = 0;
-    }
-  }
-  return consumed;
-}
-
 /**
  * Lazily iterate rows as objects with column names as keys.
  * Allocates one object per row on demand.
@@ -1439,21 +1411,19 @@ export function* asRows(result: ColumnarResult): Generator<Record<string, unknow
 }
 
 /**
- * Convert columnar result to array rows.
- * Useful for re-encoding or comparison with original row arrays.
+ * Lazily iterate rows as positional arrays.
+ * Allocates one array per row on demand.
  */
-export function toArrayRows(result: ColumnarResult): unknown[][] {
+export function* asArrayRows(result: ColumnarResult): Generator<unknown[]> {
   const { columnData, rowCount } = result;
   const numCols = columnData.length;
-  const rows: unknown[][] = new Array(rowCount).fill(null);
   for (let i = 0; i < rowCount; i++) {
     const row = new Array(numCols).fill(null);
     for (let j = 0; j < numCols; j++) {
       row[j] = columnData[j][i];
     }
-    rows[i] = row;
+    yield row;
   }
-  return rows;
 }
 
 export async function* streamDecodeNative(
@@ -1517,6 +1487,35 @@ export async function* streamDecodeNative(
       }
     }
   }
+}
+
+function flattenChunks(chunks: Uint8Array[]): Uint8Array {
+  if (chunks.length === 0) return new Uint8Array(0);
+  if (chunks.length === 1) return chunks[0];
+  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}
+
+function consumeBytes(chunks: Uint8Array[], bytes: number): number {
+  let consumed = 0;
+  while (bytes > 0 && chunks.length > 0) {
+    if (chunks[0].length <= bytes) {
+      bytes -= chunks[0].length;
+      consumed += chunks[0].length;
+      chunks.shift();
+    } else {
+      chunks[0] = chunks[0].subarray(bytes);
+      consumed += bytes;
+      bytes = 0;
+    }
+  }
+  return consumed;
 }
 
 /**

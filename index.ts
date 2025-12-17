@@ -39,7 +39,7 @@ export {
   streamEncodeNativeColumnar,
   streamDecodeNative,
   streamNativeRows,
-  toArrayRows,
+  asArrayRows,
   asRows,
   type StreamDecodeNativeResult,
   type ColumnarResult,

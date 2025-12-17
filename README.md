@@ -314,7 +314,7 @@ const result = decodeNative(bytes);
 
 // Convert to rows if needed
 for (const row of asRows(result)) {
-  console.log(row); // [1, "alice"], [2, "bob"]
+  console.log(row); // {id: 1, name: "alice"}, {id: 2, name: "bob"}
 }
 ```
 

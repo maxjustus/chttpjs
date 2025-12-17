@@ -4,7 +4,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { init, insert, query, collectBytes } from "../client.ts";
-import { encodeNative, decodeNative, toArrayRows, type ColumnDef } from "../native.ts";
+import { encodeNative, decodeNative, asArrayRows, type ColumnDef } from "../native.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 
 describe("Native format integration", { timeout: 120000 }, () => {
@@ -57,7 +57,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY i32 FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 2);
     assert.strictEqual(decodedRows[0][0], -1);
@@ -89,7 +89,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 3);
     assert.strictEqual(decodedRows[0][1], 100);
@@ -120,7 +120,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 3);
     assert.deepStrictEqual([...decodedRows[0][1] as Int32Array], [1, 2, 3]);
@@ -151,7 +151,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 2);
     const map = decodedRows[0][1] as Map<string, number>;
@@ -182,7 +182,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 2);
     assert.deepStrictEqual(decodedRows[0][1], [100, "a"]);
@@ -213,7 +213,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 1);
     // DateTime64 returns ClickHouseDateTime64 wrapper
@@ -241,7 +241,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 1);
     assert.strictEqual(decodedRows[0][0], uuid);
@@ -278,7 +278,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 5);
     assert.strictEqual(decodedRows[0][1], "active");
@@ -318,7 +318,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, rowCount);
     assert.strictEqual(decodedRows[0][0], 0);
@@ -348,7 +348,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 3);
     assert.deepStrictEqual(decodedRows[0][1], [1.5, 2.5]);
@@ -381,7 +381,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 2);
     assert.strictEqual((decodedRows[0][1] as unknown[]).length, 5);
@@ -413,7 +413,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 2);
     assert.strictEqual((decodedRows[0][1] as unknown[][]).length, 2); // outer + hole
@@ -448,7 +448,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 4);
     assert.deepStrictEqual(decodedRows[0][1], [0, "hello"]);
@@ -486,7 +486,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
     // Use V3 format setting for Dynamic type (requires ClickHouse 25.6+)
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native SETTINGS output_format_native_use_flattened_dynamic_and_json_serialization=1`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 4);
     assert.strictEqual(decodedRows[0][1], "hello");
@@ -523,7 +523,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
     // Use V3 format setting for JSON type (requires ClickHouse 25.6+)
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native SETTINGS output_format_native_use_flattened_dynamic_and_json_serialization=1`, sessionId, { baseUrl, auth }));
     const decoded = await decodeNative(data);
-    const decodedRows = toArrayRows(decoded);
+    const decodedRows = [...asArrayRows(decoded)];
 
     assert.strictEqual(decoded.rowCount, 3);
     const obj0 = decodedRows[0][1] as Record<string, unknown>;

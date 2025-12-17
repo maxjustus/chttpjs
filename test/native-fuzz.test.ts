@@ -7,7 +7,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { encodeNative, encodeNativeColumnar, decodeNative, streamDecodeNative, toArrayRows, type ColumnDef } from "../native.ts";
+import { encodeNative, encodeNativeColumnar, decodeNative, streamDecodeNative, asArrayRows, type ColumnDef } from "../native.ts";
 
 // ============================================================================
 // Unit Fuzz Tests (no ClickHouse required)
@@ -151,7 +151,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, toArrayRows(decoded), types);
+      compareRows(rows, [...asArrayRows(decoded)], types);
     }
   });
 
@@ -164,7 +164,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, toArrayRows(decoded), types);
+      compareRows(rows, [...asArrayRows(decoded)], types);
     }
   });
 
@@ -177,7 +177,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, toArrayRows(decoded), types);
+      compareRows(rows, [...asArrayRows(decoded)], types);
     }
   });
 
@@ -202,7 +202,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, toArrayRows(decoded), types);
+      compareRows(rows, [...asArrayRows(decoded)], types);
     }
   });
 
@@ -234,7 +234,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, toArrayRows(decoded), types);
+      compareRows(rows, [...asArrayRows(decoded)], types);
     }
   });
 
@@ -266,7 +266,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, toArrayRows(decoded), types);
+      compareRows(rows, [...asArrayRows(decoded)], types);
     }
   });
 
@@ -322,7 +322,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, toArrayRows(decoded), types);
+      compareRows(rows, [...asArrayRows(decoded)], types);
     }
   });
 
@@ -340,7 +340,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, toArrayRows(decoded), types);
+      compareRows(rows, [...asArrayRows(decoded)], types);
     }
   });
 
@@ -370,7 +370,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       let decodedColumns: ColumnDef[] = [];
       for await (const result of streamDecodeNative(toAsync(blocks))) {
         decodedColumns = result.columns;
-        decodedRows.push(...toArrayRows(result));
+        decodedRows.push(...asArrayRows(result));
       }
 
       assert.deepStrictEqual(decodedColumns, columns);
@@ -394,7 +394,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
-      compareRows(rows, toArrayRows(decoded), types);
+      compareRows(rows, [...asArrayRows(decoded)], types);
     }
   });
 
@@ -419,7 +419,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
         const encoded = encodeNative(columns, rows);
         const decoded = await decodeNative(encoded);
         assert.deepStrictEqual(decoded.columns, columns);
-        compareRows(rows, toArrayRows(decoded), types);
+        compareRows(rows, [...asArrayRows(decoded)], types);
       }
     }
   });
