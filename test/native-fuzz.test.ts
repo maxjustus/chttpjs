@@ -7,7 +7,14 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { encodeNative, encodeNativeColumnar, decodeNative, streamDecodeNative, toArrayRows, type ColumnDef } from "../formats/native/index.ts";
+import { encodeNative, decodeNative, streamDecodeNative, toArrayRows, TableBuilder, type ColumnDef } from "../formats/native/index.ts";
+
+// Helper to encode rows via TableBuilder
+function encodeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
+  const builder = new TableBuilder(columns);
+  for (const row of rows) builder.appendRow(row);
+  return encodeNative(builder.finish());
+}
 
 // ============================================================================
 // Unit Fuzz Tests (no ClickHouse required)
@@ -147,7 +154,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(1, 100);
 
       const { columns, rows, types } = generateRows(selectedTypes, rowCount);
-      const encoded = encodeNative(columns, rows);
+      const encoded = encodeRows(columns, rows);
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
@@ -160,7 +167,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
     for (let iter = 0; iter < iterations; iter++) {
       const rowCount = randomInt(1, 100);
       const { columns, rows, types } = generateRows(dateTypes, rowCount);
-      const encoded = encodeNative(columns, rows);
+      const encoded = encodeRows(columns, rows);
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
@@ -173,7 +180,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
     for (let iter = 0; iter < iterations; iter++) {
       const rowCount = randomInt(1, 100);
       const { columns, rows, types } = generateRows(ipTypes, rowCount);
-      const encoded = encodeNative(columns, rows);
+      const encoded = encodeRows(columns, rows);
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
@@ -198,7 +205,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 
       const rowCount = randomInt(1, 100);
       const { columns, rows, types } = generateRows([nullableType], rowCount);
-      const encoded = encodeNative(columns, rows);
+      const encoded = encodeRows(columns, rows);
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
@@ -230,7 +237,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 
       const rowCount = randomInt(1, 50);
       const { columns, rows, types } = generateRows([arrayType], rowCount);
-      const encoded = encodeNative(columns, rows);
+      const encoded = encodeRows(columns, rows);
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
@@ -262,7 +269,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 
       const rowCount = randomInt(1, 50);
       const { columns, rows, types } = generateRows([tupleType], rowCount);
-      const encoded = encodeNative(columns, rows);
+      const encoded = encodeRows(columns, rows);
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
@@ -318,7 +325,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 
       const rowCount = randomInt(1, 30);
       const { columns, rows, types } = generateRows([mapType], rowCount);
-      const encoded = encodeNative(columns, rows);
+      const encoded = encodeRows(columns, rows);
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
@@ -336,7 +343,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(10, 200);
 
       const { columns, rows, types } = generateRows(selectedTypes, rowCount);
-      const encoded = encodeNative(columns, rows);
+      const encoded = encodeRows(columns, rows);
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
@@ -358,7 +365,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const blocks: Uint8Array[] = [];
       for (let i = 0; i < rows.length; i += blockSize) {
         const chunk = rows.slice(i, i + blockSize);
-        blocks.push(encodeNative(columns, chunk));
+        blocks.push(encodeRows(columns, chunk));
       }
 
       // Stream decode
@@ -390,7 +397,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 
       const rowCount = randomInt(10, 200);
       const { columns, rows, types } = generateRows([lcType], rowCount);
-      const encoded = encodeNative(columns, rows);
+      const encoded = encodeRows(columns, rows);
       const decoded = await decodeNative(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
@@ -407,7 +414,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       // Test empty
       {
         const { columns } = generateRows(selectedTypes, 0);
-        const encoded = encodeNative(columns, []);
+        const encoded = encodeRows(columns, []);
         const decoded = await decodeNative(encoded);
         assert.deepStrictEqual(decoded.columns, columns);
         assert.strictEqual(decoded.rowCount, 0);
@@ -416,7 +423,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       // Test single row
       {
         const { columns, rows, types } = generateRows(selectedTypes, 1);
-        const encoded = encodeNative(columns, rows);
+        const encoded = encodeRows(columns, rows);
         const decoded = await decodeNative(encoded);
         assert.deepStrictEqual(decoded.columns, columns);
         compareRows(rows, toArrayRows(decoded), types);
@@ -514,8 +521,8 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
               lastProgressTime = now;
             }
 
-            // Use encodeNativeColumnar directly - no row conversion needed
-            const encoded = encodeNativeColumnar(block.columns, block.columnData, block.rowCount);
+            // Encode the Table directly
+            const encoded = encodeNative(block);
             await insert(
               `INSERT INTO ${dstTable} FORMAT Native`,
               encoded,

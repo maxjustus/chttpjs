@@ -17,15 +17,21 @@ import {
 
 import { BufferWriter, BufferReader } from "./io.ts";
 import { getCodec } from "./codecs.ts";
+import { type Column } from "./columns.ts";
 import {
-  type Column,
-  DataColumn,
-} from "./columns.ts";
-import { Table, type Row } from "./table.ts";
+  Table,
+  TableBuilder,
+  type Row,
+  tableFromArrays,
+  tableFromRows,
+  tableFromCols,
+  tableBuilder,
+} from "./table.ts";
 
 // Re-export types for public API
 export { type ColumnDef, type DecodeResult, type DecodeOptions, ClickHouseDateTime64 };
-export { type Column, Table, type Row };
+export { type Column, Table, TableBuilder, type Row };
+export { tableFromArrays, tableFromRows, tableFromCols, tableBuilder };
 export {
   DataColumn,
   TupleColumn,
@@ -36,6 +42,7 @@ export {
   NullableColumn,
   ArrayColumn,
 } from "./columns.ts";
+export { makeBuilder, type ColumnBuilder } from "./codecs.ts";
 
 export interface Block {
   columns: ColumnDef[];
@@ -149,60 +156,26 @@ function decodeNativeBlock(
 }
 
 /**
- * Encode row-oriented data to Native format.
- * Input: rows[rowIndex][colIndex]
+ * Encode a Table to Native format.
  */
-export function encodeNative(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
-  const numRows = rows.length;
-  const numCols = columns.length;
-  const cols: Column[] = new Array(numCols);
-
-  for (let i = 0; i < numCols; i++) {
-    const codec = getCodec(columns[i].type);
-    const builder = codec.builder(numRows);
-    for (let j = 0; j < numRows; j++) {
-      builder.append(rows[j][i]);
-    }
-    cols[i] = builder.finish();
-  }
-
-  return encodeNativeColumnar(columns, cols, numRows);
-}
-
-/**
- * Encode columnar data to Native format (no transpose needed).
- * Input: columnData[colIndex][rowIndex] or Column objects
- */
-export function encodeNativeColumnar(
-  columns: ColumnDef[],
-  columnData: (unknown[] | Column)[],
-  rowCount?: number,
-): Uint8Array {
-  const numRows = rowCount ?? (columnData[0]?.length ?? 0);
+export function encodeNative(table: Table): Uint8Array {
+  const { columns, columnData, rowCount } = table;
 
   // Estimate total size for pre-allocation
   let totalEstimate = 10; // header varints
   for (let i = 0; i < columns.length; i++) {
     totalEstimate += columns[i].name.length + columns[i].type.length + 10;
-    totalEstimate += getCodec(columns[i].type).estimateSize(numRows);
+    totalEstimate += getCodec(columns[i].type).estimateSize(rowCount);
   }
   const writer = new BufferWriter(Math.ceil(totalEstimate * 1.2));
 
   writer.writeVarint(columns.length);
-  writer.writeVarint(numRows);
+  writer.writeVarint(rowCount);
 
   // Native format: per-column [name, type, prefix, data]
   for (let i = 0; i < columns.length; i++) {
     const codec = getCodec(columns[i].type);
-    const data = columnData[i];
-
-    // Convert raw data to Column if needed
-    // Fast path: existing Column objects (duck type check for 'get' and 'length')
-    const col: Column = (data && typeof (data as any).get === 'function' && typeof (data as any).length === 'number')
-      ? data as Column
-      : ArrayBuffer.isView(data) && !(data instanceof DataView)
-        ? new DataColumn(data as any)
-        : codec.fromValues(data as unknown[]);
+    const col = columnData[i];
 
     writer.writeString(columns[i].name);
     writer.writeString(columns[i].type);
@@ -214,13 +187,20 @@ export function encodeNativeColumnar(
   return writer.finish();
 }
 
+/**
+ * Decode Native format data into a Table.
+ *
+ * This function is async because:
+ * - Internally reuses streamDecodeNative for code simplicity
+ * - Maintains consistent API for future streaming optimizations
+ * - Handles multi-block data uniformly with streaming decode
+ */
 export async function decodeNative(
   data: Uint8Array,
   options?: DecodeOptions,
 ): Promise<Table> {
   const blocks: Table[] = [];
 
-  // Wrap data in single-chunk async iterable and use streamDecodeNative
   async function* singleChunk() {
     yield data;
   }
@@ -280,22 +260,16 @@ export function mergeBlocks(blocks: (Block | Table)[]): Table {
   });
 }
 
+/**
+ * Stream encode Tables to Native format.
+ * Each yielded Table produces one Native block.
+ */
 export async function* streamEncodeNative(
-  columns: ColumnDef[],
-  rows: Iterable<unknown[]> | AsyncIterable<unknown[]>,
-  options: { blockSize?: number } = {},
+  tables: AsyncIterable<Table>,
 ): AsyncGenerator<Uint8Array> {
-  const blockSize = options.blockSize ?? 65536;
-  let batch: unknown[][] = [];
-
-  for await (const row of rows as AsyncIterable<unknown[]>) {
-    batch.push(row);
-    if (batch.length >= blockSize) {
-      yield encodeNative(columns, batch);
-      batch = [];
-    }
+  for await (const table of tables) {
+    yield encodeNative(table);
   }
-  if (batch.length > 0) yield encodeNative(columns, batch);
 }
 
 /**
@@ -491,20 +465,3 @@ export async function* streamNativeRows(
   }
 }
 
-/**
- * Stream encode columnar blocks to Native format.
- * Each yielded Block produces one Native block (no re-batching).
- *
- * @example
- * // Round-trip: decode -> transform -> re-encode
- * insert("INSERT INTO t FORMAT Native",
- *   streamEncodeNativeColumnar(streamDecodeNative(query(...))),
- *   session, config);
- */
-export async function* streamEncodeNativeColumnar(
-  blocks: AsyncIterable<Table>,
-): AsyncGenerator<Uint8Array> {
-  for await (const block of blocks) {
-    yield encodeNativeColumnar(block.columns, block.columnData, block.rowCount);
-  }
-}

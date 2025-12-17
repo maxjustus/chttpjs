@@ -1,6 +1,7 @@
-import { type ColumnDef } from "../shared.ts";
-import { type Column } from "./columns.ts";
+import { type ColumnDef, type TypedArray } from "../shared.ts";
+import { type Column, DataColumn } from "./columns.ts";
 import { type Block } from "./index.ts";
+import { getCodec, makeBuilder, type ColumnBuilder } from "./codecs.ts";
 
 /**
  * A Row object is a Proxy that lazily accesses column data.
@@ -34,7 +35,27 @@ export class Table implements Iterable<Row> {
     return new Table(block);
   }
 
-  get numRows(): number { return this.rowCount; }
+  /**
+   * Create a Table from columnar data.
+   * Accepts TypedArrays, plain arrays, or Column objects.
+   */
+  static fromColumnar(
+    columns: ColumnDef[],
+    columnData: (unknown[] | TypedArray | Column)[],
+  ): Table {
+    const rowCount = columnData[0]?.length ?? 0;
+    const cols: Column[] = columnData.map((data, i) => {
+      // Already a Column - use as-is
+      if (data && typeof (data as any).get === 'function') return data as Column;
+      // TypedArray - wrap in DataColumn with type from schema
+      if (ArrayBuffer.isView(data) && !(data instanceof DataView)) return new DataColumn(columns[i].type, data as TypedArray);
+      // Array - use codec.fromValues
+      return getCodec(columns[i].type).fromValues(data as unknown[]);
+    });
+    return new Table({ columns, columnData: cols, rowCount });
+  }
+
+  get length(): number { return this.rowCount; }
   get numCols(): number { return this.columns.length; }
   get schema(): ColumnDef[] { return this.columns; }
   get columnNames(): string[] { return this.columns.map(c => c.name); }
@@ -72,14 +93,6 @@ export class Table implements Iterable<Row> {
     }
   }
 
-  /** Return a new Table with sliced rows (zero-copy where possible). */
-  slice(start = 0, end = this.rowCount): Table {
-    // Note: To truly support zero-copy slicing, we would need a SlicedColumn wrapper.
-    // For now, we can just pass the slice boundaries to the proxy and iterators.
-    // But for simplicity, let's just implement a VirtualTable that offsets indices.
-    return new SlicedTable(this, start, end);
-  }
-
   /** Materialize all rows to plain objects. */
   toArray(): Record<string, unknown>[] {
     const result = new Array(this.rowCount);
@@ -94,6 +107,11 @@ export class Table implements Iterable<Row> {
       result[i] = row;
     }
     return result;
+  }
+
+  /** For JSON.stringify(table). */
+  toJSON(): Record<string, unknown>[] {
+    return this.toArray();
   }
 }
 
@@ -144,39 +162,124 @@ function createRowProxy(table: Table, rowIndex: number): Row {
 }
 
 /**
- * A view over a subset of a Table's rows.
+ * Builder for constructing Tables row-by-row.
+ * Grows dynamically - no upfront capacity required.
  */
-class SlicedTable extends Table {
-  private parent: Table;
-  private start: number;
-  private end: number;
+export class TableBuilder {
+  private schema: ColumnDef[];
+  private builders: ColumnBuilder[];
+  private _rowCount: number = 0;
+  private finished: boolean = false;
 
-  constructor(parent: Table, start: number, end: number) {
-    const rowCount = Math.max(0, Math.min(end, parent.rowCount) - Math.max(0, start));
-    super({
-      columns: parent.columns,
-      columnData: parent.columnData, // Still using parent's columns, but we'll offset indices
-      rowCount,
+  constructor(schema: ColumnDef[]) {
+    this.schema = schema;
+    this.builders = schema.map(col => makeBuilder(col.type));
+  }
+
+  get rowCount(): number { return this._rowCount; }
+
+  /** Append a row (values in column order). */
+  appendRow(values: unknown[]): this {
+    if (values.length !== this.schema.length) throw new Error("Row length mismatch");
+    for (let i = 0; i < values.length; i++) {
+      this.builders[i].append(values[i]);
+    }
+    this._rowCount++;
+    return this;
+  }
+
+  /** Finalize and return an immutable Table. */
+  finish(): Table {
+    if (this.finished) throw new Error("Builder already finished");
+    this.finished = true;
+    return new Table({
+      columns: this.schema,
+      columnData: this.builders.map(b => b.finish()),
+      rowCount: this._rowCount,
     });
-    this.parent = parent;
-    this.start = Math.max(0, start);
-    this.end = Math.min(end, parent.rowCount);
-  }
-
-  get(index: number): Row {
-    if (index < 0 || index >= this.rowCount) {
-      throw new RangeError(`Index out of bounds: ${index}`);
-    }
-    return this.parent.get(this.start + index);
-  }
-
-  *[Symbol.iterator](): Iterator<Row> {
-    for (let i = this.start; i < this.end; i++) {
-      yield this.parent.get(i);
-    }
-  }
-
-  slice(start = 0, end = this.rowCount): Table {
-    return new SlicedTable(this.parent, this.start + start, Math.min(this.start + end, this.end));
   }
 }
+
+/**
+ * Create a Table from columnar data keyed by column name.
+ *
+ * @param schema - Column definitions (name and type)
+ * @param data - Object with column names as keys, arrays/TypedArrays as values
+ *
+ * @example
+ * const table = tableFromArrays(
+ *   [{ name: 'id', type: 'UInt32' }, { name: 'name', type: 'String' }],
+ *   { id: new Uint32Array([1, 2, 3]), name: ['alice', 'bob', 'charlie'] }
+ * );
+ */
+export function tableFromArrays(
+  schema: ColumnDef[],
+  data: Record<string, unknown[] | TypedArray | Column>,
+): Table {
+  const columnData = schema.map(col => data[col.name]);
+  return Table.fromColumnar(schema, columnData);
+}
+
+/**
+ * Create a Table from row arrays.
+ *
+ * @param schema - Column definitions (name and type)
+ * @param rows - Array of rows, each row is an array of values in schema order
+ *
+ * @example
+ * const table = tableFromRows(
+ *   [{ name: 'id', type: 'UInt32' }, { name: 'name', type: 'String' }],
+ *   [[1, 'alice'], [2, 'bob'], [3, 'charlie']]
+ * );
+ */
+export function tableFromRows(
+  schema: ColumnDef[],
+  rows: unknown[][],
+): Table {
+  // Transpose rows to columns
+  const numCols = schema.length;
+  const columns: unknown[][] = schema.map(() => new Array(rows.length));
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    for (let c = 0; c < numCols; c++) {
+      columns[c][r] = row[c];
+    }
+  }
+  // Use codec.fromValues for each column
+  const columnData = columns.map((arr, i) => getCodec(schema[i].type).fromValues(arr));
+  return new Table({ columns: schema, columnData, rowCount: rows.length });
+}
+
+/**
+ * Create a Table from pre-built Column objects.
+ * Schema is derived from the columns themselves (each Column has a type property).
+ *
+ * @param columns - Object with column names as keys, Column objects as values
+ *
+ * @example
+ * const idCol = makeBuilder('UInt32').append(1).append(2).finish();
+ * const nameCol = makeBuilder('String').append('alice').append('bob').finish();
+ * const table = tableFromCols({ id: idCol, name: nameCol });
+ */
+export function tableFromCols(columns: Record<string, Column>): Table {
+  const names = Object.keys(columns);
+  const schema = names.map(name => ({ name, type: columns[name].type }));
+  const columnData = names.map(name => columns[name]);
+  const rowCount = columnData[0]?.length ?? 0;
+  return new Table({ columns: schema, columnData, rowCount });
+}
+
+/**
+ * Create a TableBuilder for incremental row construction.
+ *
+ * @param schema - Column definitions (name and type)
+ *
+ * @example
+ * const builder = tableBuilder([{ name: 'id', type: 'UInt32' }]);
+ * builder.appendRow([1]).appendRow([2]);
+ * const table = builder.finish();
+ */
+export function tableBuilder(schema: ColumnDef[]): TableBuilder {
+  return new TableBuilder(schema);
+}
+

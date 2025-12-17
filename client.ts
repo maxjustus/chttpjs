@@ -53,6 +53,15 @@ function compressionToMethod(compression: Compression): MethodCode {
   }
 }
 
+function* chunkUint8Array(data: Uint8Array, chunkSize: number): Generator<Uint8Array> {
+  let offset = 0;
+  while (offset < data.length) {
+    const end = Math.min(offset + chunkSize, data.length);
+    yield data.subarray(offset, end);
+    offset = end;
+  }
+}
+
 // Uint8Array helpers
 const encoder = new TextEncoder();
 
@@ -146,71 +155,27 @@ async function insert(
     decompress: "1",
   };
 
-  // Single Uint8Array - compress and send directly
+  // Normalize all input types to Iterable<Uint8Array>
+  // This ensures consistent chunking behavior (1MB threshold) for all inputs
+  let inputData: Iterable<Uint8Array> | AsyncIterable<Uint8Array>;
+
   if (data instanceof Uint8Array) {
-    const compressed = encodeBlock(data, method);
-    const url = buildReqUrl(baseUrl, params, options.auth);
-
-    if (onProgress) {
-      onProgress({
-        blocksSent: 1,
-        bytesCompressed: compressed.length,
-        bytesUncompressed: data.length,
-        complete: true,
-      });
-    }
-
-    const response = await fetch(url.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/octet-stream", "Connection": "close" },
-      body: compressed,
-      signal: createSignal(options.signal, options.timeout),
-    });
-
-    const body = await response.text();
-    if (!response.ok) {
-      throw new Error(`Insert failed: ${response.status} - ${body}`);
-    }
-    return body;
-  }
-
-  // Array of Uint8Array - concatenate, compress, send
-  if (Array.isArray(data)) {
+    // Single Uint8Array - chunk at threshold for consistent progress reporting
+    inputData = chunkUint8Array(data, threshold);
+  } else if (Array.isArray(data)) {
+    // Array of Uint8Arrays - yield chunks from each
     const chunks = data as Uint8Array[];
-    const totalLen = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const combined = new Uint8Array(totalLen);
-    let offset = 0;
-    for (const chunk of chunks) {
-      combined.set(chunk, offset);
-      offset += chunk.length;
-    }
-    const compressed = encodeBlock(combined, method);
-    const url = buildReqUrl(baseUrl, params, options.auth);
-
-    if (onProgress) {
-      onProgress({
-        blocksSent: 1,
-        bytesCompressed: compressed.length,
-        bytesUncompressed: totalLen,
-        complete: true,
-      });
-    }
-
-    const response = await fetch(url.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/octet-stream", "Connection": "close" },
-      body: compressed,
-      signal: createSignal(options.signal, options.timeout),
-    });
-
-    const body = await response.text();
-    if (!response.ok) {
-      throw new Error(`Insert failed: ${response.status} - ${body}`);
-    }
-    return body;
+    inputData = (function*() {
+      for (const chunk of chunks) {
+        yield* chunkUint8Array(chunk, threshold);
+      }
+    })();
+  } else {
+    // Already an Iterable or AsyncIterable
+    inputData = data;
   }
 
-  // Streaming: Iterable<Uint8Array> or AsyncIterable<Uint8Array>
+  // Streaming path: buffer, compress at threshold, report progress
   const url = buildReqUrl(baseUrl, params, options.auth);
 
   let blocksSent = 0;
@@ -242,7 +207,7 @@ async function insert(
           }
         };
 
-        for await (const chunk of data as AsyncIterable<Uint8Array>) {
+        for await (const chunk of inputData as AsyncIterable<Uint8Array>) {
           let chunkOffset = 0;
 
           while (chunkOffset < chunk.length) {

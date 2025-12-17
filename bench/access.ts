@@ -6,10 +6,13 @@
 // 3. asRows() - lazy row generation using get(i)
 // 4. Table iteration - using the new Table class with Proxy rows
 
-import { decodeNative, toArrayRows, asRows, type Block, Table } from "../formats/native/index.ts";
-import { encodeNative } from "../formats/native/index.ts";
+import { decodeNative, toArrayRows, asRows, type Block, Table, tableFromRows, encodeNative } from "../formats/native/index.ts";
 import type { ColumnDef } from "../formats/shared.ts";
 import { DataColumn } from "../formats/native/columns.ts";
+
+function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
+  return encodeNative(tableFromRows(columns, rows));
+}
 
 function bench(name: string, fn: () => void, warmup = 50, iterations = 100): { name: string; ms: number } {
   for (let i = 0; i < warmup; i++) fn();
@@ -129,7 +132,7 @@ async function main() {
   for (const scenario of scenarios) {
     console.log(`=== ${scenario.name} ===\n`);
 
-    const encoded = encodeNative(scenario.columns, scenario.rows);
+    const encoded = encodeNativeRows(scenario.columns, scenario.rows);
     const decoded = await decodeNative(encoded);
 
     console.log("Materializing to rows:");

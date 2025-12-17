@@ -33,14 +33,19 @@ export {
 } from "./formats/rowbinary.ts";
 export {
   encodeNative,
-  encodeNativeColumnar,
   decodeNative,
   streamEncodeNative,
-  streamEncodeNativeColumnar,
   streamDecodeNative,
   streamNativeRows,
   toArrayRows,
   asRows,
   type StreamDecodeNativeResult,
   type ColumnarResult,
+  Table,
+  TableBuilder,
+  tableFromArrays,
+  tableFromRows,
+  tableFromCols,
+  tableBuilder,
+  makeBuilder,
 } from "./formats/native/index.ts";

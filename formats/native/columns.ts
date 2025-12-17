@@ -30,6 +30,8 @@ export function countAndIndexDiscriminators(
  */
 export interface Column extends Iterable<unknown> {
   readonly length: number;
+  /** ClickHouse type string, e.g. "UInt32", "Tuple(Float64, Float64)" */
+  readonly type: string;
   /** Get value at index. */
   get(index: number): unknown;
 }
@@ -39,6 +41,7 @@ export interface Column extends Iterable<unknown> {
  */
 abstract class AbstractColumn implements Column {
   abstract readonly length: number;
+  abstract readonly type: string;
   abstract get(index: number): unknown;
 
   *[Symbol.iterator](): Iterator<unknown> {
@@ -49,10 +52,12 @@ abstract class AbstractColumn implements Column {
 }
 
 export class DataColumn<T extends TypedArray | unknown[]> extends AbstractColumn {
+  readonly type: string;
   readonly data: T;
 
-  constructor(data: T) {
+  constructor(type: string, data: T) {
     super();
+    this.type = type;
     this.data = data;
   }
 
@@ -64,16 +69,19 @@ export class DataColumn<T extends TypedArray | unknown[]> extends AbstractColumn
 }
 
 export class TupleColumn extends AbstractColumn {
+  readonly type: string;
   readonly elements: { name: string | null }[];
   readonly columns: Column[];
   readonly isNamed: boolean;
 
   constructor(
+    type: string,
     elements: { name: string | null }[],
     columns: Column[],
     isNamed: boolean
   ) {
     super();
+    this.type = type;
     this.elements = elements;
     this.columns = columns;
     this.isNamed = isNamed;
@@ -102,18 +110,21 @@ export class TupleColumn extends AbstractColumn {
 }
 
 export class MapColumn extends AbstractColumn {
+  readonly type: string;
   readonly offsets: BigUint64Array;
   readonly keys: Column;
   readonly values: Column;
   private mapAsArray: boolean;
 
   constructor(
+    type: string,
     offsets: BigUint64Array,
     keys: Column,
     values: Column,
     mapAsArray = false
   ) {
     super();
+    this.type = type;
     this.offsets = offsets;
     this.keys = keys;
     this.values = values;
@@ -145,16 +156,19 @@ export class MapColumn extends AbstractColumn {
 }
 
 export class VariantColumn extends AbstractColumn {
+  readonly type: string;
   readonly discriminators: Uint8Array;
   readonly groups: Map<number, Column>;
   private readonly groupIndices: Uint32Array;
 
   constructor(
+    type: string,
     discriminators: Uint8Array,
     groups: Map<number, Column>,
     groupIndices?: Uint32Array
   ) {
     super();
+    this.type = type;
     this.discriminators = discriminators;
     this.groups = groups;
     this.groupIndices = groupIndices ?? countAndIndexDiscriminators(discriminators, VARIANT_NULL_DISCRIMINATOR).indices;
@@ -172,6 +186,7 @@ export class VariantColumn extends AbstractColumn {
 }
 
 export class DynamicColumn extends AbstractColumn {
+  readonly type: string = 'Dynamic';
   readonly types: string[];
   readonly discriminators: DiscriminatorArray;
   readonly groups: Map<number, Column>;
@@ -204,6 +219,7 @@ export class DynamicColumn extends AbstractColumn {
 }
 
 export class JsonColumn extends AbstractColumn {
+  readonly type: string = 'JSON';
   readonly paths: string[];
   readonly pathColumns: Map<string, DynamicColumn>;
   private _length: number;
@@ -239,14 +255,17 @@ export class JsonColumn extends AbstractColumn {
 }
 
 export class NullableColumn extends AbstractColumn {
+  readonly type: string;
   readonly nullFlags: Uint8Array;
   readonly inner: Column;
 
   constructor(
+    type: string,
     nullFlags: Uint8Array,
     inner: Column
   ) {
     super();
+    this.type = type;
     this.nullFlags = nullFlags;
     this.inner = inner;
   }
@@ -259,14 +278,17 @@ export class NullableColumn extends AbstractColumn {
 }
 
 export class ArrayColumn extends AbstractColumn {
+  readonly type: string;
   readonly offsets: BigUint64Array;
   readonly inner: Column;
 
   constructor(
+    type: string,
     offsets: BigUint64Array,
     inner: Column
   ) {
     super();
+    this.type = type;
     this.offsets = offsets;
     this.inner = inner;
   }

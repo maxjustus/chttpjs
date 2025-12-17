@@ -10,7 +10,11 @@ import {
   streamEncodeRowBinary,
   type ColumnDef,
 } from "../formats/rowbinary.ts";
-import { encodeNative, encodeNativeColumnar, decodeNative } from "../formats/native/index.ts";
+import { encodeNative, decodeNative, tableFromRows, Table } from "../formats/native/index.ts";
+
+function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
+  return encodeNative(tableFromRows(columns, rows));
+}
 
 // --- Benchmark infrastructure ---
 
@@ -104,7 +108,7 @@ async function runScenario(scenario: Scenario, iterations: number): Promise<Scen
   // Pre-encode
   const jsonEncoded = encodeJsonEachRow(scenario.jsonData);
   const rbEncoded = encodeRowBinary(scenario.columns, scenario.rowsArray);
-  const nativeEncoded = encodeNative(scenario.columns, scenario.rowsArray);
+  const nativeEncoded = encodeNativeRows(scenario.columns, scenario.rowsArray);
 
   const pct = (val: number, base: number) => ((val / base) * 100).toFixed(1);
   console.log(`  Encoded sizes: JSON=${jsonEncoded.length}, RowBinary=${rbEncoded.length} (${pct(rbEncoded.length, jsonEncoded.length)}%), Native=${nativeEncoded.length} (${pct(nativeEncoded.length, jsonEncoded.length)}%)\n`);
@@ -115,7 +119,7 @@ async function runScenario(scenario: Scenario, iterations: number): Promise<Scen
   console.log(formatResult(jsonEnc, rows));
   const rbEnc = bench("RowBinary encode", () => encodeRowBinary(scenario.columns, scenario.rowsArray), 50, iterations);
   console.log(formatResult(rbEnc, rows));
-  const nativeEnc = bench("Native encode", () => encodeNative(scenario.columns, scenario.rowsArray), 50, iterations);
+  const nativeEnc = bench("Native encode", () => encodeNativeRows(scenario.columns, scenario.rowsArray), 50, iterations);
   console.log(formatResult(nativeEnc, rows));
 
   // Decoding
@@ -139,7 +143,7 @@ async function runScenario(scenario: Scenario, iterations: number): Promise<Scen
   console.log(formatResult(jsonFull, rows));
   const rbFull = bench("RowBinary + LZ4", () => encodeBlock(encodeRowBinary(scenario.columns, scenario.rowsArray), Method.LZ4), 50, iterations);
   console.log(formatResult(rbFull, rows));
-  const nativeFull = bench("Native + LZ4", () => encodeBlock(encodeNative(scenario.columns, scenario.rowsArray), Method.LZ4), 50, iterations);
+  const nativeFull = bench("Native + LZ4", () => encodeBlock(encodeNativeRows(scenario.columns, scenario.rowsArray), Method.LZ4), 50, iterations);
   console.log(formatResult(nativeFull, rows));
 
   console.log("");
@@ -335,9 +339,9 @@ async function main() {
   const columnar = generateColumnarNumericData(ROWS);
 
   console.log("Native encode (row-based vs columnar TypedArray):");
-  const nativeRowEnc = bench("Native (row input)", () => encodeNative(columnar.columns, columnar.rows), 50, ITERATIONS);
+  const nativeRowEnc = bench("Native (row input)", () => encodeNativeRows(columnar.columns, columnar.rows), 50, ITERATIONS);
   console.log(formatResult(nativeRowEnc, ROWS));
-  const nativeColEnc = bench("Native (TypedArray columnar)", () => encodeNativeColumnar(columnar.columns, columnar.columnar, ROWS), 50, ITERATIONS);
+  const nativeColEnc = bench("Native (TypedArray columnar)", () => encodeNative(Table.fromColumnar(columnar.columns, columnar.columnar)), 50, ITERATIONS);
   console.log(formatResult(nativeColEnc, ROWS));
 
   console.log(`\nSpeedup: ${(nativeRowEnc.ms / nativeColEnc.ms).toFixed(2)}x faster with TypedArray columnar input`);

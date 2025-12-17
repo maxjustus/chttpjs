@@ -279,6 +279,8 @@ const { columns, rows } = decodeRowBinary(data);
 
 ClickHouse's internal wire format. Returns columnar data (virtual columns) rather than materializing all rows upfront.
 
+### Table Construction
+
 ```ts
 import {
   insert,
@@ -286,41 +288,133 @@ import {
   collectBytes,
   encodeNative,
   decodeNative,
-  Table,
+  tableFromArrays,
+  tableFromRows,
+  tableFromCols,
+  tableBuilder,
+  makeBuilder,
 } from "@maxjustus/chttp";
 
-const columns = [
+const schema = [
   { name: "id", type: "UInt32" },
   { name: "name", type: "String" },
 ];
 
-const rows = [
+// From columnar data (named columns)
+const table = tableFromArrays(schema, {
+  id: new Uint32Array([1, 2, 3]),
+  name: ["alice", "bob", "charlie"],
+});
+
+// From row arrays
+const table2 = tableFromRows(schema, [
   [1, "alice"],
   [2, "bob"],
-];
+  [3, "charlie"],
+]);
+
+// Row-by-row builder
+const builder = tableBuilder(schema);
+builder.appendRow([1, "alice"]);
+builder.appendRow([2, "bob"]);
+builder.appendRow([3, "charlie"]);
+const table3 = builder.finish();
 
 // Encode and insert
-const data = encodeNative(columns, rows);
-await insert("INSERT INTO table FORMAT Native", data, "session123", config);
+await insert("INSERT INTO t FORMAT Native", encodeNative(table), "session", config);
 
 // Query returns columnar data wrapped in a Table
 const bytes = await collectBytes(
-  query("SELECT * FROM table FORMAT Native", "session123", config),
+  query("SELECT * FROM t FORMAT Native", "session", config),
 );
-const block = await decodeNative(bytes);
-const table = Table.from(block);
+const result = await decodeNative(bytes);
 
-for (const row of table) {
+for (const row of result) {
   console.log(row.id, row.name);
 }
 
-const ids = table.getColumn("id")!;
+// Access columns directly
+const ids = result.getColumn("id")!;
 for (let i = 0; i < ids.length; i++) {
-  const id = ids.get(i);
+  console.log(ids.get(i));
 }
+```
 
-// 3. Slicing (zero-copy views)
-const subset = table.slice(0, 100);
+### Column Builders
+
+Build columns independently with `makeBuilder`:
+
+```ts
+const idCol = makeBuilder("UInt32").append(1).append(2).append(3).finish();
+const nameCol = makeBuilder("String").append("alice").append("bob").append("charlie").finish();
+
+// Columns carry their type - schema is derived automatically
+const table = tableFromCols({ id: idCol, name: nameCol });
+// table.schema = [{ name: "id", type: "UInt32" }, { name: "name", type: "String" }]
+```
+
+### Complex Types
+
+```ts
+// Array(Int32)
+tableFromArrays(
+  [{ name: "tags", type: "Array(Int32)" }],
+  { tags: [[1, 2], [3, 4, 5], [6]] }
+);
+
+// Tuple(Float64, Float64) - positional
+tableFromArrays(
+  [{ name: "point", type: "Tuple(Float64, Float64)" }],
+  { point: [[1.0, 2.0], [3.0, 4.0]] }
+);
+
+// Tuple(x Float64, y Float64) - named tuples use objects
+tableFromArrays(
+  [{ name: "point", type: "Tuple(x Float64, y Float64)" }],
+  { point: [{ x: 1.0, y: 2.0 }, { x: 3.0, y: 4.0 }] }
+);
+
+// Map(String, Int32)
+tableFromArrays(
+  [{ name: "meta", type: "Map(String, Int32)" }],
+  { meta: [{ a: 1, b: 2 }, new Map([["c", 3]])] }
+);
+
+// Nullable(String)
+tableFromArrays(
+  [{ name: "note", type: "Nullable(String)" }],
+  { note: ["hello", null, "world"] }
+);
+
+// Variant(String, Int64, Bool) - type inferred from values
+tableFromArrays(
+  [{ name: "val", type: "Variant(String, Int64, Bool)" }],
+  { val: ["hello", 42n, true, null] }
+);
+
+// Variant with explicit discriminators (for ambiguous cases)
+tableFromArrays(
+  [{ name: "val", type: "Variant(String, Int64, Bool)" }],
+  { val: [[0, "hello"], [1, 42n], [2, true], null] }  // [discriminator, value]
+);
+
+// Dynamic - types inferred automatically
+tableFromArrays(
+  [{ name: "dyn", type: "Dynamic" }],
+  { dyn: ["hello", 42, true, [1, 2, 3], null] }
+);
+
+// JSON - plain objects
+tableFromArrays(
+  [{ name: "data", type: "JSON" }],
+  { data: [{ a: 1, b: "x" }, { a: 2, c: true }] }
+);
+
+// Building complex columns
+const pointCol = makeBuilder("Tuple(Float64, Float64)")
+  .append([1.0, 2.0])
+  .append([3.0, 4.0])
+  .finish();
 ```
 
 ### Streaming
@@ -328,37 +422,31 @@ const subset = table.slice(0, 100);
 ```ts
 import {
   streamEncodeNative,
-  streamEncodeNativeColumnar,
   streamDecodeNative,
   streamNativeRows,
-  Table,
+  tableFromArrays,
 } from "@maxjustus/chttp";
-
-// Streaming insert from rows
-await insert(
-  "INSERT INTO table FORMAT Native",
-  streamEncodeNative(columns, generateRows()),
-  "session123",
-  config,
-);
 
 // Streaming decode - rows as objects (lazy)
 for await (const row of streamNativeRows(
-  streamDecodeNative(query("SELECT * FROM table FORMAT Native", "session123", config)),
+  streamDecodeNative(query("SELECT * FROM t FORMAT Native", "session", config)),
 )) {
   console.log(row.id, row.name);
 }
 
 // Or work with Table blocks directly
-for await (const block of streamDecodeNative(
-  query("SELECT * FROM table FORMAT Native", "session123", config),
+for await (const table of streamDecodeNative(
+  query("SELECT * FROM t FORMAT Native", "session", config),
 )) {
-  const table = Table.from(block);
-  // ...
+  console.log(table.length, table.columnNames);
 }
 
-// Produce columnar batches directly (most efficient for large inserts)
-async function* generateColumnarBatches() {
+// Streaming insert - generate Tables
+async function* generateTables() {
+  const schema = [
+    { name: "id", type: "UInt32" },
+    { name: "value", type: "Float64" },
+  ];
   const batchSize = 10000;
   for (let batch = 0; batch < 100; batch++) {
     const ids = new Uint32Array(batchSize);
@@ -367,18 +455,14 @@ async function* generateColumnarBatches() {
       ids[i] = batch * batchSize + i;
       values[i] = Math.random();
     }
-    yield {
-      columns: [{ name: "id", type: "UInt32" }, { name: "value", type: "Float64" }],
-      columnData: [ids, values],
-      rowCount: batchSize,
-    };
+    yield tableFromArrays(schema, { id: ids, value: values });
   }
 }
 
 await insert(
-  "INSERT INTO table FORMAT Native",
-  streamEncodeNativeColumnar(generateColumnarBatches()),
-  "session123",
+  "INSERT INTO t FORMAT Native",
+  streamEncodeNative(generateTables()),
+  "session",
   config,
 );
 ```

@@ -8,7 +8,11 @@
 
 import { parseArgs } from "node:util";
 import { encodeRowBinary, decodeRowBinary, type ColumnDef } from "../formats/rowbinary.ts";
-import { encodeNative, encodeNativeColumnar, decodeNative } from "../formats/native/index.ts";
+import { encodeNative, decodeNative, tableFromRows, Table } from "../formats/native/index.ts";
+
+function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
+  return encodeNative(tableFromRows(columns, rows));
+}
 
 const DATA_TYPES = ["mixed", "numeric", "strings", "complex", "full"] as const;
 
@@ -251,15 +255,15 @@ async function main() {
   const { columns, rows, columnarData, objects } = generateData(dataType, rowCount);
 
   // Pre-encode for decode
-  const encNative = encodeNative(columns, rows);
+  const encNative = encodeNativeRows(columns, rows);
   const encRowBin = encodeRowBinary(columns, rows);
   const encJson = encodeJson(objects);
 
   const run = async () => {
     if (format === "native") {
       if (operation === "encode") {
-        if (columnar) encodeNativeColumnar(columns, columnarData, rowCount);
-        else encodeNative(columns, rows);
+        if (columnar) encodeNative(Table.fromColumnar(columns, columnarData));
+        else encodeNativeRows(columns, rows);
       } else await decodeNative(encNative);
     } else if (format === "rowbinary") {
       if (operation === "encode") encodeRowBinary(columns, rows);

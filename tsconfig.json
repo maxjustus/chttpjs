@@ -27,5 +27,5 @@
     "noEmit": true
   },
   "include": ["*.ts", "test/**/*.ts", "types.d.ts"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "tcp_client", "test_tcp.ts"]
 }
