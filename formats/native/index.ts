@@ -46,27 +46,7 @@ export interface Block {
 /** @deprecated Use Block instead */
 export type ColumnarResult = Block;
 
-// TypedArray constructors for fast path in encodeNative()
-// Only simple numeric types that can be assigned directly without conversion
-type SimpleTypedArrayCtor = Uint8ArrayConstructor | Int8ArrayConstructor |
-  Uint16ArrayConstructor | Int16ArrayConstructor |
-  Uint32ArrayConstructor | Int32ArrayConstructor |
-  Float32ArrayConstructor | Float64ArrayConstructor;
-
-const SIMPLE_TYPED_ARRAYS: Record<string, SimpleTypedArrayCtor | undefined> = {
-  'UInt8': Uint8Array,
-  'Int8': Int8Array,
-  'UInt16': Uint16Array,
-  'Int16': Int16Array,
-  'UInt32': Uint32Array,
-  'Int32': Int32Array,
-  'Float32': Float32Array,
-  'Float64': Float64Array,
-  // Note: UInt64/Int64 need BigInt conversion, Bool needs 0/1 conversion
-  // Date/DateTime need epoch conversion - all handled by slow path
-};
-
-export type StreamDecodeNativeResult = Block;
+export type StreamDecodeNativeResult = Table;
 
 interface BlockResult {
   columns: ColumnDef[];
@@ -175,22 +155,15 @@ function decodeNativeBlock(
 export function encodeNative(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
   const numRows = rows.length;
   const numCols = columns.length;
-  const cols: (unknown[] | Column)[] = new Array(numCols);
+  const cols: Column[] = new Array(numCols);
 
-  // Transpose rows to columns with fast path for simple numeric types
   for (let i = 0; i < numCols; i++) {
-    const TypedArrayCtor = SIMPLE_TYPED_ARRAYS[columns[i].type];
-    if (TypedArrayCtor) {
-      // Fast path: write directly to TypedArray (no intermediate JS array)
-      const arr = new TypedArrayCtor(numRows);
-      for (let j = 0; j < numRows; j++) arr[j] = rows[j][i] as number;
-      cols[i] = new DataColumn(arr);
-    } else {
-      // Slow path: JS array for complex/converted types
-      const arr = new Array(numRows);
-      for (let j = 0; j < numRows; j++) arr[j] = rows[j][i];
-      cols[i] = arr;
+    const codec = getCodec(columns[i].type);
+    const builder = codec.builder(numRows);
+    for (let j = 0; j < numRows; j++) {
+      builder.append(rows[j][i]);
     }
+    cols[i] = builder.finish();
   }
 
   return encodeNativeColumnar(columns, cols, numRows);
@@ -244,7 +217,7 @@ export function encodeNativeColumnar(
 export async function decodeNative(
   data: Uint8Array,
   options?: DecodeOptions,
-): Promise<Block> {
+): Promise<Table> {
   const blocks: Block[] = [];
 
   // Wrap data in single-chunk async iterable and use streamDecodeNative
@@ -256,30 +229,32 @@ export async function decodeNative(
     blocks.push(block);
   }
 
-  // Fast path: single block, return directly (preserves columnar types)
+  // Fast path: single block
   if (blocks.length === 0) {
-    return { columns: [], columnData: [], rowCount: 0 };
+    return new Table({ columns: [], columnData: [], rowCount: 0 });
   }
   if (blocks.length === 1) {
-    return blocks[0];
+    return Table.from(blocks[0]);
   }
 
   return mergeBlocks(blocks);
 }
 
 /**
- * Merge multiple blocks into a single block.
+ * Merge multiple blocks into a single Table.
  * Note: This materializes all column data - use streaming for large datasets.
  */
-export function mergeBlocks(blocks: Block[]): Block {
+export function mergeBlocks(blocks: (Block | Table)[]): Table {
   if (blocks.length === 0) {
-    return { columns: [], columnData: [], rowCount: 0 };
+    return new Table({ columns: [], columnData: [], rowCount: 0 });
   }
   if (blocks.length === 1) {
-    return blocks[0];
+    const first = blocks[0];
+    return first instanceof Table ? first : Table.from(first);
   }
 
-  const columns = blocks[0].columns;
+  const first = blocks[0];
+  const columns = first.columns;
   const numCols = columns.length;
   const merged: unknown[][] = [];
   for (let i = 0; i < numCols; i++) {
@@ -298,11 +273,11 @@ export function mergeBlocks(blocks: Block[]): Block {
     totalRows += block.rowCount;
   }
 
-  return {
+  return new Table({
     columns,
     columnData: merged.map(arr => new DataColumn(arr)),
     rowCount: totalRows,
-  };
+  });
 }
 
 export async function* streamEncodeNative(

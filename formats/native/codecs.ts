@@ -62,10 +62,16 @@ function decodeGroups(
 
 const MS_PER_SECOND = 1000;
 
+export interface ColumnBuilder {
+  append(value: unknown): void;
+  finish(): Column;
+}
+
 export interface Codec {
   encode(col: Column, sizeHint?: number): Uint8Array;
   decode(reader: BufferReader, rows: number): Column;
   fromValues(values: unknown[]): Column;
+  builder(size: number): ColumnBuilder;
   zeroValue(): unknown;
   // Estimate bytes needed for this column type with given row count
   estimateSize(rows: number): number;
@@ -101,8 +107,28 @@ class NumericCodec<T extends TypedArray> implements Codec {
     return new DataColumn(arr);
   }
 
+  builder(size: number): ColumnBuilder {
+    const arr = new this.Ctor(size);
+    let offset = 0;
+    return {
+      append: (v: unknown) => {
+        arr[offset++] = (this.converter ? this.converter(v) : v) as any;
+      },
+      finish: () => new DataColumn(arr),
+    };
+  }
+
   zeroValue() { return 0; }
   estimateSize(rows: number) { return rows * this.Ctor.BYTES_PER_ELEMENT; }
+}
+
+function SimpleArrayBuilder(size: number, transform?: (v: unknown) => unknown): ColumnBuilder {
+  const arr = new Array(size);
+  let offset = 0;
+  return {
+    append: (v: unknown) => { arr[offset++] = transform ? transform(v) : v; },
+    finish: () => new DataColumn(arr),
+  };
 }
 
 class StringCodec implements Codec {
@@ -123,6 +149,10 @@ class StringCodec implements Codec {
 
   fromValues(values: unknown[]): DataColumn<string[]> {
     return new DataColumn(values.map(v => String(v ?? "")));
+  }
+
+  builder(size: number): ColumnBuilder {
+    return SimpleArrayBuilder(size, v => String(v ?? ""));
   }
 
   zeroValue() { return ""; }
@@ -167,6 +197,10 @@ class UUIDCodec implements Codec {
 
   fromValues(values: unknown[]): DataColumn<string[]> {
     return new DataColumn(values.map(v => String(v ?? "")));
+  }
+
+  builder(size: number): ColumnBuilder {
+    return SimpleArrayBuilder(size, v => String(v ?? ""));
   }
 
   zeroValue() { return "00000000-0000-0000-0000-000000000000"; }
@@ -221,6 +255,26 @@ class FixedStringCodec implements Codec {
     return new DataColumn(result);
   }
 
+  builder(size: number): ColumnBuilder {
+    const result: Uint8Array[] = new Array(size);
+    let offset = 0;
+    return {
+      append: (v: unknown) => {
+        if (v instanceof Uint8Array) {
+          result[offset++] = v;
+        } else if (typeof v === "string") {
+          const buf = new Uint8Array(this.len);
+          const encoded = TEXT_ENCODER.encode(v);
+          buf.set(encoded.subarray(0, this.len));
+          result[offset++] = buf;
+        } else {
+          result[offset++] = new Uint8Array(this.len);
+        }
+      },
+      finish: () => new DataColumn(result),
+    };
+  }
+
   zeroValue() { return new Uint8Array(this.len); }
   estimateSize(rows: number) { return rows * this.len; }
 }
@@ -257,6 +311,10 @@ class BigIntCodec implements Codec {
 
   fromValues(values: unknown[]): DataColumn<bigint[]> {
     return new DataColumn(values.map(v => BigInt(v as any)));
+  }
+
+  builder(size: number): ColumnBuilder {
+    return SimpleArrayBuilder(size, v => BigInt(v as any));
   }
 
   zeroValue() { return 0n; }
@@ -330,6 +388,14 @@ class DecimalCodec implements Codec {
     }));
   }
 
+  builder(size: number): ColumnBuilder {
+    return SimpleArrayBuilder(size, v => {
+      if (typeof v === 'string') return v;
+      if (typeof v === 'bigint') return formatScaledBigInt(v, this.scale);
+      return String(v);
+    });
+  }
+
   zeroValue() { return formatScaledBigInt(0n, this.scale); }
   estimateSize(rows: number) { return rows * this.byteSize; }
 }
@@ -389,6 +455,28 @@ class DateTime64Codec implements Codec {
     return new DataColumn(result);
   }
 
+  builder(size: number): ColumnBuilder {
+    const result: ClickHouseDateTime64[] = new Array(size);
+    let offset = 0;
+    return {
+      append: (v: any) => {
+        if (v instanceof ClickHouseDateTime64) {
+          result[offset++] = v;
+        } else if (v instanceof Date) {
+          const ms = BigInt(v.getTime());
+          const scale = 10n ** BigInt(Math.abs(this.precision - 3));
+          const ticks = this.precision >= 3 ? ms * scale : ms / scale;
+          result[offset++] = new ClickHouseDateTime64(ticks, this.precision);
+        } else if (typeof v === "bigint") {
+          result[offset++] = new ClickHouseDateTime64(v, this.precision);
+        } else {
+          result[offset++] = new ClickHouseDateTime64(0n, this.precision);
+        }
+      },
+      finish: () => new DataColumn(result),
+    };
+  }
+
   zeroValue() { return new Date(0); }
   estimateSize(rows: number) { return rows * 8; }
 }
@@ -437,6 +525,23 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
     return new DataColumn(result);
   }
 
+  builder(size: number): ColumnBuilder {
+    const result: Date[] = new Array(size);
+    let offset = 0;
+    return {
+      append: (v: any) => {
+        if (v instanceof Date) {
+          result[offset++] = v;
+        } else if (typeof v === "number") {
+          result[offset++] = new Date(v);
+        } else {
+          result[offset++] = new Date(0);
+        }
+      },
+      finish: () => new DataColumn(result),
+    };
+  }
+
   zeroValue() { return new Date(0); }
   estimateSize(rows: number) { return rows * this.Ctor.BYTES_PER_ELEMENT; }
 }
@@ -467,6 +572,10 @@ class IPv4Codec implements Codec {
     return new DataColumn(values.map(v => String(v ?? "")));
   }
 
+  builder(size: number): ColumnBuilder {
+    return SimpleArrayBuilder(size, v => String(v ?? ""));
+  }
+
   zeroValue() { return "0.0.0.0"; }
   estimateSize(rows: number) { return rows * 4; }
 }
@@ -494,6 +603,10 @@ class IPv6Codec implements Codec {
 
   fromValues(values: unknown[]): DataColumn<string[]> {
     return new DataColumn(values.map(v => String(v ?? "")));
+  }
+
+  builder(size: number): ColumnBuilder {
+    return SimpleArrayBuilder(size, v => String(v ?? ""));
   }
 
   zeroValue() { return "::"; }
@@ -552,6 +665,22 @@ class ArrayCodec implements Codec {
     return new ArrayColumn(offsets, this.inner.fromValues(allInner));
   }
 
+  builder(size: number): ColumnBuilder {
+    const offsets = new BigUint64Array(size);
+    const allInner: unknown[] = [];
+    let offset = 0n;
+    let rowIdx = 0;
+    return {
+      append: (v: unknown) => {
+        const arr = v as unknown[];
+        for (const item of arr) allInner.push(item);
+        offset += BigInt(arr.length);
+        offsets[rowIdx++] = offset;
+      },
+      finish: () => new ArrayColumn(offsets, this.inner.fromValues(allInner)),
+    };
+  }
+
   zeroValue() { return []; }
   // 8 bytes per offset + assume average 5 elements per row
   estimateSize(rows: number) { return rows * 8 + this.inner.estimateSize(rows * 5); }
@@ -608,6 +737,25 @@ class NullableCodec implements Codec {
       }
     }
     return new NullableColumn(nullFlags, this.inner.fromValues(innerValues));
+  }
+
+  builder(size: number): ColumnBuilder {
+    const nullFlags = new Uint8Array(size);
+    const innerValues: unknown[] = new Array(size);
+    const zeroVal = this.inner.zeroValue();
+    let offset = 0;
+    return {
+      append: (v: unknown) => {
+        if (v === null || v === undefined) {
+          nullFlags[offset] = 1;
+          innerValues[offset] = zeroVal;
+        } else {
+          innerValues[offset] = v;
+        }
+        offset++;
+      },
+      finish: () => new NullableColumn(nullFlags, this.inner.fromValues(innerValues)),
+    };
   }
 
   zeroValue() { return null; }
@@ -725,6 +873,15 @@ class LowCardinalityCodec implements Codec {
     return this.inner.fromValues(values);
   }
 
+  builder(size: number): ColumnBuilder {
+    const values = new Array(size);
+    let offset = 0;
+    return {
+      append: (v: unknown) => { values[offset++] = v; },
+      finish: () => this.fromValues(values),
+    };
+  }
+
   zeroValue() { return this.inner.zeroValue(); }
 
   // key for low cardinality dictionary map
@@ -822,6 +979,33 @@ class MapCodec implements Codec {
     return new MapColumn(offsets, this.keyCodec.fromValues(keys), this.valCodec.fromValues(vals));
   }
 
+  builder(size: number): ColumnBuilder {
+    const keys: unknown[] = [];
+    const vals: unknown[] = [];
+    const offsets = new BigUint64Array(size);
+    let offset = 0n;
+    let rowIdx = 0;
+    return {
+      append: (m: any) => {
+        if (m instanceof Map) {
+          for (const [k, v] of m) { keys.push(k); vals.push(v); }
+          offset += BigInt(m.size);
+        } else if (Array.isArray(m)) {
+          for (const pair of m) {
+            if (Array.isArray(pair) && pair.length === 2) { keys.push(pair[0]); vals.push(pair[1]); }
+          }
+          offset += BigInt(m.length);
+        } else if (typeof m === "object" && m !== null) {
+          const entries = Object.entries(m);
+          for (const [k, v] of entries) { keys.push(k); vals.push(v); }
+          offset += BigInt(entries.length);
+        }
+        offsets[rowIdx++] = offset;
+      },
+      finish: () => new MapColumn(offsets, this.keyCodec.fromValues(keys), this.valCodec.fromValues(vals)),
+    };
+  }
+
   zeroValue() { return new Map(); }
   // 8 bytes per offset + assume average 3 entries per row
   estimateSize(rows: number) {
@@ -890,6 +1074,22 @@ class TupleCodec implements Codec {
       columns,
       this.isNamed
     );
+  }
+
+  builder(size: number): ColumnBuilder {
+    const builders = this.elements.map(e => e.codec.builder(size));
+    return {
+      append: (tuple: any) => {
+        for (let i = 0; i < this.elements.length; i++) {
+          builders[i].append(this.isNamed ? tuple[this.elements[i].name!] : tuple[i]);
+        }
+      },
+      finish: () => new TupleColumn(
+        this.elements.map(e => ({ name: e.name })),
+        builders.map(b => b.finish()),
+        this.isNamed
+      ),
+    };
   }
 
   zeroValue() { return []; }
@@ -973,6 +1173,15 @@ class VariantCodec implements Codec {
     }
 
     return new VariantColumn(discriminators, groups);
+  }
+
+  builder(size: number): ColumnBuilder {
+    const values = new Array(size);
+    let offset = 0;
+    return {
+      append: (v: unknown) => { values[offset++] = v; },
+      finish: () => this.fromValues(values),
+    };
   }
 
   zeroValue() { return null; }
@@ -1094,6 +1303,15 @@ class DynamicCodec implements Codec {
     return new DynamicColumn(typeOrder, discriminators, groups);
   }
 
+  builder(size: number): ColumnBuilder {
+    const values = new Array(size);
+    let offset = 0;
+    return {
+      append: (v: unknown) => { values[offset++] = v; },
+      finish: () => this.fromValues(values),
+    };
+  }
+
   zeroValue() { return null; }
   // Discriminators + type data (assume most values are strings)
   estimateSize(rows: number) {
@@ -1197,6 +1415,15 @@ class JsonCodec implements Codec {
     }
 
     return new JsonColumn(paths, pathColumns, values.length);
+  }
+
+  builder(size: number): ColumnBuilder {
+    const values = new Array(size);
+    let offset = 0;
+    return {
+      append: (v: unknown) => { values[offset++] = v; },
+      finish: () => this.fromValues(values),
+    };
   }
 
   zeroValue() { return {}; }
