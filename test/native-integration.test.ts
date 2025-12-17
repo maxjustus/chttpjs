@@ -497,6 +497,48 @@ describe("Native format integration", { timeout: 120000 }, () => {
     await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
   });
 
+  it("verifies Table ergonomics and virtual JSON paths", async () => {
+    const table = "test_native_ergonomics";
+    await consume(query(`DROP TABLE IF EXISTS ${table}`, sessionId, { baseUrl, auth }));
+    await consume(query(`
+      CREATE TABLE ${table} (
+        id Int32,
+        meta JSON
+      ) ENGINE = Memory
+    `, sessionId, { baseUrl, auth }));
+
+    const columns: ColumnDef[] = [
+      { name: "id", type: "Int32" },
+      { name: "meta", type: "JSON" },
+    ];
+    const rows = [
+      [1, { user: "alice", scores: [10, 20] }],
+      [2, { user: "bob", scores: [30] }],
+    ];
+
+    const encoded = encodeNative(columns, rows);
+    await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
+
+    const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native SETTINGS output_format_native_use_flattened_dynamic_and_json_serialization=1`, sessionId, { baseUrl, auth }));
+    const tableResult = await decodeNative(data);
+
+    // Verify row proxy access
+    const row0 = tableResult.get(0);
+    assert.strictEqual(row0.id, 1);
+    assert.deepStrictEqual((row0.meta as any).scores, [10n, 20n]);
+
+    // Verify virtual JSON path extraction
+    const metaCol = tableResult.columnData[1] as any; // JsonColumn
+    if (typeof metaCol.getPath === "function") {
+      const userCol = metaCol.getPath("user");
+      assert.ok(userCol);
+      assert.strictEqual(userCol.get(0), "alice");
+      assert.strictEqual(userCol.get(1), "bob");
+    }
+
+    await consume(query(`DROP TABLE ${table}`, sessionId, { baseUrl, auth }));
+  });
+
   it("round-trips JSON", async () => {
     const table = "test_native_json";
     await consume(query(`DROP TABLE IF EXISTS ${table}`, sessionId, { baseUrl, auth }));

@@ -89,8 +89,15 @@ class NumericCodec<T extends TypedArray> implements Codec {
   }
 
   encode(col: Column): Uint8Array {
-    const dc = col as DataColumn<T>;
-    return new Uint8Array(dc.data.buffer, dc.data.byteOffset, dc.data.byteLength);
+    const data = (col as any).data;
+    if (ArrayBuffer.isView(data) && !(data instanceof DataView)) {
+      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    }
+    // Fallback: column doesn't wrap a TypedArray (e.g. it's a virtual/sliced column)
+    const len = col.length;
+    const arr = new this.Ctor(len);
+    for (let i = 0; i < len; i++) arr[i] = col.get(i) as any;
+    return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
   decode(reader: BufferReader, rows: number): DataColumn<T> {

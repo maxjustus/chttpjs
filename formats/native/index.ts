@@ -43,8 +43,8 @@ export interface Block {
   rowCount: number;
 }
 
-/** @deprecated Use Block instead */
-export type ColumnarResult = Block;
+/** @deprecated Use Table instead */
+export type ColumnarResult = Table;
 
 export type StreamDecodeNativeResult = Table;
 
@@ -218,7 +218,7 @@ export async function decodeNative(
   data: Uint8Array,
   options?: DecodeOptions,
 ): Promise<Table> {
-  const blocks: Block[] = [];
+  const blocks: Table[] = [];
 
   // Wrap data in single-chunk async iterable and use streamDecodeNative
   async function* singleChunk() {
@@ -234,7 +234,7 @@ export async function decodeNative(
     return new Table({ columns: [], columnData: [], rowCount: 0 });
   }
   if (blocks.length === 1) {
-    return Table.from(blocks[0]);
+    return blocks[0];
   }
 
   return mergeBlocks(blocks);
@@ -275,7 +275,7 @@ export function mergeBlocks(blocks: (Block | Table)[]): Table {
 
   return new Table({
     columns,
-    columnData: merged.map(arr => new DataColumn(arr)),
+    columnData: merged.map((arr, i) => getCodec(columns[i].type).fromValues(arr)),
     rowCount: totalRows,
   });
 }
@@ -361,10 +361,39 @@ class StreamBuffer {
 }
 
 /**
+ * Helper to decode a block from a StreamBuffer with a stable slice.
+ */
+function decodeFromStream(streamBuffer: StreamBuffer, options?: DecodeOptions): BlockResult | null {
+  const buffer = streamBuffer.getReadView();
+  if (buffer.length === 0) return null;
+
+  const estimate = estimateBlockSize(buffer, 0);
+  if (estimate === null) return null;
+
+  // We try to decode if we have enough data according to the estimate.
+  // We use a stable copy to ensure virtual columns don't break on compaction.
+  if (buffer.length >= estimate.estimatedSize) {
+    const stableSlice = buffer.slice(0, estimate.estimatedSize);
+    try {
+      const block = decodeNativeBlock(stableSlice, 0, options);
+      streamBuffer.consume(block.bytesConsumed);
+      return block;
+    } catch {
+      // If decode failed even with enough estimated data, wait for more
+      return null;
+    }
+  }
+
+  // If we don't have enough data for the estimate, but the stream has potentially ended,
+  // we might still want to try. But streamDecodeNative handles the final cleanup.
+  return null;
+}
+
+/**
  * Lazily iterate rows as objects with column names as keys.
  * Allocates one object per row on demand.
  */
-export function* asRows(result: Block): Generator<Record<string, unknown>> {
+export function* asRows(result: Block | Table): Generator<Record<string, unknown>> {
   const { columns, columnData, rowCount } = result;
   const numCols = columns.length;
 
@@ -381,7 +410,7 @@ export function* asRows(result: Block): Generator<Record<string, unknown>> {
  * Convert columnar result to array rows.
  * Useful for re-encoding or comparison with original row arrays.
  */
-export function toArrayRows(result: Block): unknown[][] {
+export function toArrayRows(result: Block | Table): unknown[][] {
   const { columnData, rowCount } = result;
   const numCols = columnData.length;
 
@@ -399,7 +428,7 @@ export function toArrayRows(result: Block): unknown[][] {
 export async function* streamDecodeNative(
   chunks: AsyncIterable<Uint8Array>,
   options?: DecodeOptions & { debug?: boolean; minBufferSize?: number },
-): AsyncGenerator<Block> {
+): AsyncGenerator<Table> {
   const minBuffer = options?.minBufferSize ?? 2 * 1024 * 1024;
   const streamBuffer = new StreamBuffer(minBuffer);
   let columns: ColumnDef[] = [];
@@ -407,79 +436,42 @@ export async function* streamDecodeNative(
   let blocksDecoded = 0;
   let bufferUnderruns = 0;
 
-  // Track average block size to predict when we have enough data
-  let avgBlockSize = 0;
-  let totalBlockBytes = 0;
-
   for await (const chunk of chunks) {
     streamBuffer.append(chunk);
     totalBytesReceived += chunk.length;
 
-    // Skip decode attempt if we don't have enough data yet
-    const threshold = blocksDecoded > 0
-      ? Math.max(minBuffer / 4, avgBlockSize * 1.2)
-      : minBuffer;
-    if (streamBuffer.available < threshold) continue;
+    while (true) {
+      const block = decodeFromStream(streamBuffer, options);
+      if (!block) break;
 
-    // Try to decode as many complete blocks as possible
-    while (streamBuffer.available > 0) {
-      const buffer = streamBuffer.getReadView();
+      if (block.isEndMarker) continue;
 
-      // First, estimate if we have enough data
-      const estimate = estimateBlockSize(buffer, 0);
-      if (estimate === null || buffer.length < estimate.estimatedSize) {
-        break;
-      }
+      if (columns.length === 0) columns = block.columns;
+      blocksDecoded++;
+      yield Table.from({ columns, columnData: block.columnData, rowCount: block.rowCount });
+    }
+  }
 
-      try {
-        const block = decodeNativeBlock(buffer, 0, options);
+  // Final cleanup: try to decode whatever is left without the conservative estimate
+  let buffer = streamBuffer.getReadView();
+  while (buffer.length > 0) {
+    try {
+      // Use slice() to ensure stable columns even in the final blocks
+      const block = decodeNativeBlock(buffer.slice(), 0, options);
+      streamBuffer.consume(block.bytesConsumed);
+      buffer = streamBuffer.getReadView();
 
-        if (block.isEndMarker) {
-          streamBuffer.consume(block.bytesConsumed);
-          continue;
-        }
-
-        if (columns.length === 0) {
-          columns = block.columns;
-        }
-
-        totalBlockBytes += block.bytesConsumed;
-        streamBuffer.consume(block.bytesConsumed);
-        blocksDecoded++;
-        avgBlockSize = totalBlockBytes / blocksDecoded;
-        yield { columns, columnData: block.columnData, rowCount: block.rowCount };
-      } catch {
-        bufferUnderruns++;
-        break;
-      }
+      if (block.isEndMarker) continue;
+      if (columns.length === 0) columns = block.columns;
+      blocksDecoded++;
+      yield Table.from({ columns, columnData: block.columnData, rowCount: block.rowCount });
+    } catch {
+      break;
     }
   }
 
   if (options?.debug) {
     console.log(`[streamDecodeNative] ${blocksDecoded} blocks, ${totalBytesReceived} bytes, ${bufferUnderruns} underruns`);
-  }
-
-  // Handle any remaining data after stream ends
-  while (streamBuffer.available > 0) {
-    const buffer = streamBuffer.getReadView();
-    try {
-      const block = decodeNativeBlock(buffer, 0, options);
-      if (block.isEndMarker) {
-        streamBuffer.consume(block.bytesConsumed);
-        continue;
-      }
-
-      if (columns.length === 0) columns = block.columns;
-      streamBuffer.consume(block.bytesConsumed);
-      blocksDecoded++;
-      yield { columns, columnData: block.columnData, rowCount: block.rowCount };
-    } catch (e) {
-      const remainingBytes = streamBuffer.available;
-      if (remainingBytes > 100) {
-        throw new Error(`Native decode error (${remainingBytes} bytes remaining, ${blocksDecoded} blocks decoded): ${e}`);
-      }
-      break;
-    }
   }
 }
 
@@ -492,7 +484,7 @@ export async function* streamDecodeNative(
  * }
  */
 export async function* streamNativeRows(
-  blocks: AsyncIterable<Block>,
+  blocks: AsyncIterable<Table>,
 ): AsyncGenerator<Record<string, unknown>> {
   for await (const block of blocks) {
     yield* asRows(block);
@@ -510,7 +502,7 @@ export async function* streamNativeRows(
  *   session, config);
  */
 export async function* streamEncodeNativeColumnar(
-  blocks: AsyncIterable<Block>,
+  blocks: AsyncIterable<Table>,
 ): AsyncGenerator<Uint8Array> {
   for await (const block of blocks) {
     yield encodeNativeColumnar(block.columns, block.columnData, block.rowCount);

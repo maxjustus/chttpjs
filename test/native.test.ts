@@ -3,6 +3,7 @@ import assert from "node:assert";
 import {
   encodeNative,
   decodeNative,
+  Table,
   streamEncodeNative,
   streamDecodeNative,
   toArrayRows,
@@ -31,6 +32,7 @@ describe("encodeNative", () => {
     assert.ok(encoded.length > 0);
 
     const decoded = await decodeNative(encoded);
+    assert.ok(decoded instanceof Table);
     assert.deepStrictEqual(decoded.columns, columns);
     assert.strictEqual(decoded.rowCount, 0);
   });
@@ -39,10 +41,20 @@ describe("encodeNative", () => {
     const columns: ColumnDef[] = [{ name: "id", type: "Int32" }];
     const rows = [[1], [2], [3]];
     const encoded = encodeNative(columns, rows);
-    const decoded = await decodeNative(encoded);
+    const table = await decodeNative(encoded);
 
-    assert.deepStrictEqual(decoded.columns, columns);
-    assert.deepStrictEqual(toArrayRows(decoded), [[1], [2], [3]]);
+    assert.ok(table instanceof Table);
+    assert.deepStrictEqual(table.columns, columns);
+    
+    // Test lazy iteration
+    const resultRows = [];
+    for (const row of table) {
+      resultRows.push([row.id]);
+    }
+    assert.deepStrictEqual(resultRows, [[1], [2], [3]]);
+    
+    // Test toArrayRows helper
+    assert.deepStrictEqual(toArrayRows(table), [[1], [2], [3]]);
   });
 
   it("encodes multiple columns", async () => {
@@ -56,10 +68,17 @@ describe("encodeNative", () => {
       [2, "bob", 2.5],
     ];
     const encoded = encodeNative(columns, rows);
-    const decoded = await decodeNative(encoded);
+    const table = await decodeNative(encoded);
 
-    assert.deepStrictEqual(decoded.columns, columns);
-    assert.deepStrictEqual(toArrayRows(decoded), rows);
+    assert.deepStrictEqual(table.columns, columns);
+    
+    // Test row proxy access
+    const row0 = table.get(0);
+    assert.strictEqual(row0.id, 1);
+    assert.strictEqual(row0.name, "alice");
+    assert.strictEqual(row0.score, 1.5);
+    
+    assert.deepStrictEqual(toArrayRows(table), rows);
   });
 
   it("encodes all integer types", async () => {
@@ -237,6 +256,8 @@ describe("streamDecodeNative", () => {
     const results = await collect(streamDecodeNative(toAsync([block1, block2])));
 
     assert.strictEqual(results.length, 2);
+    assert.ok(results[0] instanceof Table);
+    assert.ok(results[1] instanceof Table);
     assert.deepStrictEqual(toArrayRows(results[0]), [[1], [2]]);
     assert.deepStrictEqual(toArrayRows(results[1]), [[3], [4]]);
   });
@@ -253,6 +274,7 @@ describe("streamDecodeNative", () => {
     const results = await collect(streamDecodeNative(toAsync([chunk1, chunk2, chunk3])));
 
     assert.strictEqual(results.length, 1);
+    assert.ok(results[0] instanceof Table);
     assert.deepStrictEqual(toArrayRows(results[0]), [[1], [2], [3]]);
   });
 });

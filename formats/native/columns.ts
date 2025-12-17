@@ -32,15 +32,10 @@ export interface Column extends Iterable<unknown> {
   readonly length: number;
   /** Get value at index. */
   get(index: number): unknown;
-  /** 
-   * Materialize all values. 
-   * Returns the underlying TypedArray directly for numeric columns (zero-copy).
-   */
-  toArray(): unknown[] | TypedArray;
 }
 
 /**
- * Common implementation for iteration and materialization.
+ * Common implementation for iteration.
  */
 abstract class AbstractColumn implements Column {
   abstract readonly length: number;
@@ -50,12 +45,6 @@ abstract class AbstractColumn implements Column {
     for (let i = 0; i < this.length; i++) {
       yield this.get(i);
     }
-  }
-
-  toArray(): unknown[] | TypedArray {
-    const result = new Array(this.length);
-    for (let i = 0; i < this.length; i++) result[i] = this.get(i);
-    return result;
   }
 }
 
@@ -71,11 +60,6 @@ export class DataColumn<T extends TypedArray | unknown[]> extends AbstractColumn
 
   get(index: number): unknown {
     return this.data[index];
-  }
-
-  /** returns the underlying TypedArray or Array directly (zero-copy) */
-  toArray(): T {
-    return this.data;
   }
 }
 
