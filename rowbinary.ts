@@ -460,6 +460,9 @@ const SCALAR_CODECS: Record<string, Codec> = {
     encode: (e, v) => {
       e.ensure(16);
       const str = v as string;
+      if (str.length !== 36) {
+        throw new Error(`Invalid UUID length ${str.length}, expected 36 (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)`);
+      }
       const ptr = e.offset;
       // First 8 bytes (reversed) - hyphens at positions 8, 13
       for (let i = 0; i < 8; i++) {
@@ -503,10 +506,14 @@ const SCALAR_CODECS: Record<string, Codec> = {
   IPv4: {
     encode: (e, v) => {
       const s = v as string;
+      if (s.length < 7 || s.length > 15) { // "0.0.0.0" to "255.255.255.255"
+        throw new Error(`Invalid IPv4 address length ${s.length}`);
+      }
       let val = 0, pos = 0;
       for (let i = 0; i < 4; i++) {
         let num = 0, ch = s.charCodeAt(pos);
-        while (ch >= 48 && ch <= 57) { num = num * 10 + (ch - 48); ch = s.charCodeAt(++pos); }
+        while (pos < s.length && ch >= 48 && ch <= 57) { num = num * 10 + (ch - 48); ch = s.charCodeAt(++pos); }
+        if (num > 255) throw new Error(`Invalid IPv4 octet value ${num}`);
         pos++; // skip dot
         val = (val << 8) | num;
       }
