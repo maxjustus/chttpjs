@@ -47,11 +47,512 @@ export { type ColumnDef, type DecodeResult, type DecodeOptions, ClickHouseDateTi
 
 export interface ColumnarResult {
   columns: ColumnDef[];
-  columnData: (unknown[] | TypedArray)[];  // columnData[colIndex][rowIndex]
+  columnData: Column[];  // columnData[colIndex]
   rowCount: number;
 }
 
 export type StreamDecodeNativeResult = ColumnarResult;
+
+// ============================================================================
+// Column Classes
+// ============================================================================
+
+type TypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | BigInt64Array | BigUint64Array | Float32Array | Float64Array;
+
+/**
+ * Base interface for all column types.
+ */
+export interface BaseColumn {
+  readonly length: number;
+  get(i: number): unknown;
+  slice(start: number, end: number): BaseColumn;
+  materialize(): unknown[] | TypedArray;
+}
+
+/**
+ * Recursively materialize a value to plain JS.
+ * Called by column.materialize() implementations.
+ */
+function materializeValue(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+
+  // If it's a column (has materialize method), materialize it
+  if (value && typeof (value as any).materialize === 'function') {
+    return (value as BaseColumn).materialize();
+  }
+
+  // Map - preserve as Map with materialized entries
+  if (value instanceof Map) {
+    const result = new Map();
+    for (const [k, v] of value) {
+      result.set(materializeValue(k), materializeValue(v));
+    }
+    return result;
+  }
+
+  // Array - materialize each element
+  if (Array.isArray(value)) {
+    return value.map(materializeValue);
+  }
+
+  // Object (like tuple result) - materialize values
+  if (typeof value === 'object' && !(value instanceof Date) && !ArrayBuffer.isView(value)) {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      result[k] = materializeValue(v);
+    }
+    return result;
+  }
+
+  // Primitives, Date, TypedArray - pass through
+  return value;
+}
+
+/**
+ * Wraps a TypedArray as a column with the BaseColumn interface.
+ */
+export class TypedColumn<T extends TypedArray> implements BaseColumn {
+  readonly data: T;
+
+  constructor(data: T) {
+    this.data = data;
+  }
+
+  get length() { return this.data.length; }
+
+  get(i: number): number | bigint {
+    return this.data[i];
+  }
+
+  slice(start: number, end: number): TypedColumn<T> {
+    return new TypedColumn(this.data.slice(start, end) as T);
+  }
+
+  materialize(): T {
+    return this.data;
+  }
+}
+
+/**
+ * Columnar tuple - stores each element as a separate column.
+ */
+export class TupleColumn implements BaseColumn {
+  readonly elements: { name: string | null }[];
+  readonly columns: Column[];
+  readonly isNamed: boolean;
+
+  constructor(
+    elements: { name: string | null }[],
+    columns: Column[],
+    isNamed: boolean
+  ) {
+    this.elements = elements;
+    this.columns = columns;
+    this.isNamed = isNamed;
+  }
+
+  get length(): number {
+    return this.columns[0].length;
+  }
+
+  get(i: number): unknown {
+    if (this.isNamed) {
+      const obj: Record<string, unknown> = {};
+      for (let j = 0; j < this.elements.length; j++) {
+        obj[this.elements[j].name!] = this.columns[j].get(i);
+      }
+      return obj;
+    }
+    return this.columns.map(c => c.get(i));
+  }
+
+  slice(start: number, end: number): TupleColumn {
+    return new TupleColumn(
+      this.elements,
+      this.columns.map(c => c.slice(start, end)),
+      this.isNamed
+    );
+  }
+
+  materialize(): unknown[] {
+    const result = new Array(this.length);
+    for (let i = 0; i < this.length; i++) {
+      result[i] = materializeValue(this.get(i));
+    }
+    return result;
+  }
+}
+
+/**
+ * Columnar map - stores keys and values as separate columns with offsets.
+ */
+export class MapColumn implements BaseColumn {
+  readonly offsets: BigUint64Array;
+  readonly keys: Column;
+  readonly values: Column;
+  private mapAsArray: boolean;
+
+  constructor(
+    offsets: BigUint64Array,
+    keys: Column,
+    values: Column,
+    mapAsArray = false
+  ) {
+    this.offsets = offsets;
+    this.keys = keys;
+    this.values = values;
+    this.mapAsArray = mapAsArray;
+  }
+
+  get length(): number {
+    return this.offsets.length;
+  }
+
+  get(i: number): Map<unknown, unknown> | [unknown, unknown][] {
+    const start = i === 0 ? 0 : Number(this.offsets[i - 1]);
+    const end = Number(this.offsets[i]);
+
+    if (this.mapAsArray) {
+      const entries: [unknown, unknown][] = [];
+      for (let j = start; j < end; j++) {
+        entries.push([this.keys.get(j), this.values.get(j)]);
+      }
+      return entries;
+    }
+
+    const map = new Map<unknown, unknown>();
+    for (let j = start; j < end; j++) {
+      map.set(this.keys.get(j), this.values.get(j));
+    }
+    return map;
+  }
+
+  slice(start: number, end: number): MapColumn {
+    const startOffset = start === 0 ? 0 : Number(this.offsets[start - 1]);
+    const endOffset = Number(this.offsets[end - 1]);
+
+    // Adjust offsets for the slice
+    const newOffsets = new BigUint64Array(end - start);
+    for (let i = 0; i < newOffsets.length; i++) {
+      newOffsets[i] = this.offsets[start + i] - BigInt(startOffset);
+    }
+
+    return new MapColumn(
+      newOffsets,
+      this.keys.slice(startOffset, endOffset),
+      this.values.slice(startOffset, endOffset),
+      this.mapAsArray
+    );
+  }
+
+  materialize(): unknown[] {
+    const result = new Array(this.length);
+    for (let i = 0; i < this.length; i++) {
+      result[i] = materializeValue(this.get(i));
+    }
+    return result;
+  }
+}
+
+/**
+ * Columnar variant - stores discriminators and grouped values by type.
+ */
+export class VariantColumn implements BaseColumn {
+  readonly discriminators: Uint8Array;
+  readonly groups: Map<number, Column>;
+  private groupIndices: Uint32Array;
+
+  constructor(
+    discriminators: Uint8Array,
+    groups: Map<number, Column>
+  ) {
+    this.discriminators = discriminators;
+    this.groups = groups;
+
+    // Precompute group indices for O(1) access
+    this.groupIndices = new Uint32Array(discriminators.length);
+    const counters = new Map<number, number>();
+    for (let i = 0; i < discriminators.length; i++) {
+      const d = discriminators[i];
+      if (d !== 0xFF) {
+        this.groupIndices[i] = counters.get(d) || 0;
+        counters.set(d, (counters.get(d) || 0) + 1);
+      }
+    }
+  }
+
+  get length(): number {
+    return this.discriminators.length;
+  }
+
+  get(i: number): [number, unknown] | null {
+    const d = this.discriminators[i];
+    if (d === 0xFF) return null;
+    const groupIdx = this.groupIndices[i];
+    return [d, this.groups.get(d)!.get(groupIdx)];
+  }
+
+  slice(start: number, end: number): VariantColumn {
+    const newDiscs = this.discriminators.slice(start, end);
+    // Rebuild groups for the slice - use SimpleColumn for collected values
+    const groupValues = new Map<number, unknown[]>();
+    for (let i = start; i < end; i++) {
+      const d = this.discriminators[i];
+      if (d !== 0xFF) {
+        if (!groupValues.has(d)) groupValues.set(d, []);
+        groupValues.get(d)!.push(this.groups.get(d)!.get(this.groupIndices[i]));
+      }
+    }
+    const newGroups = new Map<number, Column>();
+    for (const [d, values] of groupValues) {
+      newGroups.set(d, new SimpleColumn(values));
+    }
+    return new VariantColumn(newDiscs, newGroups);
+  }
+
+  materialize(): unknown[] {
+    const result = new Array(this.length);
+    for (let i = 0; i < this.length; i++) {
+      const v = this.get(i);
+      result[i] = v ? [v[0], materializeValue(v[1])] : null;
+    }
+    return result;
+  }
+}
+
+/**
+ * Columnar dynamic - similar to variant but discriminator size varies.
+ */
+export class DynamicColumn implements BaseColumn {
+  readonly types: string[];
+  readonly discriminators: Uint8Array | Uint16Array | Uint32Array;
+  readonly groups: Map<number, Column>;
+  private groupIndices: Uint32Array;
+  private nullDisc: number;
+
+  constructor(
+    types: string[],
+    discriminators: Uint8Array | Uint16Array | Uint32Array,
+    groups: Map<number, Column>
+  ) {
+    this.types = types;
+    this.discriminators = discriminators;
+    this.groups = groups;
+    this.nullDisc = types.length;
+
+    // Precompute group indices
+    this.groupIndices = new Uint32Array(discriminators.length);
+    const counters = new Map<number, number>();
+    for (let i = 0; i < discriminators.length; i++) {
+      const d = discriminators[i];
+      if (d !== this.nullDisc) {
+        this.groupIndices[i] = counters.get(d) || 0;
+        counters.set(d, (counters.get(d) || 0) + 1);
+      }
+    }
+  }
+
+  get length(): number {
+    return this.discriminators.length;
+  }
+
+  get(i: number): unknown {
+    const d = this.discriminators[i];
+    if (d === this.nullDisc) return null;
+    const groupIdx = this.groupIndices[i];
+    return this.groups.get(d)!.get(groupIdx);
+  }
+
+  slice(start: number, end: number): DynamicColumn {
+    type DiscriminatorArray = Uint8Array | Uint16Array | Uint32Array;
+    const DiscCtor = this.discriminators.constructor as { new(len: number): DiscriminatorArray };
+    const newDiscs = new DiscCtor(end - start);
+    for (let i = 0; i < end - start; i++) {
+      newDiscs[i] = this.discriminators[start + i];
+    }
+    // Rebuild groups for the slice
+    const groupValues = new Map<number, unknown[]>();
+    for (let i = start; i < end; i++) {
+      const d = this.discriminators[i];
+      if (d !== this.nullDisc) {
+        if (!groupValues.has(d)) groupValues.set(d, []);
+        groupValues.get(d)!.push(this.groups.get(d)!.get(this.groupIndices[i]));
+      }
+    }
+    const newGroups = new Map<number, Column>();
+    for (const [d, values] of groupValues) {
+      newGroups.set(d, new SimpleColumn(values));
+    }
+    return new DynamicColumn(this.types, newDiscs, newGroups);
+  }
+
+  materialize(): unknown[] {
+    const result = new Array(this.length);
+    for (let i = 0; i < this.length; i++) {
+      result[i] = materializeValue(this.get(i));
+    }
+    return result;
+  }
+}
+
+/**
+ * Columnar JSON - stores paths with dynamic columns for each.
+ */
+export class JsonColumn implements BaseColumn {
+  readonly paths: string[];
+  readonly pathColumns: Map<string, DynamicColumn>;
+  private _length: number;
+
+  constructor(paths: string[], pathColumns: Map<string, DynamicColumn>, length: number) {
+    this.paths = paths;
+    this.pathColumns = pathColumns;
+    this._length = length;
+  }
+
+  get length(): number {
+    return this._length;
+  }
+
+  get(i: number): Record<string, unknown> {
+    const obj: Record<string, unknown> = {};
+    for (const path of this.paths) {
+      const val = this.pathColumns.get(path)!.get(i);
+      if (val !== null) obj[path] = val;
+    }
+    return obj;
+  }
+
+  slice(start: number, end: number): JsonColumn {
+    const newPathColumns = new Map<string, DynamicColumn>();
+    for (const [path, col] of this.pathColumns) {
+      newPathColumns.set(path, col.slice(start, end));
+    }
+    return new JsonColumn(this.paths, newPathColumns, end - start);
+  }
+
+  materialize(): unknown[] {
+    const result = new Array(this.length);
+    for (let i = 0; i < this.length; i++) {
+      result[i] = materializeValue(this.get(i));
+    }
+    return result;
+  }
+}
+
+/**
+ * Generic simple column - wraps an array of values.
+ * Used for String, Bytes, Date, DateTime64, Scalar (Decimal, Int128, etc.).
+ */
+export class SimpleColumn<T> implements BaseColumn {
+  readonly values: T[];
+
+  constructor(values: T[]) {
+    this.values = values;
+  }
+
+  get length() { return this.values.length; }
+
+  get(i: number): T {
+    return this.values[i];
+  }
+
+  slice(start: number, end: number): SimpleColumn<T> {
+    return new SimpleColumn(this.values.slice(start, end));
+  }
+
+  materialize(): T[] {
+    return this.values.slice();
+  }
+}
+
+// Type aliases for backwards compatibility and readability
+export type StringColumn = SimpleColumn<string>;
+export type BytesColumn = SimpleColumn<Uint8Array>;
+export type DateColumn = SimpleColumn<Date>;
+export type DateTime64Column = SimpleColumn<ClickHouseDateTime64>;
+export type ScalarColumn = SimpleColumn<unknown>;
+
+/**
+ * Nullable column for non-float types.
+ * Wraps an inner column with null flags.
+ * Inner column has same length as nullFlags (includes placeholder values at null positions).
+ */
+export class NullableColumn implements BaseColumn {
+  readonly nullFlags: Uint8Array;
+  readonly inner: Column;
+
+  constructor(nullFlags: Uint8Array, inner: Column) {
+    this.nullFlags = nullFlags;
+    this.inner = inner;
+  }
+
+  get length() { return this.nullFlags.length; }
+
+  get(i: number): unknown {
+    if (this.nullFlags[i]) return null;
+    return this.inner.get(i);
+  }
+
+  slice(start: number, end: number): NullableColumn {
+    return new NullableColumn(
+      this.nullFlags.slice(start, end),
+      this.inner.slice(start, end)
+    );
+  }
+
+  materialize(): unknown[] {
+    const result = new Array(this.length);
+    for (let i = 0; i < this.length; i++) {
+      const v = this.get(i);
+      result[i] = v === null ? null : materializeValue(v);
+    }
+    return result;
+  }
+}
+
+/**
+ * Array column - stores offsets and inner column.
+ */
+export class ArrayColumn implements BaseColumn {
+  readonly offsets: BigUint64Array;
+  readonly inner: Column;
+
+  constructor(offsets: BigUint64Array, inner: Column) {
+    this.offsets = offsets;
+    this.inner = inner;
+  }
+
+  get length() { return this.offsets.length; }
+
+  get(i: number): Column {
+    const start = i === 0 ? 0 : Number(this.offsets[i - 1]);
+    const end = Number(this.offsets[i]);
+    return this.inner.slice(start, end);
+  }
+
+  slice(start: number, end: number): ArrayColumn {
+    const startOffset = start === 0 ? 0 : Number(this.offsets[start - 1]);
+    const endOffset = Number(this.offsets[end - 1]);
+
+    const newOffsets = new BigUint64Array(end - start);
+    for (let i = 0; i < newOffsets.length; i++) {
+      newOffsets[i] = this.offsets[start + i] - BigInt(startOffset);
+    }
+
+    return new ArrayColumn(newOffsets, this.inner.slice(startOffset, endOffset));
+  }
+
+  materialize(): unknown[] {
+    const result = new Array(this.length);
+    for (let i = 0; i < this.length; i++) {
+      result[i] = materializeValue(this.get(i));
+    }
+    return result;
+  }
+}
+
+// TODO: why bother with this alias?
+export type Column = BaseColumn;
 
 const MS_PER_DAY = 86400000;
 const MS_PER_SECOND = 1000;
@@ -190,15 +691,15 @@ class BufferReader {
 }
 
 interface Codec {
-  encode(values: unknown[] | TypedArray): Uint8Array;
-  decode(reader: BufferReader, rows: number): unknown[] | TypedArray;
-  // nested types need to handle prefix writing/reading - IE: metadata about the column data block that follows
-  // which will impact/influence how the column data is encoded/decoded.
-  writePrefix?(writer: BufferWriter, values: unknown[] | TypedArray): void;
+  encode(col: Column): Uint8Array;
+  decode(reader: BufferReader, rows: number): Column;
+  fromValues(values: unknown[]): Column;
+  zeroValue(): unknown;
+  // Nested types need to handle prefix writing/reading
+  writePrefix?(writer: BufferWriter, col: Column): void;
   readPrefix?(reader: BufferReader): void;
 }
 
-type TypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | BigInt64Array | BigUint64Array | Float32Array | Float64Array;
 type TypedArrayConstructor<T extends TypedArray> = {
   new(length: number): T;
   new(buffer: ArrayBuffer, byteOffset?: number, length?: number): T;
@@ -213,52 +714,67 @@ class NumericCodec<T extends TypedArray> implements Codec {
     this.converter = converter;
   }
 
-  encode(values: unknown[]): Uint8Array {
-    // Fast path: input is already correct TypedArray
-    if (values instanceof this.Ctor) {
-      return new Uint8Array(values.buffer, values.byteOffset, values.byteLength);
+  encode(col: Column): Uint8Array {
+    // Fast path: input is TypedColumn with correct underlying type
+    if (col instanceof TypedColumn && col.data instanceof this.Ctor) {
+      return new Uint8Array(col.data.buffer, col.data.byteOffset, col.data.byteLength);
     }
-
-    const arr = new this.Ctor(values.length);
-
+    // Slow path: convert from any Column type
+    const len = col.length;
+    const arr = new this.Ctor(len);
     if (this.converter) {
-      for (let i = 0; i < values.length; i++) arr[i] = this.converter(values[i]) as any;
-      return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+      for (let i = 0; i < len; i++) arr[i] = this.converter(col.get(i)) as any;
+    } else {
+      for (let i = 0; i < len; i++) arr[i] = col.get(i) as any;
     }
-
-    // TypedArray assignment normalizes NaN to canonical form
-    for (let i = 0; i < values.length; i++) arr[i] = values[i] as any;
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): T {
-    // Return TypedArray directly - faster (no spread copy) and preserves NaN bit patterns
-    return reader.readTypedArray(this.Ctor, rows);
+  decode(reader: BufferReader, rows: number): TypedColumn<T> {
+    return new TypedColumn(reader.readTypedArray(this.Ctor, rows));
   }
+
+  fromValues(values: unknown[]): TypedColumn<T> {
+    const arr = new this.Ctor(values.length);
+    if (this.converter) {
+      for (let i = 0; i < values.length; i++) arr[i] = this.converter(values[i]) as any;
+    } else {
+      for (let i = 0; i < values.length; i++) arr[i] = values[i] as any;
+    }
+    return new TypedColumn(arr);
+  }
+
+  zeroValue() { return 0; }
 }
 
 class StringCodec implements Codec {
-  encode(values: unknown[]): Uint8Array {
+  encode(col: Column): Uint8Array {
     const writer = new BufferWriter();
-    // thought/question: lets say values is already an array of UInt8Array, we could
-    // optimize for that case maybe?
-    for (const v of values) writer.writeString(String(v));
+    for (let i = 0; i < col.length; i++) {
+      writer.writeString(String(col.get(i)));
+    }
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
-    const res = new Array(rows).fill('');
-    for (let i = 0; i < rows; i++) res[i] = reader.readString();
-    return res;
+  decode(reader: BufferReader, rows: number): StringColumn {
+    const values: string[] = new Array(rows);
+    for (let i = 0; i < rows; i++) values[i] = reader.readString();
+    return new SimpleColumn(values);
   }
+
+  fromValues(values: unknown[]): StringColumn {
+    return new SimpleColumn(values.map(v => String(v ?? "")));
+  }
+
+  zeroValue() { return ""; }
 }
 
 class UUIDCodec implements Codec {
-  encode(values: unknown[]): Uint8Array {
-    const buf = new Uint8Array(values.length * 16);
+  encode(col: Column): Uint8Array {
+    const buf = new Uint8Array(col.length * 16);
 
-    for (let i = 0; i < values.length; i++) {
-      const u = values[i] as string;
+    for (let i = 0; i < col.length; i++) {
+      const u = String(col.get(i));
       const clean = u.replace(/-/g, '');
       const bytes = new Uint8Array(16);
       for (let j = 0; j < 16; j++) bytes[j] = parseInt(clean.substring(j * 2, j * 2 + 2), 16);
@@ -271,8 +787,8 @@ class UUIDCodec implements Codec {
     return buf;
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
-    const res = new Array(rows).fill('00000000-0000-0000-0000-000000000000'); // zero value of UUID
+  decode(reader: BufferReader, rows: number): StringColumn {
+    const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const b = reader.buffer.subarray(reader.offset, reader.offset + 16);
       reader.offset += 16;
@@ -282,10 +798,16 @@ class UUIDCodec implements Codec {
       for (let j = 0; j < 8; j++) bytes[15 - j] = b[8 + j];
 
       const hex = Array.from(bytes).map(x => x.toString(16).padStart(2, '0')).join('');
-      res[i] = `${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}`;
+      values[i] = `${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}`;
     }
-    return res;
+    return new SimpleColumn(values);
   }
+
+  fromValues(values: unknown[]): StringColumn {
+    return new SimpleColumn(values.map(v => String(v ?? "")));
+  }
+
+  zeroValue() { return "00000000-0000-0000-0000-000000000000"; }
 }
 
 class FixedStringCodec implements Codec {
@@ -294,12 +816,13 @@ class FixedStringCodec implements Codec {
     this.len = len;
   }
 
-  encode(values: unknown[]): Uint8Array {
-    const buf = new Uint8Array(values.length * this.len);
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i];
-      if (v instanceof Uint8Array) buf.set(v.subarray(0, this.len), i * this.len);
-      else {
+  encode(col: Column): Uint8Array {
+    const buf = new Uint8Array(col.length * this.len);
+    for (let i = 0; i < col.length; i++) {
+      const v = col.get(i);
+      if (v instanceof Uint8Array) {
+        buf.set(v.subarray(0, this.len), i * this.len);
+      } else {
         const bytes = TEXT_ENCODER.encode(String(v));
         buf.set(bytes.subarray(0, this.len), i * this.len);
       }
@@ -307,14 +830,34 @@ class FixedStringCodec implements Codec {
     return buf;
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
-    const res = new Array(rows).fill(null);
+  decode(reader: BufferReader, rows: number): BytesColumn {
+    const values: Uint8Array[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
-      res[i] = reader.buffer.slice(reader.offset, reader.offset + this.len);
+      values[i] = reader.buffer.slice(reader.offset, reader.offset + this.len);
       reader.offset += this.len;
     }
-    return res;
+    return new SimpleColumn(values);
   }
+
+  fromValues(values: unknown[]): BytesColumn {
+    const result: Uint8Array[] = new Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      if (v instanceof Uint8Array) {
+        result[i] = v;
+      } else if (typeof v === "string") {
+        const buf = new Uint8Array(this.len);
+        const encoded = TEXT_ENCODER.encode(v);
+        buf.set(encoded.subarray(0, this.len));
+        result[i] = buf;
+      } else {
+        result[i] = new Uint8Array(this.len);
+      }
+    }
+    return new SimpleColumn(result);
+  }
+
+  zeroValue() { return new Uint8Array(this.len); }
 }
 
 class ScalarCodec implements Codec {
@@ -324,25 +867,32 @@ class ScalarCodec implements Codec {
     this.codec = createRowBinaryCodec(type);
   }
 
-  encode(values: unknown[]): Uint8Array {
+  encode(col: Column): Uint8Array {
+    const values = col as ScalarColumn;
     const encoder = new RowBinaryEncoder();
-    for (const v of values) {
-      this.codec.encode(encoder, v);
+    for (let i = 0; i < values.length; i++) {
+      this.codec.encode(encoder, values.get(i));
     }
     return encoder.finish();
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
-    const res = new Array(rows).fill(null);
+  decode(reader: BufferReader, rows: number): ScalarColumn {
+    const values: unknown[] = new Array(rows);
     const view = reader.view;
     const data = reader.buffer;
     const cursor = { offset: reader.offset };
     for (let i = 0; i < rows; i++) {
-      res[i] = this.codec.decode(view, data, cursor);
+      values[i] = this.codec.decode(view, data, cursor);
     }
     reader.offset = cursor.offset;
-    return res;
+    return new SimpleColumn(values);
   }
+
+  fromValues(values: unknown[]): ScalarColumn {
+    return new SimpleColumn(values);
+  }
+
+  zeroValue() { return 0; }
 }
 
 class DateTime64Codec implements Codec {
@@ -351,10 +901,10 @@ class DateTime64Codec implements Codec {
     this.precision = precision;
   }
 
-  encode(values: unknown[]): Uint8Array {
-    const arr = new BigInt64Array(values.length);
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i];
+  encode(col: Column): Uint8Array {
+    const arr = new BigInt64Array(col.length);
+    for (let i = 0; i < col.length; i++) {
+      const v = col.get(i);
       if (v instanceof ClickHouseDateTime64) {
         arr[i] = v.ticks;
       } else if (typeof v === 'bigint') {
@@ -370,14 +920,36 @@ class DateTime64Codec implements Codec {
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
+  decode(reader: BufferReader, rows: number): DateTime64Column {
     const arr = reader.readTypedArray(BigInt64Array, rows);
-    const res = new Array(rows).fill(null);
+    const values: ClickHouseDateTime64[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
-      res[i] = new ClickHouseDateTime64(arr[i], this.precision);
+      values[i] = new ClickHouseDateTime64(arr[i], this.precision);
     }
-    return res;
+    return new SimpleColumn(values);
   }
+
+  fromValues(values: unknown[]): DateTime64Column {
+    const result: ClickHouseDateTime64[] = new Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i] as any;
+      if (v instanceof ClickHouseDateTime64) {
+        result[i] = v;
+      } else if (v instanceof Date) {
+        const ms = BigInt(v.getTime());
+        const scale = 10n ** BigInt(Math.abs(this.precision - 3));
+        const ticks = this.precision >= 3 ? ms * scale : ms / scale;
+        result[i] = new ClickHouseDateTime64(ticks, this.precision);
+      } else if (typeof v === "bigint") {
+        result[i] = new ClickHouseDateTime64(v, this.precision);
+      } else {
+        result[i] = new ClickHouseDateTime64(0n, this.precision);
+      }
+    }
+    return new SimpleColumn(result);
+  }
+
+  zeroValue() { return new Date(0); }
 }
 
 // handles Date, Date32, DateTime (ms since epoch / multiplier)
@@ -390,174 +962,150 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
     this.multiplier = multiplier;
   }
 
-  encode(values: unknown[]): Uint8Array {
-    const arr = new this.Ctor(values.length);
-    for (let i = 0; i < values.length; i++) {
-      // new Date() over every value even if that value is already a date?
-      arr[i] = Math.floor(new Date(values[i] as any).getTime() / this.multiplier) as any;
+  encode(col: Column): Uint8Array {
+    const arr = new this.Ctor(col.length);
+    for (let i = 0; i < col.length; i++) {
+      const v = col.get(i);
+      arr[i] = Math.floor(new Date(v as any).getTime() / this.multiplier) as any;
     }
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
+  decode(reader: BufferReader, rows: number): DateColumn {
     const arr = reader.readTypedArray(this.Ctor, rows);
-    const res = new Array(rows).fill(null);
+    const values: Date[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
-      res[i] = new Date((arr[i] as number) * this.multiplier);
+      values[i] = new Date((arr[i] as number) * this.multiplier);
     }
-    return res;
+    return new SimpleColumn(values);
   }
+
+  fromValues(values: unknown[]): DateColumn {
+    const result: Date[] = new Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      if (v instanceof Date) {
+        result[i] = v;
+      } else if (typeof v === "number") {
+        result[i] = new Date(v);
+      } else {
+        result[i] = new Date(0);
+      }
+    }
+    return new SimpleColumn(result);
+  }
+
+  zeroValue() { return new Date(0); }
 }
 
 class IPv4Codec implements Codec {
-  encode(values: unknown[]): Uint8Array {
-    const arr = new Uint32Array(values.length);
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i];
-      if (typeof v === 'string') {
-        const parts = v.split('.').map(Number);
-        arr[i] = (parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24)) >>> 0;
-      } else {
-        arr[i] = v as number;
-      }
+  encode(col: Column): Uint8Array {
+    const arr = new Uint32Array(col.length);
+    for (let i = 0; i < col.length; i++) {
+      const v = String(col.get(i));
+      const parts = v.split('.').map(Number);
+      arr[i] = (parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24)) >>> 0;
     }
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): string[] {
+  decode(reader: BufferReader, rows: number): StringColumn {
     const arr = reader.readTypedArray(Uint32Array, rows);
-    const res = new Array(rows).fill('');
+    const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const v = arr[i];
-      res[i] = `${v & 0xFF}.${(v >> 8) & 0xFF}.${(v >> 16) & 0xFF}.${(v >> 24) & 0xFF}`;
+      values[i] = `${v & 0xFF}.${(v >> 8) & 0xFF}.${(v >> 16) & 0xFF}.${(v >> 24) & 0xFF}`;
     }
-    return res;
+    return new SimpleColumn(values);
   }
+
+  fromValues(values: unknown[]): StringColumn {
+    return new SimpleColumn(values.map(v => String(v ?? "")));
+  }
+
+  zeroValue() { return "0.0.0.0"; }
 }
 
 class IPv6Codec implements Codec {
-  encode(values: unknown[]): Uint8Array {
-    const result = new Uint8Array(values.length * 16);
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i];
-      if (typeof v === 'string') {
-        const bytes = ipv6ToBytes(v);
-        result.set(bytes, i * 16);
-      } else if (v instanceof Uint8Array) {
-        result.set(v.subarray(0, 16), i * 16);
-      }
+  encode(col: Column): Uint8Array {
+    const result = new Uint8Array(col.length * 16);
+    for (let i = 0; i < col.length; i++) {
+      const v = String(col.get(i));
+      const bytes = ipv6ToBytes(v);
+      result.set(bytes, i * 16);
     }
     return result;
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
-    const res = new Array(rows).fill('::'); // zero value of IPv6
+  decode(reader: BufferReader, rows: number): StringColumn {
+    const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const bytes = reader.readBytes(16);
-      res[i] = bytesToIpv6(bytes);
+      values[i] = bytesToIpv6(bytes);
     }
-    return res;
+    return new SimpleColumn(values);
   }
+
+  fromValues(values: unknown[]): StringColumn {
+    return new SimpleColumn(values.map(v => String(v ?? "")));
+  }
+
+  zeroValue() { return "::"; }
 }
 
 // When used as a column in Map/Tuple, inner codec's prefix needs to be handled
 class ArrayCodec implements Codec {
   private inner: Codec;
-  private innerCtor: TypedArrayConstructor<TypedArray> | null = null;
 
   constructor(inner: Codec) {
     this.inner = inner;
-    // Fast path for numeric types without converters (direct TypedArray assignment)
-    // Excludes: UInt64/Int64 (converter), Bool (converter)
-    if (inner instanceof NumericCodec) {
-      const ctor = (inner as any).Ctor;
-      const hasConverter = !!(inner as any).converter;
-      if (!hasConverter) {
-        this.innerCtor = ctor;
-      }
-    }
   }
 
-  writePrefix(writer: BufferWriter, values: unknown[][]) {
-    // Flatten to get inner values for prefix
-    let totalCount = 0;
-    for (const arr of values) totalCount += (arr as unknown[]).length;
-    const flat = new Array(totalCount).fill(null);
-    let idx = 0;
-    for (const arr of values) {
-      for (const item of arr as unknown[]) flat[idx++] = item;
-    }
-    this.inner.writePrefix?.(writer, flat);
+  writePrefix(writer: BufferWriter, col: Column) {
+    const arr = col as ArrayColumn;
+    this.inner.writePrefix?.(writer, arr.inner);
   }
 
   readPrefix(reader: BufferReader) {
     this.inner.readPrefix?.(reader);
   }
 
-  encode(values: unknown[][]): Uint8Array {
+  encode(col: Column): Uint8Array {
+    const arr = col as ArrayColumn;
     const writer = new BufferWriter();
-    const offsets = new BigUint64Array(values.length);
 
-    // First pass: count total elements and compute offsets
-    let totalCount = 0;
-    for (let i = 0; i < values.length; i++) {
-      totalCount += (values[i] as unknown[]).length;
-      offsets[i] = BigInt(totalCount);
-    }
+    // Write offsets
+    writer.write(new Uint8Array(arr.offsets.buffer, arr.offsets.byteOffset, arr.offsets.byteLength));
 
-    writer.write(new Uint8Array(offsets.buffer));
-
-    // Fast path: flatten directly into TypedArray for numeric inner types
-    if (this.innerCtor) {
-      const flat = new this.innerCtor(totalCount);
-      let idx = 0;
-      for (let i = 0; i < values.length; i++) {
-        const arr = values[i];
-        if (arr instanceof this.innerCtor) {
-          // Bulk copy TypedArray
-          flat.set(arr as any, idx);
-          idx += arr.length;
-        } else {
-          // Element-by-element for regular arrays
-          for (let j = 0; j < (arr as unknown[]).length; j++) {
-            flat[idx++] = (arr as unknown[])[j] as any;
-          }
-        }
-      }
-      writer.write(new Uint8Array(flat.buffer, flat.byteOffset, flat.byteLength));
-    } else {
-      // Slow path: flatten to regular array, delegate to inner codec
-      const flat = new Array(totalCount).fill(null);
-      let idx = 0;
-      for (let i = 0; i < values.length; i++) {
-        const arr = values[i] as unknown[];
-        for (let j = 0; j < arr.length; j++) {
-          flat[idx++] = arr[j];
-        }
-      }
-      writer.write(this.inner.encode(flat));
-    }
+    // Write inner data
+    writer.write(this.inner.encode(arr.inner));
 
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
+  decode(reader: BufferReader, rows: number): ArrayColumn {
     const offsets = reader.readTypedArray(BigUint64Array, rows);
     const totalCount = rows > 0 ? Number(offsets[rows - 1]) : 0;
-    const flat = this.inner.decode(reader, totalCount);
-
-    const res = new Array(rows).fill(null); // PACKED, avoid shared ref for arrays
-    let start = 0;
-    for (let i = 0; i < rows; i++) {
-      const end = Number(offsets[i]);
-      res[i] = flat.slice(start, end);
-      start = end;
-    }
-    return res;
+    const inner = this.inner.decode(reader, totalCount);
+    return new ArrayColumn(offsets, inner);
   }
+
+  fromValues(values: unknown[]): ArrayColumn {
+    const offsets = new BigUint64Array(values.length);
+    const allInner: unknown[] = [];
+    let offset = 0n;
+    for (let i = 0; i < values.length; i++) {
+      const arr = values[i] as unknown[];
+      for (const v of arr) allInner.push(v);
+      offset += BigInt(arr.length);
+      offsets[i] = offset;
+    }
+    return new ArrayColumn(offsets, this.inner.fromValues(allInner));
+  }
+
+  zeroValue() { return []; }
 }
 
-// 5. Nullable Codec
 // Delegates prefix handling to inner codec
 class NullableCodec implements Codec {
   private inner: Codec;
@@ -566,45 +1114,45 @@ class NullableCodec implements Codec {
     this.inner = inner;
   }
 
-  writePrefix(writer: BufferWriter, values: unknown[]) {
-    // Extract non-null values for inner prefix
-    const nonNull = values.filter(v => v !== null);
-    this.inner.writePrefix?.(writer, nonNull.length > 0 ? nonNull : values);
+  writePrefix(writer: BufferWriter, col: Column) {
+    const nc = col as NullableColumn;
+    this.inner.writePrefix?.(writer, nc.inner);
   }
 
   readPrefix(reader: BufferReader) {
     this.inner.readPrefix?.(reader);
   }
 
-  encode(values: unknown[]): Uint8Array {
+  encode(col: Column): Uint8Array {
+    const nc = col as NullableColumn;
     const writer = new BufferWriter();
-    const flags = new Uint8Array(values.length);
-    const cleanValues = new Array(values.length).fill(null);
-
-    for (let i = 0; i < values.length; i++) {
-      if (values[i] === null) {
-        flags[i] = 1;
-        cleanValues[i] = getZeroValue(this.inner);
-      } else {
-        cleanValues[i] = values[i];
-      }
-    }
-
-    writer.write(flags);
-    writer.write(this.inner.encode(cleanValues));
+    writer.write(nc.nullFlags);
+    writer.write(this.inner.encode(nc.inner));
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
-    const rowIsNullFlags = reader.readTypedArray(Uint8Array, rows);
-    const values = this.inner.decode(reader, rows);
-    // Must convert to regular array since TypedArray can't store null
-    const result = new Array(rows).fill(null);
-    for (let i = 0; i < rows; i++) {
-      result[i] = rowIsNullFlags[i] === 1 ? null : values[i];
-    }
-    return result;
+  decode(reader: BufferReader, rows: number): NullableColumn {
+    const nullFlags = reader.readTypedArray(Uint8Array, rows);
+    const inner = this.inner.decode(reader, rows);
+    return new NullableColumn(nullFlags, inner);
   }
+
+  fromValues(values: unknown[]): NullableColumn {
+    const nullFlags = new Uint8Array(values.length);
+    const innerValues: unknown[] = new Array(values.length);
+    const zeroVal = this.inner.zeroValue();
+    for (let i = 0; i < values.length; i++) {
+      if (values[i] === null || values[i] === undefined) {
+        nullFlags[i] = 1;
+        innerValues[i] = zeroVal;
+      } else {
+        innerValues[i] = values[i];
+      }
+    }
+    return new NullableColumn(nullFlags, this.inner.fromValues(innerValues));
+  }
+
+  zeroValue() { return null; }
 }
 
 // LowCardinality stores a dictionary of unique values and indices into that dictionary.
@@ -629,9 +1177,10 @@ class LowCardinalityCodec implements Codec {
     reader.offset += 8;
   }
 
-  encode(values: unknown[]): Uint8Array {
-    // Empty values require no output (matches ClickHouse behavior)
-    if (values.length === 0) return new Uint8Array(0);
+  encode(col: Column): Uint8Array {
+    // LowCardinality encode builds dictionary from column values
+    // This is row-oriented by nature - we need to scan values to find uniques
+    if (col.length === 0) return new Uint8Array(0);
 
     const writer = new BufferWriter();
     const isNullable = this.inner instanceof NullableCodec;
@@ -643,14 +1192,15 @@ class LowCardinalityCodec implements Codec {
     // For Nullable types, index 0 is reserved for null
     if (isNullable) {
       dict.set(null, 0);
-      dictValues.push(getZeroValue(this.dictCodec)); // Placeholder for null
+      dictValues.push(null); // Placeholder for null
     }
 
-    for (const v of values) {
+    for (let i = 0; i < col.length; i++) {
+      const v = col.get(i);
       if (isNullable && v === null) {
-        indices.push(0); // Null uses index 0
+        indices.push(0);
       } else {
-        const k = getDictKey(v);
+        const k = this.getDictKey(v);
         if (!dict.has(k)) {
           dict.set(k, dictValues.length);
           dictValues.push(v);
@@ -659,12 +1209,7 @@ class LowCardinalityCodec implements Codec {
       }
     }
 
-    // Flags (UInt64):
-    // - Bits 0-1: indexType - size of index integers (0=UInt8, 1=UInt16, 2=UInt32, 3=UInt64)
-    // - Bit 9: HAS_ADDITIONAL_KEYS_BIT - if set this means dictionary is inline with data (vs shared global dict)
-    //   global shared dictionaries are not used for the Native wire format, so this bit is always set - meaning
-    //   the dictionary is included inline with the data.
-    const HAS_ADDITIONAL_KEYS_BIT = 1n << 9n; // is there no cleaner way to declare a binary literal in JS/TS?
+    const HAS_ADDITIONAL_KEYS_BIT = 1n << 9n;
     let indexType = 0n;
     let IndexArray: any = Uint8Array;
     if (dictValues.length > 255) { indexType = 1n; IndexArray = Uint16Array; }
@@ -672,29 +1217,27 @@ class LowCardinalityCodec implements Codec {
 
     writer.write(new Uint8Array(new BigUint64Array([HAS_ADDITIONAL_KEYS_BIT | indexType]).buffer));
 
+    // Build dictionary column from unique values
     writer.write(new Uint8Array(new BigUint64Array([BigInt(dictValues.length)]).buffer));
-    writer.write(this.dictCodec.encode(dictValues));
-    writer.write(new Uint8Array(new BigUint64Array([BigInt(values.length)]).buffer));
+    writer.write(this.dictCodec.encode(new SimpleColumn(dictValues)));
+    writer.write(new Uint8Array(new BigUint64Array([BigInt(col.length)]).buffer));
     writer.write(new Uint8Array(new IndexArray(indices).buffer));
 
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
-    if (rows === 0) return [];
+  decode(reader: BufferReader, rows: number): Column {
+    if (rows === 0) return new SimpleColumn([]);
 
     const flags = reader.view.getBigUint64(reader.offset, true);
     reader.offset += 8;
 
     const typeInfo = Number(flags & 0xFFn);
-
-    // Nullable is determined by inner TYPE, not by flags
     const isNullable = this.inner instanceof NullableCodec;
 
     const dictSize = Number(reader.view.getBigUint64(reader.offset, true));
     reader.offset += 8;
 
-    // Dictionary always uses dictCodec (unwrapped type for Nullable)
     const dict = this.dictCodec.decode(reader, dictSize);
 
     const count = Number(reader.view.getBigUint64(reader.offset, true));
@@ -706,21 +1249,38 @@ class LowCardinalityCodec implements Codec {
     else if (typeInfo === 2) indices = reader.readTypedArray(Uint32Array, count);
     else indices = reader.readTypedArray(BigUint64Array, count);
 
-    const zeroValue = 0; // TODO: correct zero value for inner type
-    const res = new Array(count).fill(zeroValue);
+    // Expand dictionary to full column
+    const values: unknown[] = new Array(count);
     for (let i = 0; i < count; i++) {
       const idx = Number(indices[i]);
-      // Index 0 is null ONLY when inner type is Nullable
-      res[i] = isNullable && idx === 0 ? null : dict[idx];
+      values[i] = isNullable && idx === 0 ? null : dict.get(idx);
     }
-    return res;
+    return new SimpleColumn(values);
+  }
+
+  fromValues(values: unknown[]): Column {
+    // LowCardinality is just storage optimization - pass through to inner
+    return this.inner.fromValues(values);
+  }
+
+  zeroValue() { return this.inner.zeroValue(); }
+
+  // key for low cardinality dictionary map
+  getDictKey(v: unknown): unknown {
+    if (v === null || typeof v !== 'object') return v;
+    if (v instanceof Date) return v.getTime();
+    if (v instanceof Uint8Array) {
+      // FixedString - convert to string for deduplication
+      let s = '';
+      for (let i = 0; i < v.length; i++) s += String.fromCharCode(v[i]);
+      return s;
+    }
+    return JSON.stringify(v); // fallback for unexpected object types
   }
 }
 
-// 6. Map Codec
 // Map is serialized as Array(Tuple(K, V))
 // Prefixes are written at top level, not inside the data.
-// Uses Array<[K, V]> representation to preserve duplicate keys.
 class MapCodec implements Codec {
   private keyCodec: Codec;
   private valCodec: Codec;
@@ -730,26 +1290,10 @@ class MapCodec implements Codec {
     this.valCodec = valCodec;
   }
 
-  // Convert Map, Array<[K,V]>, or object to array of [key, value] tuples
-  private static toEntries(value: unknown): [unknown, unknown][] {
-    if (value instanceof Map) return [...value.entries()];
-    if (Array.isArray(value)) return value as [unknown, unknown][];
-    return Object.entries(value as Record<string, unknown>);
-  }
-
-  // Map prefix = key prefix + value prefix (like Tuple(K, V))
-  writePrefix(writer: BufferWriter, values: unknown[]) {
-    // Flatten all map entries to get key/value arrays for prefix
-    const keys: unknown[] = [];
-    const vals: unknown[] = [];
-    for (const m of values) {
-      for (const [k, v] of MapCodec.toEntries(m)) {
-        keys.push(k);
-        vals.push(v);
-      }
-    }
-    this.keyCodec.writePrefix?.(writer, keys);
-    this.valCodec.writePrefix?.(writer, vals);
+  writePrefix(writer: BufferWriter, col: Column) {
+    const map = col as MapColumn;
+    this.keyCodec.writePrefix?.(writer, map.keys);
+    this.valCodec.writePrefix?.(writer, map.values);
   }
 
   readPrefix(reader: BufferReader) {
@@ -757,60 +1301,49 @@ class MapCodec implements Codec {
     this.valCodec.readPrefix?.(reader);
   }
 
-  encode(values: unknown[]): Uint8Array {
+  encode(col: Column): Uint8Array {
+    const map = col as MapColumn;
     const writer = new BufferWriter();
+    writer.write(new Uint8Array(map.offsets.buffer, map.offsets.byteOffset, map.offsets.byteLength));
+    writer.write(this.keyCodec.encode(map.keys));
+    writer.write(this.valCodec.encode(map.values));
+    return writer.finish();
+  }
+
+  decode(reader: BufferReader, rows: number): MapColumn {
+    const offsets = reader.readTypedArray(BigUint64Array, rows);
+    const total = rows > 0 ? Number(offsets[rows - 1]) : 0;
+    const keys = this.keyCodec.decode(reader, total);
+    const vals = this.valCodec.decode(reader, total);
+    return new MapColumn(offsets, keys, vals, reader.options?.mapAsArray ?? false);
+  }
+
+  fromValues(values: unknown[]): MapColumn {
     const keys: unknown[] = [];
     const vals: unknown[] = [];
     const offsets = new BigUint64Array(values.length);
     let offset = 0n;
-
     for (let i = 0; i < values.length; i++) {
-      const entries = MapCodec.toEntries(values[i]);
-      offset += BigInt(entries.length);
+      const m = values[i];
+      if (m instanceof Map) {
+        for (const [k, v] of m) { keys.push(k); vals.push(v); }
+        offset += BigInt(m.size);
+      } else if (Array.isArray(m)) {
+        for (const pair of m) {
+          if (Array.isArray(pair) && pair.length === 2) { keys.push(pair[0]); vals.push(pair[1]); }
+        }
+        offset += BigInt(m.length);
+      } else if (typeof m === "object" && m !== null) {
+        const entries = Object.entries(m);
+        for (const [k, v] of entries) { keys.push(k); vals.push(v); }
+        offset += BigInt(entries.length);
+      }
       offsets[i] = offset;
-      for (const [k, v] of entries) {
-        keys.push(k);
-        vals.push(v);
-      }
     }
-
-    // Structure: [offsets] [keys] [values]
-    // Prefixes were already written via writePrefix at top level
-    writer.write(new Uint8Array(offsets.buffer));
-    writer.write(this.keyCodec.encode(keys));
-    writer.write(this.valCodec.encode(vals));
-    return writer.finish();
+    return new MapColumn(offsets, this.keyCodec.fromValues(keys), this.valCodec.fromValues(vals));
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
-    const offsets = reader.readTypedArray(BigUint64Array, rows);
-    const total = rows > 0 ? Number(offsets[rows - 1]) : 0;
-
-    // Prefixes were already read via readPrefix at top level
-    const keys = this.keyCodec.decode(reader, total);
-    const vals = this.valCodec.decode(reader, total);
-
-    const res = new Array(rows).fill(null); // PACKED, avoid shared ref for Map/Array
-    let start = 0;
-    for (let i = 0; i < rows; i++) {
-      const end = Number(offsets[i]);
-      if (reader.options?.mapAsArray) {
-        const entries: [unknown, unknown][] = [];
-        for (let j = start; j < end; j++) {
-          entries.push([keys[j], vals[j]]);
-        }
-        res[i] = entries;
-      } else {
-        const map = new Map();
-        for (let j = start; j < end; j++) {
-          map.set(keys[j], vals[j]);
-        }
-        res[i] = map;
-      }
-      start = end;
-    }
-    return res;
-  }
+  zeroValue() { return new Map(); }
 }
 
 // 7. Tuple Codec
@@ -824,18 +1357,10 @@ class TupleCodec implements Codec {
     this.isNamed = isNamed;
   }
 
-  writePrefix(writer: BufferWriter, values: unknown[]) {
-    const n = values.length;
+  writePrefix(writer: BufferWriter, col: Column) {
+    const tuple = col as TupleColumn;
     for (let i = 0; i < this.elements.length; i++) {
-      const zeroValue = 0;
-      const colValues = new Array(n).fill(zeroValue); // preallocate with zero values
-      const name = this.elements[i].name;
-      if (this.isNamed) {
-        for (let j = 0; j < n; j++) colValues[j] = (values[j] as any)[name!];
-      } else {
-        for (let j = 0; j < n; j++) colValues[j] = (values[j] as any)[i];
-      }
-      this.elements[i].codec.writePrefix?.(writer, colValues);
+      this.elements[i].codec.writePrefix?.(writer, tuple.columns[i]);
     }
   }
 
@@ -845,36 +1370,43 @@ class TupleCodec implements Codec {
     }
   }
 
-  encode(values: unknown[]): Uint8Array {
+  encode(col: Column): Uint8Array {
+    const tuple = col as TupleColumn;
     const writer = new BufferWriter();
-    const n = values.length;
     for (let i = 0; i < this.elements.length; i++) {
-      const colValues = new Array(n).fill(null);
-      const name = this.elements[i].name;
-      if (this.isNamed) {
-        for (let j = 0; j < n; j++) colValues[j] = (values[j] as any)[name!];
-      } else {
-        for (let j = 0; j < n; j++) colValues[j] = (values[j] as any)[i];
-      }
-      writer.write(this.elements[i].codec.encode(colValues));
+      writer.write(this.elements[i].codec.encode(tuple.columns[i]));
     }
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
+  decode(reader: BufferReader, rows: number): TupleColumn {
     const cols = this.elements.map(e => e.codec.decode(reader, rows));
-    const res = new Array(rows).fill(null); // PACKED, avoid shared ref for objects/arrays
-    for (let i = 0; i < rows; i++) {
-      if (this.isNamed) {
-        const obj: any = {};
-        for (let j = 0; j < this.elements.length; j++) obj[this.elements[j].name!] = cols[j][i];
-        res[i] = obj;
-      } else {
-        res[i] = cols.map(c => c[i]);
-      }
-    }
-    return res;
+    return new TupleColumn(
+      this.elements.map(e => ({ name: e.name })),
+      cols,
+      this.isNamed
+    );
   }
+
+  fromValues(values: unknown[]): TupleColumn {
+    const columns: Column[] = [];
+    for (let ei = 0; ei < this.elements.length; ei++) {
+      const elem = this.elements[ei];
+      const elemValues: unknown[] = new Array(values.length);
+      for (let i = 0; i < values.length; i++) {
+        const tuple = values[i] as any;
+        elemValues[i] = this.isNamed ? tuple[elem.name!] : tuple[ei];
+      }
+      columns.push(elem.codec.fromValues(elemValues));
+    }
+    return new TupleColumn(
+      this.elements.map(e => ({ name: e.name })),
+      columns,
+      this.isNamed
+    );
+  }
+
+  zeroValue() { return []; }
 }
 
 // 8. Variant Codec
@@ -882,9 +1414,11 @@ class TupleCodec implements Codec {
 // ClickHouse always sends BASIC mode (mode=0) over HTTP. COMPACT mode is only used internally
 // for MergeTree storage. See: https://github.com/ClickHouse/ClickHouse/pull/62774
 class VariantCodec implements Codec {
-  private types: Codec[];
-  constructor(types: Codec[]) {
-    this.types = types;
+  private typeStrings: string[];
+  private codecs: Codec[];
+  constructor(typeStrings: string[], codecs: Codec[]) {
+    this.typeStrings = typeStrings;
+    this.codecs = codecs;
   }
 
   writePrefix(writer: BufferWriter) {
@@ -897,53 +1431,74 @@ class VariantCodec implements Codec {
     reader.offset += 8; // Skip encoding mode flag - always BASIC (0) for HTTP clients
   }
 
-  // Variant encoding:
-  // 1. Write discriminators array (UInt8 per row): type index 0..N-1, or 0xFF for null
-  // 2. Group values by discriminator
-  // 3. Write each type's data block containing only rows of that type
-  // Input values are [discriminator, value] tuples, or null.
-  encode(values: unknown[]): Uint8Array {
+  encode(col: Column): Uint8Array {
+    const variant = col as VariantColumn;
     const writer = new BufferWriter();
-    const discriminators: number[] = [];
-    const groups = new Map<number, unknown[]>();
-
-    for (const v of values) {
-      if (v === null) { discriminators.push(0xFF); continue; }
-      const [disc, val] = v as [number, unknown];
-      discriminators.push(disc);
-      if (!groups.has(disc)) groups.set(disc, []);
-      groups.get(disc)!.push(val);
-    }
-
-    writer.write(new Uint8Array(discriminators));
-    for (let i = 0; i < this.types.length; i++) {
-      if (groups.has(i)) writer.write(this.types[i].encode(groups.get(i)!));
+    writer.write(variant.discriminators);
+    for (let i = 0; i < this.codecs.length; i++) {
+      const group = variant.groups.get(i);
+      if (group) writer.write(this.codecs[i].encode(group));
     }
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
+  decode(reader: BufferReader, rows: number): VariantColumn {
     const discriminators = reader.readTypedArray(Uint8Array, rows);
-    const groups = new Map<number, number>();
-    for (const d of discriminators) if (d !== 0xFF) groups.set(d, (groups.get(d) || 0) + 1);
+    const groupCounts = new Map<number, number>();
+    for (const d of discriminators) if (d !== 0xFF) groupCounts.set(d, (groupCounts.get(d) || 0) + 1);
 
-    const decoded = new Map<number, unknown[] | TypedArray>();
-    for (let i = 0; i < this.types.length; i++) {
-      if (groups.has(i)) decoded.set(i, this.types[i].decode(reader, groups.get(i)!));
+    const groups = new Map<number, Column>();
+    for (let i = 0; i < this.codecs.length; i++) {
+      if (groupCounts.has(i)) groups.set(i, this.codecs[i].decode(reader, groupCounts.get(i)!));
     }
 
-    const res = new Array(rows).fill(null);
-    const counters = new Map<number, number>();
-    for (let i = 0; i < rows; i++) {
-      const d = discriminators[i];
-      if (d === 0xFF) res[i] = null;
-      else {
-        const idx = counters.get(d) || 0;
-        res[i] = [d, decoded.get(d)![idx]];
-        counters.set(d, idx + 1);
+    return new VariantColumn(discriminators, groups);
+  }
+
+  fromValues(values: unknown[]): VariantColumn {
+    const discriminators = new Uint8Array(values.length);
+    const variantValues: unknown[][] = this.codecs.map(() => []);
+
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      if (v === null) {
+        discriminators[i] = 255;
+      } else if (Array.isArray(v) && v.length === 2 && typeof v[0] === "number") {
+        const disc = v[0] as number;
+        discriminators[i] = disc;
+        variantValues[disc].push(v[1]);
+      } else {
+        const variantIdx = this.findVariantIndex(v, this.typeStrings);
+        discriminators[i] = variantIdx;
+        variantValues[variantIdx].push(v);
       }
     }
-    return res;
+
+    const groups = new Map<number, Column>();
+    for (let vi = 0; vi < this.codecs.length; vi++) {
+      if (variantValues[vi].length > 0) {
+        groups.set(vi, this.codecs[vi].fromValues(variantValues[vi]));
+      }
+    }
+
+    return new VariantColumn(discriminators, groups);
+  }
+
+  zeroValue() { return null; }
+
+  findVariantIndex(value: unknown, types: string[]): number {
+    // Simple heuristic to match value to variant type
+    for (let i = 0; i < types.length; i++) {
+      const t = types[i];
+      if (t === "String" && typeof value === "string") return i;
+      if ((t === "Int64" || t === "UInt64") && typeof value === "bigint") return i;
+      if ((t.startsWith("Int") || t.startsWith("UInt") || t.startsWith("Float")) && typeof value === "number") return i;
+      if (t === "Bool" && typeof value === "boolean") return i;
+      if ((t === "Date" || t === "DateTime" || t.startsWith("DateTime64")) && value instanceof Date) return i;
+      if (t.startsWith("Array") && Array.isArray(value)) return i;
+      if (t.startsWith("Map") && (value instanceof Map || (typeof value === "object" && value !== null))) return i;
+    }
+    return 0; // default to first type
   }
 }
 
@@ -952,10 +1507,9 @@ class DynamicCodec implements Codec {
   private types: string[] = [];
   private codecs: Codec[] = [];
 
-  writePrefix(writer: BufferWriter, values: unknown[]) {
-    const typeSet = new Set<string>();
-    for (const v of values) if (v !== null) typeSet.add(guessType(v));
-    this.types = [...typeSet].sort();
+  writePrefix(writer: BufferWriter, col: Column) {
+    const dyn = col as DynamicColumn;
+    this.types = dyn.types;
     this.codecs = this.types.map(t => getCodec(t));
 
     writer.write(new Uint8Array(new BigUint64Array([3n]).buffer));
@@ -963,9 +1517,8 @@ class DynamicCodec implements Codec {
     for (const t of this.types) writer.writeString(t);
 
     for (let i = 0; i < this.types.length; i++) {
-      const typeName = this.types[i];
-      const colValues = values.filter(v => v !== null && guessType(v) === typeName);
-      this.codecs[i].writePrefix?.(writer, colValues);
+      const group = dyn.groups.get(i);
+      if (group) this.codecs[i].writePrefix?.(writer, group);
     }
   }
 
@@ -982,62 +1535,83 @@ class DynamicCodec implements Codec {
     for (const c of this.codecs) c.readPrefix?.(reader);
   }
 
-  encode(values: unknown[]): Uint8Array {
+  encode(col: Column): Uint8Array {
+    const dyn = col as DynamicColumn;
     const writer = new BufferWriter();
-    const typeMap = new Map(this.types.map((t, i) => [t, i]));
-    const nullDisc = this.types.length;
-    const discriminators: number[] = [];
-    const groups = new Map<number, unknown[]>();
 
-    for (const v of values) {
-      if (v === null) { discriminators.push(nullDisc); continue; }
-      const type = guessType(v);
-      const idx = typeMap.get(type)!;
-      discriminators.push(idx);
-      if (!groups.has(idx)) groups.set(idx, []);
-      groups.get(idx)!.push(v);
-    }
+    // Write discriminators as-is (already the right type)
+    writer.write(new Uint8Array(dyn.discriminators.buffer, dyn.discriminators.byteOffset, dyn.discriminators.byteLength));
 
-    const discLimit = this.types.length + 1;
-    if (discLimit <= 256) writer.write(new Uint8Array(discriminators));
-    else if (discLimit <= 65536) writer.write(new Uint8Array(new Uint16Array(discriminators).buffer));
-    else writer.write(new Uint8Array(new Uint32Array(discriminators).buffer));
-
-    for (let i = 0; i < this.types.length; i++) {
-      if (groups.has(i)) writer.write(this.codecs[i].encode(groups.get(i)!));
+    for (let i = 0; i < this.codecs.length; i++) {
+      const group = dyn.groups.get(i);
+      if (group) writer.write(this.codecs[i].encode(group));
     }
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
+  decode(reader: BufferReader, rows: number): DynamicColumn {
     const nullDisc = this.types.length;
     const discLimit = nullDisc + 1;
 
-    let discriminators: TypedArray;
+    let discriminators: Uint8Array | Uint16Array | Uint32Array;
     if (discLimit <= 256) discriminators = reader.readTypedArray(Uint8Array, rows);
     else if (discLimit <= 65536) discriminators = reader.readTypedArray(Uint16Array, rows);
     else discriminators = reader.readTypedArray(Uint32Array, rows);
 
-    const groups = new Map<number, number>();
-    for (const d of discriminators) if (d !== nullDisc) groups.set(d, (groups.get(d) || 0) + 1);
+    const groupCounts = new Map<number, number>();
+    for (const d of discriminators) if (d !== nullDisc) groupCounts.set(d, (groupCounts.get(d) || 0) + 1);
 
-    const decoded = new Map<number, unknown[] | TypedArray>();
+    const groups = new Map<number, Column>();
     for (let i = 0; i < this.types.length; i++) {
-      if (groups.has(i)) decoded.set(i, this.codecs[i].decode(reader, groups.get(i)!));
+      if (groupCounts.has(i)) groups.set(i, this.codecs[i].decode(reader, groupCounts.get(i)!));
     }
 
-    const res = new Array(rows).fill(null);
-    const counters = new Map<number, number>();
-    for (let i = 0; i < rows; i++) {
-      const d = discriminators[i];
-      if (d === nullDisc) res[i] = null;
-      else {
-        const idx = counters.get(d) || 0;
-        res[i] = decoded.get(d)![idx];
-        counters.set(d, idx + 1);
+    return new DynamicColumn(this.types, discriminators, groups);
+  }
+
+  fromValues(values: unknown[]): DynamicColumn {
+    // Collect unique types
+    const typeMap = new Map<string, unknown[]>();
+    const typeOrder: string[] = [];
+    for (const v of values) {
+      if (v !== null) {
+        const vType = this.guessType(v);
+        if (!typeMap.has(vType)) {
+          typeMap.set(vType, []);
+          typeOrder.push(vType);
+        }
+        typeMap.get(vType)!.push(v);
       }
     }
-    return res;
+
+    const nullDisc = typeOrder.length;
+    const discriminators = new Uint8Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      discriminators[i] = v === null ? nullDisc : typeOrder.indexOf(this.guessType(v));
+    }
+
+    const groups = new Map<number, Column>();
+    for (let ti = 0; ti < typeOrder.length; ti++) {
+      const codec = getCodec(typeOrder[ti]);
+      groups.set(ti, codec.fromValues(typeMap.get(typeOrder[ti])!));
+    }
+
+    return new DynamicColumn(typeOrder, discriminators, groups);
+  }
+
+  zeroValue() { return null; }
+
+  guessType(value: unknown): string {
+    if (value === null) return "String";
+    if (typeof value === "string") return "String";
+    if (typeof value === "number") return Number.isInteger(value) ? "Int64" : "Float64";
+    if (typeof value === "bigint") return "Int64";
+    if (typeof value === "boolean") return "Bool";
+    if (value instanceof Date) return "DateTime64(3)";
+    if (Array.isArray(value)) return value.length ? `Array(${this.guessType(value[0])})` : "Array(String)";
+    if (typeof value === "object") return "Map(String,String)";
+    return "String";
   }
 }
 
@@ -1046,21 +1620,17 @@ class JsonCodec implements Codec {
   private paths: string[] = [];
   private pathCodecs: Map<string, DynamicCodec> = new Map();
 
-  writePrefix(writer: BufferWriter, values: unknown[]) {
-    const pathSet = new Set<string>();
-    for (const v of values) {
-      if (v && typeof v === 'object') Object.keys(v).forEach(k => pathSet.add(k));
-    }
-    this.paths = [...pathSet].sort();
-
+  writePrefix(writer: BufferWriter, col: Column) {
+    const json = col as JsonColumn;
+    this.paths = json.paths;
     writer.write(new Uint8Array(new BigUint64Array([3n]).buffer));
     writer.writeVarint(this.paths.length);
     for (const p of this.paths) writer.writeString(p);
 
     for (const path of this.paths) {
       const codec = new DynamicCodec();
-      const colValues = values.map(v => v ? (v as any)[path] ?? null : null);
-      codec.writePrefix(writer, colValues);
+      const pathCol = json.pathColumns.get(path)!;
+      codec.writePrefix(writer, pathCol);
       this.pathCodecs.set(path, codec);
     }
   }
@@ -1081,37 +1651,54 @@ class JsonCodec implements Codec {
     }
   }
 
-  encode(values: unknown[]): Uint8Array {
+  encode(col: Column): Uint8Array {
+    const json = col as JsonColumn;
     const writer = new BufferWriter();
     for (const path of this.paths) {
-      const colValues = values.map(v => v ? (v as any)[path] ?? null : null);
-      writer.write(this.pathCodecs.get(path)!.encode(colValues));
+      const pathCol = json.pathColumns.get(path)!;
+      writer.write(this.pathCodecs.get(path)!.encode(pathCol));
     }
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): unknown[] {
-    const pathCols = new Map<string, unknown[]>();
+  decode(reader: BufferReader, rows: number): JsonColumn {
+    const pathColumns = new Map<string, DynamicColumn>();
     for (const path of this.paths) {
-      pathCols.set(path, this.pathCodecs.get(path)!.decode(reader, rows));
+      pathColumns.set(path, this.pathCodecs.get(path)!.decode(reader, rows));
     }
 
-    const res = new Array(rows).fill(null);
-    for (let i = 0; i < rows; i++) {
-      const obj: any = {};
-      for (const path of this.paths) {
-        const val = pathCols.get(path)![i];
-        if (val !== null) obj[path] = val;
-      }
-      res[i] = obj;
-    }
-    return res;
+    return new JsonColumn(this.paths, pathColumns, rows);
   }
-}
 
-// ============================================================================
-// Factory & Utils
-// ============================================================================
+  fromValues(values: unknown[]): JsonColumn {
+    // Collect all unique paths across all objects
+    const pathSet = new Set<string>();
+    for (const v of values) {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        for (const key of Object.keys(v as object)) {
+          pathSet.add(key);
+        }
+      }
+    }
+    const paths = Array.from(pathSet).sort();
+
+    // For each path, create a DynamicColumn
+    const pathColumns = new Map<string, DynamicColumn>();
+    const dynCodec = new DynamicCodec();
+    for (const path of paths) {
+      const pathValues: unknown[] = new Array(values.length);
+      for (let i = 0; i < values.length; i++) {
+        const obj = values[i] as Record<string, unknown> | null;
+        pathValues[i] = obj && typeof obj === "object" ? obj[path] ?? null : null;
+      }
+      pathColumns.set(path, dynCodec.fromValues(pathValues));
+    }
+
+    return new JsonColumn(paths, pathColumns, values.length);
+  }
+
+  zeroValue() { return {}; }
+}
 
 const CODEC_CACHE = new Map<string, Codec>();
 
@@ -1142,7 +1729,10 @@ function createCodec(type: string): Codec {
     const tupleCodec = new TupleCodec(args.map(a => ({ name: a.name, codec: getCodec(a.type) })), true);
     return new ArrayCodec(tupleCodec);
   }
-  if (type.startsWith("Variant")) return new VariantCodec(parseTypeList(extractTypeArgs(type)).map(getCodec));
+  if (type.startsWith("Variant")) {
+    const innerTypes = parseTypeList(extractTypeArgs(type));
+    return new VariantCodec(innerTypes, innerTypes.map(getCodec));
+  }
   if (type === "Dynamic") return new DynamicCodec();
   if (type === "JSON" || type.startsWith("JSON")) return new JsonCodec();
 
@@ -1192,57 +1782,9 @@ function extractTypeArgs(type: string): string {
   return type.substring(type.indexOf("(") + 1, type.lastIndexOf(")"));
 }
 
-function guessType(value: unknown): string {
-  if (value === null) return "String";
-  if (typeof value === "string") return "String";
-  if (typeof value === "number") return Number.isInteger(value) ? "Int64" : "Float64";
-  if (typeof value === "bigint") return "Int64";
-  if (typeof value === "boolean") return "Bool";
-  if (value instanceof Date) return "DateTime64(3)";
-  if (Array.isArray(value)) return value.length ? `Array(${guessType(value[0])})` : "Array(String)";
-  if (typeof value === "object") return "Map(String,String)";
-  return "String";
-}
-
-// Returns a zero/empty value for a codec type. Used by NullableCodec and LowCardinalityCodec
-// to fill placeholder slots. Covers scalar and container types; complex types (Variant, Dynamic,
-// JSON) have their own null handling and wouldn't appear as inner types here.
-function getZeroValue(codec: Codec): any {
-  if (codec instanceof NumericCodec) return 0;
-  if (codec instanceof StringCodec) return "";
-  if (codec instanceof FixedStringCodec) return new Uint8Array(codec.len);
-  if (codec instanceof UUIDCodec) return "00000000-0000-0000-0000-000000000000";
-  if (codec instanceof EpochCodec) return new Date(0);
-  if (codec instanceof DateTime64Codec) return new Date(0);
-  if (codec instanceof IPv4Codec) return "0.0.0.0";
-  if (codec instanceof IPv6Codec) return "0:0:0:0:0:0:0:0";
-  if (codec instanceof ArrayCodec) return [];
-  if (codec instanceof TupleCodec) return [];
-  if (codec instanceof MapCodec) return new Map();
-  return 0;
-}
-
-// Converts a value to a Map-compatible key for LowCardinality dictionary deduplication.
-// Primitives work directly; objects need conversion since Map uses reference equality.
-function getDictKey(v: unknown): unknown {
-  if (v === null || typeof v !== 'object') return v;
-  if (v instanceof Date) return v.getTime();
-  if (v instanceof Uint8Array) {
-    // FixedString - convert to string for deduplication
-    let s = '';
-    for (let i = 0; i < v.length; i++) s += String.fromCharCode(v[i]);
-    return s;
-  }
-  return JSON.stringify(v); // fallback for unexpected object types
-}
-
-// ============================================================================
-// Main API
-// ============================================================================
-
 interface BlockResult {
   columns: ColumnDef[];
-  columnData: (unknown[] | TypedArray)[];  // columnData[colIndex][rowIndex]
+  columnData: Column[];
   rowCount: number;
   bytesConsumed: number;
   isEndMarker: boolean;
@@ -1276,7 +1818,7 @@ function decodeNativeBlock(
   }
 
   const columns: ColumnDef[] = [];
-  const columnData: (unknown[] | TypedArray)[] = [];
+  const columnData: Column[] = [];
 
   // Native format: per-column [name, type, prefix, data]
   for (let i = 0; i < numCols; i++) {
@@ -1317,11 +1859,11 @@ export function encodeNative(columns: ColumnDef[], rows: unknown[][]): Uint8Arra
 
 /**
  * Encode columnar data to Native format (no transpose needed).
- * Input: columnData[colIndex][rowIndex]
+ * Input: columnData[colIndex][rowIndex] or Column objects
  */
 export function encodeNativeColumnar(
   columns: ColumnDef[],
-  columnData: (unknown[] | TypedArray)[],
+  columnData: (unknown[] | Column)[],
   rowCount?: number,
 ): Uint8Array {
   const writer = new BufferWriter();
@@ -1333,10 +1875,17 @@ export function encodeNativeColumnar(
   // Native format: per-column [name, type, prefix, data]
   for (let i = 0; i < columns.length; i++) {
     const codec = getCodec(columns[i].type);
+    const data = columnData[i];
+
+    // Convert raw data to Column if needed (duck type check for BaseColumn)
+    const col: Column = (data && typeof (data as any).get === 'function')
+      ? data as Column
+      : codec.fromValues(data as unknown[]);
+
     writer.writeString(columns[i].name);
     writer.writeString(columns[i].type);
-    codec.writePrefix?.(writer, columnData[i]);
-    writer.write(codec.encode(columnData[i]));
+    codec.writePrefix?.(writer, col);
+    writer.write(codec.encode(col));
   }
 
   return writer.finish();
@@ -1346,9 +1895,7 @@ export async function decodeNative(
   data: Uint8Array,
   options?: DecodeOptions,
 ): Promise<ColumnarResult> {
-  let columns: ColumnDef[] = [];
-  const allColumnData: unknown[][] = [];
-  let totalRows = 0;
+  const blocks: ColumnarResult[] = [];
 
   // Wrap data in single-chunk async iterable and use streamDecodeNative
   async function* singleChunk() {
@@ -1356,23 +1903,44 @@ export async function decodeNative(
   }
 
   for await (const block of streamDecodeNative(singleChunk(), options)) {
-    if (columns.length === 0) {
-      columns = block.columns;
-      for (let i = 0; i < columns.length; i++) {
-        allColumnData.push([]);
-      }
-    }
-    for (let i = 0; i < block.columnData.length; i++) {
+    blocks.push(block);
+  }
+
+  // Fast path: single block, return directly (preserves columnar types)
+  if (blocks.length === 0) {
+    return { columns: [], columnData: [], rowCount: 0 };
+  }
+  if (blocks.length === 1) {
+    return blocks[0];
+  }
+
+  // Multi-block: merge by materializing values
+  // Note: This loses byte fidelity for NaN - use streaming for exact round-trip
+  const columns = blocks[0].columns;
+  const numCols = columns.length;
+  const allColumnData: unknown[][] = [];
+  for (let i = 0; i < numCols; i++) {
+    allColumnData.push([]);
+  }
+
+  let totalRows = 0;
+  for (const block of blocks) {
+    for (let i = 0; i < numCols; i++) {
       const col = block.columnData[i];
       const target = allColumnData[i];
       for (let j = 0; j < col.length; j++) {
-        target.push(col[j]);
+        target.push(col.get(j));
       }
     }
     totalRows += block.rowCount;
   }
 
-  return { columns, columnData: allColumnData, rowCount: totalRows };
+  // Wrap merged arrays in SimpleColumn
+  return {
+    columns,
+    columnData: allColumnData.map(arr => new SimpleColumn(arr)),
+    rowCount: totalRows,
+  };
 }
 
 export async function* streamEncodeNative(
@@ -1425,6 +1993,7 @@ function consumeBytes(chunks: Uint8Array[], bytes: number): number {
 /**
  * Lazily iterate rows as objects with column names as keys.
  * Allocates one object per row on demand.
+ * Note: May normalize NaN values when accessing float columns.
  */
 export function* asRows(result: ColumnarResult): Generator<Record<string, unknown>> {
   const { columns, columnData, rowCount } = result;
@@ -1432,7 +2001,7 @@ export function* asRows(result: ColumnarResult): Generator<Record<string, unknow
   for (let i = 0; i < rowCount; i++) {
     const row: Record<string, unknown> = {};
     for (let j = 0; j < numCols; j++) {
-      row[columns[j].name] = columnData[j][i];
+      row[columns[j].name] = columnData[j].get(i);
     }
     yield row;
   }
@@ -1441,17 +2010,14 @@ export function* asRows(result: ColumnarResult): Generator<Record<string, unknow
 /**
  * Convert columnar result to array rows.
  * Useful for re-encoding or comparison with original row arrays.
+ * Note: May normalize NaN values when accessing float columns.
  */
 export function toArrayRows(result: ColumnarResult): unknown[][] {
   const { columnData, rowCount } = result;
-  const numCols = columnData.length;
-  const rows: unknown[][] = new Array(rowCount).fill(null);
+  const materialized = columnData.map(col => col.materialize());
+  const rows: unknown[][] = new Array(rowCount);
   for (let i = 0; i < rowCount; i++) {
-    const row = new Array(numCols).fill(null);
-    for (let j = 0; j < numCols; j++) {
-      row[j] = columnData[j][i];
-    }
-    rows[i] = row;
+    rows[i] = materialized.map(m => m[i]);
   }
   return rows;
 }
