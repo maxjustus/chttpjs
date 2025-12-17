@@ -2,9 +2,7 @@
  * Buffer I/O utilities for Native format encoding/decoding.
  */
 
-import { TEXT_ENCODER, TEXT_DECODER, type DecodeOptions } from "../shared.ts";
-
-type TypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | BigInt64Array | BigUint64Array | Float32Array | Float64Array;
+import { TEXT_ENCODER, TEXT_DECODER, type DecodeOptions, type TypedArray } from "../shared.ts";
 
 export type TypedArrayConstructor<T extends TypedArray> = {
   new(length: number): T;

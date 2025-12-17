@@ -3,7 +3,7 @@
  * Minimal interface: length + get(i) only.
  */
 
-type TypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | BigInt64Array | BigUint64Array | Float32Array | Float64Array;
+import { type TypedArray } from "../shared.ts";
 export type DiscriminatorArray = Uint8Array | Uint16Array | Uint32Array;
 
 // Variant uses 0xFF (255) as the null discriminator

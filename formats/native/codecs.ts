@@ -4,15 +4,22 @@
  */
 
 import {
+  type TypedArray,
   TEXT_ENCODER,
   ClickHouseDateTime64,
   parseTypeList,
   parseTupleElements,
   ipv6ToBytes,
   bytesToIpv6,
+  readBigInt128,
+  writeBigInt128,
+  readBigInt256,
+  writeBigInt256,
+  decimalByteSize,
+  extractDecimalScale,
+  formatScaledBigInt,
+  parseDecimalToScaledBigInt,
 } from "../shared.ts";
-
-import { createCodec as createRowBinaryCodec, RowBinaryEncoder } from "../rowbinary.ts";
 
 import { BufferWriter, BufferReader, type TypedArrayConstructor } from "./io.ts";
 import {
@@ -29,8 +36,6 @@ import {
   VARIANT_NULL_DISCRIMINATOR,
   countAndIndexDiscriminators,
 } from "./columns.ts";
-
-type TypedArray = Int8Array | Uint8Array | Int16Array | Uint16Array | Int32Array | Uint32Array | BigInt64Array | BigUint64Array | Float32Array | Float64Array;
 
 const MS_PER_DAY = 86400000;
 
@@ -103,8 +108,9 @@ class NumericCodec<T extends TypedArray> implements Codec {
 class StringCodec implements Codec {
   encode(col: Column): Uint8Array {
     const writer = new BufferWriter();
-    for (let i = 0; i < col.length; i++) {
-      writer.writeString(String(col.get(i)));
+    const values = col.toArray();
+    for (let i = 0; i < values.length; i++) {
+      writer.writeString(String(values[i]));
     }
     return writer.finish();
   }
@@ -126,10 +132,11 @@ class StringCodec implements Codec {
 
 class UUIDCodec implements Codec {
   encode(col: Column): Uint8Array {
-    const buf = new Uint8Array(col.length * 16);
+    const values = col.toArray();
+    const buf = new Uint8Array(values.length * 16);
 
-    for (let i = 0; i < col.length; i++) {
-      const u = String(col.get(i));
+    for (let i = 0; i < values.length; i++) {
+      const u = String(values[i]);
       const clean = u.replace(/-/g, '');
       const bytes = new Uint8Array(16);
       for (let j = 0; j < 16; j++) bytes[j] = parseInt(clean.substring(j * 2, j * 2 + 2), 16);
@@ -173,9 +180,10 @@ class FixedStringCodec implements Codec {
   }
 
   encode(col: Column): Uint8Array {
-    const buf = new Uint8Array(col.length * this.len);
-    for (let i = 0; i < col.length; i++) {
-      const v = col.get(i);
+    const values = col.toArray();
+    const buf = new Uint8Array(values.length * this.len);
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
       if (v instanceof Uint8Array) {
         buf.set(v.subarray(0, this.len), i * this.len);
       } else {
@@ -217,41 +225,113 @@ class FixedStringCodec implements Codec {
   estimateSize(rows: number) { return rows * this.len; }
 }
 
-class ScalarCodec implements Codec {
-  private codec: ReturnType<typeof createRowBinaryCodec>;
+class BigIntCodec implements Codec {
+  private byteSize: 16 | 32;
+  private signed: boolean;
 
-  constructor(type: string) {
-    this.codec = createRowBinaryCodec(type);
+  constructor(byteSize: 16 | 32, signed: boolean) {
+    this.byteSize = byteSize;
+    this.signed = signed;
   }
 
   encode(col: Column): Uint8Array {
-    const values = col as DataColumn<unknown[]>;
-    const encoder = new RowBinaryEncoder();
+    const values = col.toArray();
+    const buf = new Uint8Array(values.length * this.byteSize);
+    const view = new DataView(buf.buffer);
+    const writer = this.byteSize === 16 ? writeBigInt128 : writeBigInt256;
     for (let i = 0; i < values.length; i++) {
-      this.codec.encode(encoder, values.get(i));
+      writer(view, i * this.byteSize, BigInt(values[i] as any), this.signed);
     }
-    return encoder.finish();
+    return buf;
   }
 
-  decode(reader: BufferReader, rows: number): DataColumn<unknown[]> {
-    const values: unknown[] = new Array(rows);
-    const view = reader.view;
-    const data = reader.buffer;
-    const cursor = { offset: reader.offset };
+  decode(reader: BufferReader, rows: number): DataColumn<bigint[]> {
+    const values: bigint[] = new Array(rows);
+    const readFn = this.byteSize === 16 ? readBigInt128 : readBigInt256;
     for (let i = 0; i < rows; i++) {
-      values[i] = this.codec.decode(view, data, cursor);
+      values[i] = readFn(reader.view, reader.offset, this.signed);
+      reader.offset += this.byteSize;
     }
-    reader.offset = cursor.offset;
     return new DataColumn(values);
   }
 
-  fromValues(values: unknown[]): DataColumn<unknown[]> {
+  fromValues(values: unknown[]): DataColumn<bigint[]> {
+    return new DataColumn(values.map(v => BigInt(v as any)));
+  }
+
+  zeroValue() { return 0n; }
+  estimateSize(rows: number) { return rows * this.byteSize; }
+}
+
+class DecimalCodec implements Codec {
+  private byteSize: 4 | 8 | 16 | 32;
+  private scale: number;
+
+  constructor(type: string) {
+    this.byteSize = decimalByteSize(type);
+    this.scale = extractDecimalScale(type);
+  }
+
+  encode(col: Column): Uint8Array {
+    const values = col.toArray();
+    const buf = new Uint8Array(values.length * this.byteSize);
+    const view = new DataView(buf.buffer);
+
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      let scaled: bigint;
+      if (typeof v === 'bigint') {
+        scaled = v;
+      } else if (typeof v === 'string') {
+        scaled = parseDecimalToScaledBigInt(v, this.scale);
+      } else {
+        scaled = parseDecimalToScaledBigInt(String(v), this.scale);
+      }
+
+      const off = i * this.byteSize;
+      if (this.byteSize === 4) {
+        view.setInt32(off, Number(scaled), true);
+      } else if (this.byteSize === 8) {
+        view.setBigInt64(off, scaled, true);
+      } else if (this.byteSize === 16) {
+        writeBigInt128(view, off, scaled, true);
+      } else {
+        writeBigInt256(view, off, scaled, true);
+      }
+    }
+    return buf;
+  }
+
+  decode(reader: BufferReader, rows: number): DataColumn<string[]> {
+    const values: string[] = new Array(rows);
+
+    for (let i = 0; i < rows; i++) {
+      let scaled: bigint;
+      if (this.byteSize === 4) {
+        scaled = BigInt(reader.view.getInt32(reader.offset, true));
+      } else if (this.byteSize === 8) {
+        scaled = reader.view.getBigInt64(reader.offset, true);
+      } else if (this.byteSize === 16) {
+        scaled = readBigInt128(reader.view, reader.offset, true);
+      } else {
+        scaled = readBigInt256(reader.view, reader.offset, true);
+      }
+      reader.offset += this.byteSize;
+      values[i] = formatScaledBigInt(scaled, this.scale);
+    }
     return new DataColumn(values);
   }
 
-  zeroValue() { return 0; }
-  // ScalarCodec handles Int128/256, Decimal - conservative estimate
-  estimateSize(rows: number) { return rows * 32; }
+  fromValues(values: unknown[]): DataColumn<string[]> {
+    return new DataColumn(values.map(v => {
+      if (typeof v === 'string') return v;
+      if (typeof v === 'bigint') return formatScaledBigInt(v, this.scale);
+      return String(v);
+    }));
+  }
+
+  zeroValue() { return formatScaledBigInt(0n, this.scale); }
+  estimateSize(rows: number) { return rows * this.byteSize; }
 }
 
 class DateTime64Codec implements Codec {
@@ -261,9 +341,10 @@ class DateTime64Codec implements Codec {
   }
 
   encode(col: Column): Uint8Array {
-    const arr = new BigInt64Array(col.length);
-    for (let i = 0; i < col.length; i++) {
-      const v = col.get(i);
+    const values = col.toArray();
+    const arr = new BigInt64Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
       if (v instanceof ClickHouseDateTime64) {
         arr[i] = v.ticks;
       } else if (typeof v === 'bigint') {
@@ -323,9 +404,10 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
   }
 
   encode(col: Column): Uint8Array {
-    const arr = new this.Ctor(col.length);
-    for (let i = 0; i < col.length; i++) {
-      const v = col.get(i);
+    const values = col.toArray();
+    const arr = new this.Ctor(values.length);
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
       arr[i] = Math.floor(new Date(v as any).getTime() / this.multiplier) as any;
     }
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
@@ -361,9 +443,10 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
 
 class IPv4Codec implements Codec {
   encode(col: Column): Uint8Array {
-    const arr = new Uint32Array(col.length);
-    for (let i = 0; i < col.length; i++) {
-      const v = String(col.get(i));
+    const values = col.toArray();
+    const arr = new Uint32Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      const v = String(values[i]);
       const parts = v.split('.').map(Number);
       arr[i] = (parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24)) >>> 0;
     }
@@ -390,9 +473,10 @@ class IPv4Codec implements Codec {
 
 class IPv6Codec implements Codec {
   encode(col: Column): Uint8Array {
-    const result = new Uint8Array(col.length * 16);
-    for (let i = 0; i < col.length; i++) {
-      const v = String(col.get(i));
+    const values = col.toArray();
+    const result = new Uint8Array(values.length * 16);
+    for (let i = 0; i < values.length; i++) {
+      const v = String(values[i]);
       const bytes = ipv6ToBytes(v);
       result.set(bytes, i * 16);
     }
@@ -1168,12 +1252,18 @@ function createCodec(type: string): Codec {
     case "UUID": return new UUIDCodec();
     case "IPv4": return new IPv4Codec();
     case "IPv6": return new IPv6Codec();
+    case "Int128": return new BigIntCodec(16, true);
+    case "UInt128": return new BigIntCodec(16, false);
+    case "Int256": return new BigIntCodec(32, true);
+    case "UInt256": return new BigIntCodec(32, false);
   }
 
   if (type.startsWith("Enum")) return type.startsWith("Enum8") ? new NumericCodec(Int8Array) : new NumericCodec(Int16Array);
 
-  // Fallback to RowBinary codec for unsupported types (Int128, Decimal, etc.)
-  return new ScalarCodec(type);
+  // Decimal types
+  if (type.startsWith("Decimal")) return new DecimalCodec(type);
+
+  throw new Error(`Unknown type: ${type}`);
 }
 
 // Extracts the content between the outermost parentheses: "Array(Int32)" → "Int32"

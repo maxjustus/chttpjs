@@ -42,6 +42,26 @@ export interface ColumnarResult {
   rowCount: number;
 }
 
+// TypedArray constructors for fast path in encodeNative()
+// Only simple numeric types that can be assigned directly without conversion
+type SimpleTypedArrayCtor = Uint8ArrayConstructor | Int8ArrayConstructor |
+  Uint16ArrayConstructor | Int16ArrayConstructor |
+  Uint32ArrayConstructor | Int32ArrayConstructor |
+  Float32ArrayConstructor | Float64ArrayConstructor;
+
+const SIMPLE_TYPED_ARRAYS: Record<string, SimpleTypedArrayCtor | undefined> = {
+  'UInt8': Uint8Array,
+  'Int8': Int8Array,
+  'UInt16': Uint16Array,
+  'Int16': Int16Array,
+  'UInt32': Uint32Array,
+  'Int32': Int32Array,
+  'Float32': Float32Array,
+  'Float64': Float64Array,
+  // Note: UInt64/Int64 need BigInt conversion, Bool needs 0/1 conversion
+  // Date/DateTime need epoch conversion - all handled by slow path
+};
+
 export type StreamDecodeNativeResult = ColumnarResult;
 
 interface BlockResult {
@@ -150,12 +170,23 @@ function decodeNativeBlock(
  */
 export function encodeNative(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
   const numRows = rows.length;
+  const numCols = columns.length;
+  const cols: (unknown[] | Column)[] = new Array(numCols);
 
-  // Transpose rows to columns
-  const cols = new Array(columns.length).fill(null);
-  for (let i = 0; i < columns.length; i++) {
-    cols[i] = new Array(numRows).fill(null);
-    for (let j = 0; j < numRows; j++) cols[i][j] = rows[j][i];
+  // Transpose rows to columns with fast path for simple numeric types
+  for (let i = 0; i < numCols; i++) {
+    const TypedArrayCtor = SIMPLE_TYPED_ARRAYS[columns[i].type];
+    if (TypedArrayCtor) {
+      // Fast path: write directly to TypedArray (no intermediate JS array)
+      const arr = new TypedArrayCtor(numRows);
+      for (let j = 0; j < numRows; j++) arr[j] = rows[j][i] as number;
+      cols[i] = new DataColumn(arr);
+    } else {
+      // Slow path: JS array for complex/converted types
+      const arr = new Array(numRows);
+      for (let j = 0; j < numRows; j++) arr[j] = rows[j][i];
+      cols[i] = arr;
+    }
   }
 
   return encodeNativeColumnar(columns, cols, numRows);
@@ -307,8 +338,11 @@ export function* asRows(result: ColumnarResult): Generator<Record<string, unknow
   const { columns, columnData, rowCount } = result;
   const numCols = columns.length;
 
-  // Materialize all columns upfront - avoids virtual calls in the inner loop
-  const cols = columnData.map(c => c.toArray());
+  // Hybrid approach: direct data for DataColumn (avoids TypedArray→JS array copy),
+  // toArray() for composite types (benefits from caching)
+  const cols: unknown[][] = columnData.map(col =>
+    col instanceof DataColumn ? col.data as unknown[] : col.toArray()
+  );
 
   for (let i = 0; i < rowCount; i++) {
     const row: Record<string, unknown> = {};
@@ -327,8 +361,11 @@ export function toArrayRows(result: ColumnarResult): unknown[][] {
   const { columnData, rowCount } = result;
   const numCols = columnData.length;
 
-  // Materialize all columns upfront - avoids virtual calls in the inner loop
-  const cols = columnData.map(c => c.toArray());
+  // Hybrid approach: direct data for DataColumn (avoids TypedArray→JS array copy),
+  // toArray() for composite types (benefits from caching)
+  const cols: unknown[][] = columnData.map(col =>
+    col instanceof DataColumn ? col.data as unknown[] : col.toArray()
+  );
 
   const rows: unknown[][] = new Array(rowCount);
   for (let i = 0; i < rowCount; i++) {
