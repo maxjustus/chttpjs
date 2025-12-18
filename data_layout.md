@@ -415,3 +415,7 @@ This works because these are fixed-width scalar types where the Native column fo
 
 -   **Examples**: `Decimal(P, S)`, `Int128`, `UInt128`, `Int256`, `UInt256`.
 -   **Layout**: `[RowBinary_Value_0] [RowBinary_Value_1] ...`
+
+### Sparse serialization
+
+TODO:

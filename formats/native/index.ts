@@ -143,7 +143,7 @@ import { parseTypeList, parseTupleElements } from "../shared.ts";
 /**
  * Traverse type tree for kind plan. If plan is provided, records kinds; otherwise just skips.
  */
-function traverseKindPlan(reader: BufferReader, typeStr: string, path: number[], plan?: KindPlan): void {
+export function traverseKindPlan(reader: BufferReader, typeStr: string, path: number[], plan?: KindPlan): void {
   const kind = reader.buffer[reader.offset++];
   plan?.set(path.join(","), kind);
 

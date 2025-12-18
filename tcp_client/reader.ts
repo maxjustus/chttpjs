@@ -1,6 +1,7 @@
 
 import { TEXT_DECODER } from "../formats/shared.ts";
 import { decodeBlock } from "../compression.ts";
+import { BufferReader } from "../formats/native/io.ts";
 
 /**
  * A streaming byte reader that handles async buffering and optional ClickHouse compression.
@@ -204,5 +205,40 @@ export class StreamingReader {
     const val = view.getBigUint64(0, true);
     this.offset += 8;
     return val;
+  }
+
+  /**
+   * Reads one compressed block from the stream, decompresses it, and returns
+   * the decompressed data. Used for reading compressed Data packets.
+   *
+   * Format: [16-byte checksum][1-byte method][4-byte compressed size][4-byte uncompressed size][compressed data]
+   */
+  async readCompressedBlock(): Promise<Uint8Array> {
+    // Read checksum (16 bytes)
+    await this.ensure(16);
+    const checksum = this.buffer.slice(this.offset, this.offset + 16);
+    this.offset += 16;
+
+    // Read header (9 bytes): method + compressed size + uncompressed size
+    await this.ensure(9);
+    const header = this.buffer.slice(this.offset, this.offset + 9);
+    this.offset += 9;
+
+    // Parse compressed size (includes header size)
+    const compressedSizeWithHeader = new DataView(header.buffer, header.byteOffset + 1, 4).getUint32(0, true);
+    const compressedDataSize = compressedSizeWithHeader - 9;
+
+    // Read compressed data
+    await this.ensure(compressedDataSize);
+    const compressedData = this.buffer.slice(this.offset, this.offset + compressedDataSize);
+    this.offset += compressedDataSize;
+
+    // Combine into full block for decodeBlock
+    const fullBlock = new Uint8Array(16 + 9 + compressedData.length);
+    fullBlock.set(checksum, 0);
+    fullBlock.set(header, 16);
+    fullBlock.set(compressedData, 25);
+
+    return decodeBlock(fullBlock);
   }
 }

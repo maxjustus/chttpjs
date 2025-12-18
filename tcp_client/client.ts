@@ -2,21 +2,21 @@ import * as net from "node:net";
 import { randomUUID } from "node:crypto";
 import { StreamingReader } from "./reader.ts";
 import { StreamingWriter } from "./writer.ts";
-import { 
-  ServerPacketId, 
-  type Progress, 
-  type ServerHello, 
+import {
+  ServerPacketId,
+  type Progress,
+  type ServerHello,
   type ProfileInfo,
   type Packet,
-  DBMS_TCP_PROTOCOL_VERSION 
+  DBMS_TCP_PROTOCOL_VERSION
 } from "./types.ts";
 import { readBlockInfo } from "./protocol_data.ts";
 import { getCodec, defaultDeserializerState } from "../formats/native/codecs.ts";
 import { BufferReader, BufferWriter } from "../formats/native/io.ts";
 import { Table } from "../formats/native/table.ts";
-import { asRows, type DeserializerState, type KindPlan } from "../formats/native/index.ts";
+import { asRows, traverseKindPlan, type DeserializerState, type KindPlan } from "../formats/native/index.ts";
 import { init as initCompression } from "../compression.ts";
-import { parseTypeList, parseTupleElements } from "../formats/shared.ts";
+import { parseTypeList, parseTupleElements } from "../formats/shared.ts"; // used by parseKindPlanStreaming
 
 export interface TcpClientOptions {
   host: string;
@@ -25,6 +25,7 @@ export interface TcpClientOptions {
   user?: string;
   password?: string;
   debug?: boolean;
+  compression?: boolean;
 }
 
 export interface ColumnSchema {
@@ -55,7 +56,8 @@ export class TcpClient {
       database: "default",
       user: "default",
       password: "",
-      debug: true,
+      debug: false,
+      compression: false,
       ...options
     };
   }
@@ -292,8 +294,17 @@ export class TcpClient {
     return info;
   }
 
-  private async readBlock(): Promise<Table> {
+  private async readBlock(compressed: boolean = false): Promise<Table> {
+    // Table name is always uncompressed, even when block data is compressed
     const tableName = await this.reader!.readString();
+
+    // For compressed blocks, decompress first then parse from buffer
+    if (compressed) {
+      const decompressed = await this.reader!.readCompressedBlock();
+      return this.parseCompressedBlockFromBuffer(new BufferReader(decompressed));
+    }
+
+    // For uncompressed, stream data and parse incrementally
     await readBlockInfo(this.reader!);
     const columnsCount = Number(await this.reader!.readVarInt());
     const rowsCount = Number(await this.reader!.readVarInt());
@@ -320,9 +331,6 @@ export class TcpClient {
       const state = { ...this.deserializerState, kindPlan };
 
       if (rowsCount === 0) {
-        // For empty blocks, some codecs might still need to read prefixes, 
-        // but generally we can just get an empty column.
-        // Let's use a dummy BufferReader to see if it wants to read anything.
         const tempReader = new BufferReader(new Uint8Array(0));
         columnData.push(codec.decode(tempReader, 0, state, []));
         continue;
@@ -355,29 +363,88 @@ export class TcpClient {
     });
   }
 
+  /**
+   * Parse a decompressed block from a BufferReader.
+   * Note: Table name is read before decompression, not included in the compressed data.
+   */
+  private parseCompressedBlockFromBuffer(reader: BufferReader): Table {
+    // Block info (table name was already read before decompression)
+    while (true) {
+      const fieldNum = reader.readVarint();
+      if (fieldNum === 0) break;
+      if (fieldNum === 1) reader.offset += 1;
+      else if (fieldNum === 2) reader.offset += 4;
+    }
+
+    const columnsCount = reader.readVarint();
+    const rowsCount = reader.readVarint();
+
+    const columns: ColumnSchema[] = [];
+    const columnData = [];
+
+    for (let i = 0; i < columnsCount; i++) {
+      const colName = reader.readString();
+      const colType = reader.readString();
+
+      let kindPlan: KindPlan | undefined = undefined;
+      if (this.serverHello!.revision >= 54454n) {
+        const hasCustom = reader.buffer[reader.offset++] !== 0;
+        if (hasCustom) {
+          kindPlan = new Map();
+          traverseKindPlan(reader, colType, [], kindPlan);
+        }
+      }
+
+      columns.push({ name: colName, type: colType });
+
+      const codec = getCodec(colType);
+      const state = { ...this.deserializerState, kindPlan };
+
+      codec.readPrefix?.(reader);
+      columnData.push(codec.decode(reader, rowsCount, state, []));
+    }
+
+    return new Table({
+      columns: columns.map(c => ({ name: c.name, type: c.type })),
+      columnData,
+      rowCount: rowsCount
+    });
+  }
+
   async *query(sql: string, settings: Record<string, string> = {}): AsyncGenerator<Packet> {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
 
+    const useCompression = this.options.compression ?? false;
+
+    // The compression flag in the query packet enables bidirectional compression:
+    // - When 1: client sends compressed Data blocks, server sends compressed Data blocks
+    // - When 0: both sides send uncompressed
     const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
-      "compress": "0",
       "allow_special_serialization_kinds_in_output_formats": "0",
       ...settings
-    });
+    }, useCompression);
+    this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
     this.socket.write(queryPacket);
 
-    const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision);
-    this.socket.write(delimiter); 
+    // Send delimiter (compressed if compression is enabled)
+    const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression);
+    this.log(`[query] sending delimiter (${delimiter.length} bytes, compressed=${useCompression})`);
+    this.socket.write(delimiter);
 
     this.currentSchema = null;
-    this.reader.setCompression(false);
+    this.log(`[query] waiting for response...`);
 
     while (true) {
+      this.log(`[query] reading packet id...`);
       const packetId = Number(await this.reader.readVarInt());
-      // console.log(`[TcpClient] packetId=${packetId}`);
-      
+      this.log(`[query] packetId=${packetId}, useCompression=${useCompression}`);
+
       switch (packetId) {
         case ServerPacketId.Data: {
-          const table = await this.readBlock();
+          // With compression=1, ALL Data blocks from server are compressed
+          this.log(`[query] reading Data block (compressed=${useCompression})...`);
+          const table = await this.readBlock(useCompression);
+          this.log(`[query] got Data block with ${table.rowCount} rows`);
           if (this.currentSchema === null) {
             this.currentSchema = table.columns.map(c => ({ name: c.name, type: c.type }));
           }
@@ -391,7 +458,8 @@ export class TcpClient {
           yield { type: "ProfileInfo", info: await this.readProfileInfo() };
           break;
         case ServerPacketId.ProfileEvents:
-          yield { type: "ProfileEvents", table: await this.readBlock() };
+          // ProfileEvents blocks are always uncompressed (diagnostic metadata)
+          yield { type: "ProfileEvents", table: await this.readBlock(false) };
           break;
         case ServerPacketId.EndOfStream:
           yield { type: "EndOfStream" };

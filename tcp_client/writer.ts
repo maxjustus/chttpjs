@@ -1,6 +1,7 @@
 
 import { TEXT_ENCODER } from "../formats/shared.ts";
 import { ClientPacketId, DBMS_TCP_PROTOCOL_VERSION, QueryProcessingStage } from "./types.ts";
+import { encodeBlock, Method } from "../compression.ts";
 
 /**
  * Handles encoding and writing ClickHouse protocol packets.
@@ -91,7 +92,7 @@ export class StreamingWriter {
     return this.flush();
   }
 
-  encodeQuery(qid: string, query: string, revision: bigint, settings: Record<string, string> = {}): Uint8Array {
+  encodeQuery(qid: string, query: string, revision: bigint, settings: Record<string, string> = {}, compression: boolean = false): Uint8Array {
     this.writeVarInt(ClientPacketId.Query);
     this.writeString(qid);
 
@@ -156,7 +157,9 @@ export class StreamingWriter {
     }
 
     this.writeVarInt(QueryProcessingStage.Complete);
-    this.writeU8(0); // compression: 0 for query packet
+    // Compression: 0 = disabled, 1 = enabled (as UVarInt per ClickHouse native protocol docs)
+    // When enabled, server will compress Data blocks using LZ4
+    this.writeVarInt(compression ? 1 : 0);
     this.writeString(query);
 
     if (revision >= 54459n) { // DBMS_MIN_PROTOCOL_VERSION_WITH_PARAMETERS
@@ -166,7 +169,25 @@ export class StreamingWriter {
     return this.flush();
   }
 
-  encodeData(tableName: string, rowsCount: number, columns: { name: string, type: string, data: Uint8Array }[], revision: bigint): Uint8Array {
+  encodeData(tableName: string, rowsCount: number, columns: { name: string, type: string, data: Uint8Array }[], revision: bigint, compress: boolean = false): Uint8Array {
+    if (compress) {
+      // Packet ID and table name are always uncompressed
+      this.writeVarInt(ClientPacketId.Data);
+      this.writeString(tableName);
+      const headerBytes = this.flush();
+
+      // Encode block info + columns (without table name) then compress
+      const payload = this.encodeDataBlockContent(rowsCount, columns, revision);
+      const compressed = encodeBlock(payload, Method.LZ4);
+
+      // Combine: header (packet ID + table name) + compressed block
+      const result = new Uint8Array(headerBytes.length + compressed.length);
+      result.set(headerBytes, 0);
+      result.set(compressed, headerBytes.length);
+      return result;
+    }
+
+    // Uncompressed: write everything inline
     this.writeVarInt(ClientPacketId.Data);
     this.writeString(tableName);
 
@@ -191,6 +212,37 @@ export class StreamingWriter {
         this.writeU8(0);
       }
       // Note: This sketch doesn't handle Prefixes (LowCardinality etc) in the writer yet
+      this.ensure(col.data.length);
+      this.buffer.set(col.data, this.offset);
+      this.offset += col.data.length;
+    }
+
+    return this.flush();
+  }
+
+  /**
+   * Encode Data block content (block info + columns) for compression.
+   * Does NOT include table name - that's written uncompressed before the compressed block.
+   */
+  private encodeDataBlockContent(rowsCount: number, columns: { name: string, type: string, data: Uint8Array }[], revision: bigint): Uint8Array {
+    // BlockInfo
+    if (revision > 0n) {
+      this.writeVarInt(1);
+      this.writeU8(2);
+      this.writeVarInt(2);
+      this.writeI32LE(-1);
+      this.writeVarInt(0);
+    }
+
+    this.writeVarInt(columns.length);
+    this.writeVarInt(rowsCount);
+
+    for (const col of columns) {
+      this.writeString(col.name);
+      this.writeString(col.type);
+      if (revision >= 54454n) {
+        this.writeU8(0);
+      }
       this.ensure(col.data.length);
       this.buffer.set(col.data, this.offset);
       this.offset += col.data.length;
