@@ -13,12 +13,11 @@ import {
   DBMS_TCP_PROTOCOL_VERSION
 } from "./types.ts";
 import { readBlockInfo } from "./protocol_data.ts";
-import { getCodec, defaultDeserializerState } from "../formats/native/codecs.ts";
-import { BufferReader, BufferWriter } from "../formats/native/io.ts";
+import { getCodec } from "../formats/native/codecs.ts";
+import { BufferReader, BufferWriter, BufferUnderflowError } from "../formats/native/io.ts";
 import { Table } from "../formats/native/table.ts";
-import { asRows, traverseKindPlan, type DeserializerState, type KindPlan } from "../formats/native/index.ts";
+import { asRows, type DeserializerState, type SerializationNode, DENSE_LEAF } from "../formats/native/index.ts";
 import { init as initCompression, Method } from "../compression.ts";
-import { parseTypeList, parseTupleElements } from "../formats/shared.ts"; // used by parseKindPlanStreaming
 
 export interface TcpClientOptions {
   host: string;
@@ -51,7 +50,6 @@ export class TcpClient {
   private options: TcpClientOptions;
   private _serverHello: ServerHello | null = null;
   private currentSchema: ColumnSchema[] | null = null;
-  private deserializerState: DeserializerState = defaultDeserializerState();
   private sessionTimezone: string | null = null;
 
   private log(...args: any[]) {
@@ -296,28 +294,6 @@ export class TcpClient {
     return progress;
   }
 
-  private async parseKindPlanStreaming(typeStr: string, plan: KindPlan, path: number[]) {
-    const kind = Number(await this.reader!.readU8());
-    plan.set(path.join(","), kind);
-
-    if (typeStr.startsWith("Tuple")) {
-      const elements = parseTupleElements(typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")));
-      for (let i = 0; i < elements.length; i++) {
-        await this.parseKindPlanStreaming(elements[i].type, plan, [...path, i]);
-      }
-    } else if (typeStr.startsWith("Array")) {
-      const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
-      await this.parseKindPlanStreaming(innerType, plan, [...path, 0]);
-    } else if (typeStr.startsWith("Map")) {
-      const args = parseTypeList(typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")));
-      await this.parseKindPlanStreaming(args[0], plan, [...path, 0]);
-      await this.parseKindPlanStreaming(args[1], plan, [...path, 1]);
-    } else if (typeStr.startsWith("Nullable")) {
-      const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
-      await this.parseKindPlanStreaming(innerType, plan, [...path, 0]);
-    }
-  }
-
   private async readProfileInfo(): Promise<ProfileInfo> {
     const info: ProfileInfo = {
       rows: await this.reader!.readVarInt(),
@@ -355,7 +331,7 @@ export class TcpClient {
 
   private async readBlock(compressed: boolean = false): Promise<Table> {
     // Table name is always uncompressed, even when block data is compressed
-    const tableName = await this.reader!.readString();
+    await this.reader!.readString(); // tableName - required by protocol but unused
 
     // For compressed blocks, decompress first then parse from buffer
     if (compressed) {
@@ -374,38 +350,39 @@ export class TcpClient {
     for (let i = 0; i < columnsCount; i++) {
       const colName = await this.reader!.readString();
       const colType = await this.reader!.readString();
-
-      let kindPlan: KindPlan | undefined = undefined;
-      if (this.serverHello!.revision >= 54454n) {
-        const hasCustom = await this.reader!.readU8() !== 0;
-        if (hasCustom) {
-          kindPlan = new Map();
-          await this.parseKindPlanStreaming(colType, kindPlan, []);
-        }
-      }
-
       columns.push({ name: colName, type: colType });
 
       const codec = getCodec(colType);
-      const state = { ...this.deserializerState, kindPlan };
 
-      if (rowsCount === 0) {
-        const tempReader = new BufferReader(new Uint8Array(0));
-        columnData.push(codec.decode(tempReader, 0, state, []));
-        continue;
-      }
-
+      // Use BufferUnderflowError retry pattern for streaming reads
       while (true) {
         const currentBuffer = this.reader!.peekAll();
         const tempReader = new BufferReader(currentBuffer);
         try {
+          // Read serialization kind tree if supported
+          let serNode: SerializationNode = DENSE_LEAF;
+          if (this.serverHello!.revision >= 54454n) {
+            const hasCustom = tempReader.buffer[tempReader.offset++] !== 0;
+            if (hasCustom) {
+              serNode = codec.readKinds(tempReader);
+            }
+          }
+
+          const state: DeserializerState = { serNode, sparseRuntime: new Map() };
+
+          if (rowsCount === 0) {
+            this.reader!.consume(tempReader.offset);
+            columnData.push(codec.decode(new BufferReader(new Uint8Array(0)), 0, state));
+            break;
+          }
+
           codec.readPrefix?.(tempReader);
-          const data = codec.decode(tempReader, rowsCount, state, []);
+          const data = codec.decode(tempReader, rowsCount, state);
           this.reader!.consume(tempReader.offset);
           columnData.push(data);
           break;
-        } catch (err: any) {
-          if (err.message && err.message.includes("Unexpected end of buffer")) {
+        } catch (err) {
+          if (err instanceof BufferUnderflowError) {
             const more = await this.reader!.nextChunk();
             if (!more) throw new Error(`EOF while decoding block column ${colName} (${colType})`);
             continue;
@@ -444,23 +421,22 @@ export class TcpClient {
     for (let i = 0; i < columnsCount; i++) {
       const colName = reader.readString();
       const colType = reader.readString();
-
-      let kindPlan: KindPlan | undefined = undefined;
-      if (this.serverHello!.revision >= 54454n) {
-        const hasCustom = reader.buffer[reader.offset++] !== 0;
-        if (hasCustom) {
-          kindPlan = new Map();
-          traverseKindPlan(reader, colType, [], kindPlan);
-        }
-      }
-
       columns.push({ name: colName, type: colType });
 
       const codec = getCodec(colType);
-      const state = { ...this.deserializerState, kindPlan };
+
+      let serNode: SerializationNode = DENSE_LEAF;
+      if (this.serverHello!.revision >= 54454n) {
+        const hasCustom = reader.buffer[reader.offset++] !== 0;
+        if (hasCustom) {
+          serNode = codec.readKinds(reader);
+        }
+      }
+
+      const state: DeserializerState = { serNode, sparseRuntime: new Map() };
 
       codec.readPrefix?.(reader);
-      columnData.push(codec.decode(reader, rowsCount, state, []));
+      columnData.push(codec.decode(reader, rowsCount, state));
     }
 
     return new Table({

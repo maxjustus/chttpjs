@@ -51,21 +51,27 @@ export interface Block {
 }
 
 /**
- * Maps type tree path (e.g. [0, 1] for second element of nested tuple)
- * to serialization kind (0 = Default, 1 = Sparse).
+ * Node in the serialization tree. Tracks kind (dense/sparse) for each position
+ * in the type tree. Children correspond to nested types (Array element, Map key/value, etc.)
  */
-export type KindPlan = Map<string, number>;
+export interface SerializationNode {
+  kind: number;  // 0 = Dense, 1 = Sparse
+  children: SerializationNode[];
+}
+
+/** Default node for dense serialization (no sparse encoding) */
+export const DENSE_LEAF: SerializationNode = { kind: 0, children: [] };
 
 /**
  * State maintained during a block deserialization.
  */
 export interface DeserializerState {
-  kindPlan?: KindPlan;
+  serNode: SerializationNode;
   /**
    * Tracks partial sparse groups across granules/blocks.
-   * Map key is the path string, value is [trailing_defaults, has_value_after_defaults].
+   * Map key is the SerializationNode reference, value is [trailing_defaults, has_value_after_defaults].
    */
-  sparseRuntime: Map<string, [number, boolean]>;
+  sparseRuntime: Map<SerializationNode, [number, boolean]>;
 }
 
 interface BlockResult {
@@ -122,7 +128,7 @@ function estimateBlockSize(
       if (clientVersion >= 54454) {
         const hasCustom = reader.buffer[reader.offset++] !== 0;
         if (hasCustom) {
-          traverseKindPlan(reader, typeStr, []);
+          skipSerializationTree(reader, typeStr);
         }
       }
 
@@ -141,27 +147,27 @@ function estimateBlockSize(
 import { parseTypeList, parseTupleElements } from "../shared.ts";
 
 /**
- * Traverse type tree for kind plan. If plan is provided, records kinds; otherwise just skips.
+ * Skip serialization tree bytes without building the tree.
+ * Used when we only need to advance past the kind metadata.
  */
-export function traverseKindPlan(reader: BufferReader, typeStr: string, path: number[], plan?: KindPlan): void {
-  const kind = reader.buffer[reader.offset++];
-  plan?.set(path.join(","), kind);
+export function skipSerializationTree(reader: BufferReader, typeStr: string): void {
+  reader.offset++; // skip kind byte
 
   if (typeStr.startsWith("Tuple")) {
     const elements = parseTupleElements(typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")));
-    for (let i = 0; i < elements.length; i++) {
-      traverseKindPlan(reader, elements[i].type, [...path, i], plan);
+    for (const el of elements) {
+      skipSerializationTree(reader, el.type);
     }
   } else if (typeStr.startsWith("Array")) {
     const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
-    traverseKindPlan(reader, innerType, [...path, 0], plan);
+    skipSerializationTree(reader, innerType);
   } else if (typeStr.startsWith("Map")) {
     const args = parseTypeList(typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")));
-    traverseKindPlan(reader, args[0], [...path, 0], plan);
-    traverseKindPlan(reader, args[1], [...path, 1], plan);
+    skipSerializationTree(reader, args[0]);
+    skipSerializationTree(reader, args[1]);
   } else if (typeStr.startsWith("Nullable")) {
     const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
-    traverseKindPlan(reader, innerType, [...path, 0], plan);
+    skipSerializationTree(reader, innerType);
   }
 }
 
@@ -205,30 +211,25 @@ function decodeNativeBlock(
   const columns: ColumnDef[] = [];
   const columnData: Column[] = [];
 
-  const state: DeserializerState = {
-    sparseRuntime: new Map()
-  };
-
   // Native format: per-column [name, type, [has_custom, [kinds...]], prefix, data]
   for (let i = 0; i < numCols; i++) {
     const name = reader.readString();
     const type = reader.readString();
     columns.push({ name, type });
 
-    let hasCustomSerialization = false;
-    if (clientVersion >= 54454) {
-      hasCustomSerialization = reader.buffer[reader.offset++] !== 0;
-    }
-
-    state.kindPlan = undefined;
-    if (hasCustomSerialization) {
-      state.kindPlan = new Map();
-      traverseKindPlan(reader, type, [], state.kindPlan);
-    }
-
     const codec = getCodec(type);
+
+    let serNode: SerializationNode = DENSE_LEAF;
+    if (clientVersion >= 54454) {
+      const hasCustomSerialization = reader.buffer[reader.offset++] !== 0;
+      if (hasCustomSerialization) {
+        serNode = codec.readKinds(reader);
+      }
+    }
+
+    const state: DeserializerState = { serNode, sparseRuntime: new Map() };
     codec.readPrefix?.(reader);
-    columnData.push(codec.decode(reader, numRows, state, []));
+    columnData.push(codec.decode(reader, numRows, state));
   }
 
   return {

@@ -1,7 +1,6 @@
 
 import { TEXT_DECODER } from "../formats/shared.ts";
 import { decodeBlock } from "../compression.ts";
-import { BufferReader } from "../formats/native/io.ts";
 import { ClickHouseException } from "./types.ts";
 
 /**

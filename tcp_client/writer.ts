@@ -1,7 +1,7 @@
 
 import { TEXT_ENCODER } from "../formats/shared.ts";
 import { ClientPacketId, DBMS_TCP_PROTOCOL_VERSION, QueryProcessingStage } from "./types.ts";
-import { encodeBlock, Method } from "../compression.ts";
+import { encodeBlock, Method, type MethodCode } from "../compression.ts";
 
 /**
  * Handles encoding and writing ClickHouse protocol packets.
@@ -178,7 +178,7 @@ export class StreamingWriter {
     return this.flush();
   }
 
-  encodeData(tableName: string, rowsCount: number, columns: { name: string, type: string, data: Uint8Array }[], revision: bigint, compress: boolean = false, method: number = Method.LZ4): Uint8Array {
+  encodeData(tableName: string, rowsCount: number, columns: { name: string, type: string, data: Uint8Array }[], revision: bigint, compress: boolean = false, method: MethodCode = Method.LZ4): Uint8Array {
     if (compress) {
       // Packet ID and table name are always uncompressed
       this.writeVarInt(ClientPacketId.Data);

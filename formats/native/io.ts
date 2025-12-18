@@ -4,6 +4,13 @@
 
 import { TEXT_ENCODER, TEXT_DECODER, type DecodeOptions, type TypedArray } from "../shared.ts";
 
+export class BufferUnderflowError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BufferUnderflowError';
+  }
+}
+
 export type TypedArrayConstructor<T extends TypedArray> = {
   new(length: number): T;
   new(buffer: ArrayBuffer, byteOffset: number, length: number): T;
@@ -106,7 +113,7 @@ export class BufferReader {
     let result = 0, shift = 0;
     while (true) {
       if (this.offset >= this.buffer.length) {
-        throw new Error(`Unexpected end of buffer reading varint at offset ${this.offset}`);
+        throw new BufferUnderflowError(`Unexpected end of buffer reading varint at offset ${this.offset}`);
       }
       const byte = this.buffer[this.offset++];
       result |= (byte & 0x7f) << shift;
@@ -120,7 +127,7 @@ export class BufferReader {
     let result = 0n, shift = 0n;
     while (true) {
       if (this.offset >= this.buffer.length) {
-        throw new Error(`Unexpected end of buffer reading varint64 at offset ${this.offset}`);
+        throw new BufferUnderflowError(`Unexpected end of buffer reading varint64 at offset ${this.offset}`);
       }
       const byte = BigInt(this.buffer[this.offset++]);
       result |= (byte & 0x7fn) << shift;
@@ -133,7 +140,7 @@ export class BufferReader {
   readString(): string {
     const len = this.readVarint();
     if (this.offset + len > this.buffer.length) {
-      throw new Error(`Unexpected end of buffer reading string of length ${len} at offset ${this.offset}`);
+      throw new BufferUnderflowError(`Unexpected end of buffer reading string of length ${len} at offset ${this.offset}`);
     }
     const str = TEXT_DECODER.decode(this.buffer.subarray(this.offset, this.offset + len));
     this.offset += len;
@@ -145,7 +152,7 @@ export class BufferReader {
     const elementSize = Ctor.BYTES_PER_ELEMENT;
     const byteLength = count * elementSize;
     if (this.offset + byteLength > this.buffer.length) {
-      throw new Error(`Unexpected end of buffer reading ${count} elements of size ${elementSize} at offset ${this.offset}`);
+      throw new BufferUnderflowError(`Unexpected end of buffer reading ${count} elements of size ${elementSize} at offset ${this.offset}`);
     }
     const currentOffset = this.buffer.byteOffset + this.offset;
 
@@ -162,7 +169,7 @@ export class BufferReader {
 
   readBytes(length: number): Uint8Array {
     if (this.offset + length > this.buffer.length) {
-      throw new Error(`Unexpected end of buffer reading ${length} bytes at offset ${this.offset}`);
+      throw new BufferUnderflowError(`Unexpected end of buffer reading ${length} bytes at offset ${this.offset}`);
     }
     const res = this.buffer.subarray(this.offset, this.offset + length);
     this.offset += length;

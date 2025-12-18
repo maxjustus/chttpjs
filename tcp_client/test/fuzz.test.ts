@@ -2,7 +2,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert";
 import { TcpClient } from "../client.ts";
-import { collectBytes, collectText } from "../../client.ts"; // reuse HTTP helpers for setup if needed
 import { asRows } from "../../formats/native/index.ts";
 
 describe("TCP Client Full Fuzz Gauntlet", { timeout: 600000 }, () => {
@@ -71,14 +70,7 @@ describe("TCP Client Full Fuzz Gauntlet", { timeout: 600000 }, () => {
         }
         
         assert.strictEqual(dstCount, srcCount, "Row count mismatch");
-        
-        // Verify hashes match
-        let srcHash = "";
-        let dstHash = "";
-        for await (const p of client.query(`SELECT cityHash64(*) as h FROM ${srcTable} ORDER BY tuple(*)`)) {
-           // This might be slow for large tables, but good for fuzz verification
-        }
-        
+
         console.log(`  [Fuzz ${i+1}/${iterations}] PASSED`);
         
         await client.execute(`DROP TABLE ${srcTable}`);
