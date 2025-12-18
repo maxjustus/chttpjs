@@ -195,12 +195,13 @@ export class TcpClient {
   async insert(sql: string, data: Table | AsyncIterable<Table> | Iterable<Table>) {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
 
-    const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
-      "compress": "0",
-    });
+    const useCompression = !!this.options.compression;
+    const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
+
+    const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {}, useCompression, {});
     this.socket.write(queryPacket);
 
-    const queryDelimiter = this.writer.encodeData("", 0, [], this.serverHello.revision);
+    const queryDelimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
     this.socket.write(queryDelimiter);
 
     let schemaReceived = false;
@@ -209,13 +210,13 @@ export class TcpClient {
 
       switch (packetId) {
         case ServerPacketId.Data: {
-          const block = await this.readBlock();
+          const block = await this.readBlock(useCompression);
           this.currentSchema = block.columns.map(c => ({ name: c.name, type: c.type }));
           schemaReceived = true;
           break;
         }
         case ServerPacketId.Progress: await this.readProgress(); break;
-        case ServerPacketId.Log: await this.readBlock(); break;
+        case ServerPacketId.Log: await this.readBlock(false); break;
         case 11: // TableColumns
           await this.reader.readString();
           await this.reader.readString();
@@ -251,12 +252,12 @@ export class TcpClient {
         });
       }
 
-      const dataPacket = this.writer.encodeData("", table.rowCount, encodedColumns, this.serverHello.revision);
+      const dataPacket = this.writer.encodeData("", table.rowCount, encodedColumns, this.serverHello.revision, useCompression, compressionMethod);
       this.socket.write(dataPacket);
       totalInserted += table.rowCount;
     }
 
-    const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision);
+    const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
     this.socket.write(delimiter);
 
     while (true) {
@@ -267,9 +268,11 @@ export class TcpClient {
         case ServerPacketId.Progress: await this.readProgress(); break;
         case ServerPacketId.ProfileInfo: await this.readProfileInfo(); break;
         case ServerPacketId.Data:
+          await this.readBlock(useCompression);
+          break;
         case ServerPacketId.Log:
         case ServerPacketId.ProfileEvents:
-          await this.readBlock();
+          await this.readBlock(false);
           break;
         case ServerPacketId.Exception:
           throw await this.reader.readException();

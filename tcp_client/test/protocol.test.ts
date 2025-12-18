@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert";
 import { TcpClient } from "../client.ts";
+import { Table } from "../../formats/native/index.ts";
 
 describe("TCP Client Protocol Features", () => {
   const options = {
@@ -69,6 +70,56 @@ describe("TCP Client Protocol Features", () => {
         if (packet.type === "Data") rows += packet.table.rowCount;
       }
       assert.strictEqual(rows, 1000, "Should receive all rows with LZ4 compression");
+    } finally {
+      client.close();
+    }
+  });
+
+  test("should insert with LZ4 compression", async () => {
+    const client = new TcpClient({ ...options, compression: true });
+    await client.connect();
+    try {
+      const tableName = `test_insert_lz4_${Date.now()}`;
+      await client.execute(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
+
+      const table = Table.fromColumnar(
+        [{ name: "id", type: "UInt32" }, { name: "val", type: "String" }],
+        [new Uint32Array([1, 2, 3]), ["a", "b", "c"]]
+      );
+      await client.insert(`INSERT INTO ${tableName} VALUES`, table);
+
+      let rows = 0;
+      for await (const packet of client.query(`SELECT * FROM ${tableName} ORDER BY id`)) {
+        if (packet.type === "Data") rows += packet.table.rowCount;
+      }
+      assert.strictEqual(rows, 3, "Should have inserted 3 rows with LZ4 compression");
+
+      await client.execute(`DROP TABLE ${tableName}`);
+    } finally {
+      client.close();
+    }
+  });
+
+  test("should insert with ZSTD compression", async () => {
+    const client = new TcpClient({ ...options, compression: 'zstd' });
+    await client.connect();
+    try {
+      const tableName = `test_insert_zstd_${Date.now()}`;
+      await client.execute(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
+
+      const table = Table.fromColumnar(
+        [{ name: "id", type: "UInt32" }, { name: "val", type: "String" }],
+        [new Uint32Array([1, 2, 3]), ["a", "b", "c"]]
+      );
+      await client.insert(`INSERT INTO ${tableName} VALUES`, table);
+
+      let rows = 0;
+      for await (const packet of client.query(`SELECT * FROM ${tableName} ORDER BY id`)) {
+        if (packet.type === "Data") rows += packet.table.rowCount;
+      }
+      assert.strictEqual(rows, 3, "Should have inserted 3 rows with ZSTD compression");
+
+      await client.execute(`DROP TABLE ${tableName}`);
     } finally {
       client.close();
     }
