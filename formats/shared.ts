@@ -2,10 +2,6 @@
  * Shared utilities for Native and RowBinary format codecs.
  */
 
-// ============================================================================
-// Types
-// ============================================================================
-
 export type TypedArray =
   | Int8Array
   | Uint8Array
@@ -37,10 +33,6 @@ export interface Cursor {
   offset: number;
   options?: DecodeOptions;
 }
-
-// ============================================================================
-// Constants
-// ============================================================================
 
 export const TEXT_ENCODER = new TextEncoder();
 export const TEXT_DECODER = new TextDecoder();
@@ -82,10 +74,6 @@ export const TYPED_ARRAYS: Record<
   Float64: Float64Array,
 };
 
-// ============================================================================
-// NaN Wrapper Classes
-// ============================================================================
-
 /**
  * NaN wrapper classes to preserve IEEE 754 bit patterns during round-trips.
  *
@@ -118,10 +106,6 @@ export class Float64NaN {
   toJSON(): null { return null; }
   [Symbol.toPrimitive](): number { return NaN; }
 }
-
-// ============================================================================
-// DateTime64 Wrapper
-// ============================================================================
 
 export class ClickHouseDateTime64 {
   public ticks: bigint;
@@ -171,10 +155,6 @@ export class ClickHouseDateTime64 {
   }
 }
 
-// ============================================================================
-// Varint Encoding/Decoding
-// ============================================================================
-
 export function readVarint(data: Uint8Array, cursor: { offset: number }): number {
   let value = 0;
   let shift = 0;
@@ -202,10 +182,6 @@ export function leb128Size(value: number): number {
   const bits = 32 - Math.clz32(value | 1);
   return Math.ceil(bits / 7);
 }
-
-// ============================================================================
-// String Encoding/Decoding
-// ============================================================================
 
 export function utf8DecodeSmall(data: Uint8Array, start: number, end: number): string {
   let result = "";
@@ -250,10 +226,6 @@ export function checkBounds(data: Uint8Array, cursor: { offset: number }, n: num
   if (cursor.offset + n > data.length) throw new RangeError('Buffer underflow');
 }
 
-// ============================================================================
-// BigInt 128/256-bit Helpers
-// ============================================================================
-
 export function writeBigInt128(v: DataView, o: number, val: bigint, signed: boolean): void {
   const low = val & 0xffffffffffffffffn;
   const high = val >> 64n;
@@ -284,10 +256,6 @@ export function readBigInt256(v: DataView, o: number, signed: boolean): bigint {
   }
   return val;
 }
-
-// ============================================================================
-// Type Parsing Helpers
-// ============================================================================
 
 export function parseTypeList(inner: string): string[] {
   const types: string[] = [];
@@ -327,10 +295,6 @@ export function parseTupleElements(inner: string): { name: string | null; type: 
     return { name: null, type: part };
   });
 }
-
-// ============================================================================
-// Decimal Helpers
-// ============================================================================
 
 export function decimalByteSize(type: string): 4 | 8 | 16 | 32 {
   if (type.startsWith("Decimal32")) return 4;
@@ -385,10 +349,6 @@ export function formatScaledBigInt(val: bigint, scale: number): string {
   return neg ? "-" + r : r;
 }
 
-// ============================================================================
-// IPv6 Helpers
-// ============================================================================
-
 export function expandIPv6(str: string): string[] {
   let parts = str.split(":");
   const emptyIdx = parts.indexOf("");
@@ -433,10 +393,6 @@ export function bytesToIpv6(bytes: Uint8Array): string {
   }
   return parts.join(':');
 }
-
-// ============================================================================
-// Type Inference
-// ============================================================================
 
 export function inferType(value: unknown): string {
   if (value === null) return "Nothing";

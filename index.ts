@@ -39,8 +39,6 @@ export {
   streamNativeRows,
   toArrayRows,
   asRows,
-  type StreamDecodeNativeResult,
-  type ColumnarResult,
   Table,
   TableBuilder,
   tableFromArrays,

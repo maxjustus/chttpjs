@@ -22,7 +22,7 @@ export {
   decodeNative,
   streamEncodeNative,
   streamDecodeNative,
-  type StreamDecodeNativeResult,
+  Table,
 } from "./formats/native/index.ts";
 
 export type Compression = "lz4" | "zstd" | "none";

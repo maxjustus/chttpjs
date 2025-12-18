@@ -38,10 +38,6 @@ export {
   ClickHouseDateTime64,
 };
 
-// ============================================================================
-// Encoder Class
-// ============================================================================
-
 export class RowBinaryEncoder {
   buffer: Uint8Array;
   view: DataView;
@@ -200,10 +196,6 @@ export class RowBinaryEncoder {
   }
 }
 
-// ============================================================================
-// StreamingReader - Buffer manager for streaming decode
-// ============================================================================
-
 /**
  * StreamingReader accumulates chunks from an AsyncIterable and provides
  * buffer slices for sync decode with retry-on-underflow semantics.
@@ -285,10 +277,6 @@ class StreamingReader {
   }
 
 }
-
-// ============================================================================
-// Codec Interface & Implementation
-// ============================================================================
 
 interface Codec {
   encode(enc: RowBinaryEncoder, value: unknown): void;
@@ -913,10 +901,6 @@ class DynamicCodec implements Codec {
   }
 }
 
-// ============================================================================
-// Public API
-// ============================================================================
-
 export function encodeRowBinary(
   columns: ColumnDef[],
   rows: unknown[][],
@@ -965,10 +949,6 @@ export function decodeRowBinary(
 
   return { columns, rows };
 }
-
-// ============================================================================
-// Streaming API
-// ============================================================================
 
 export interface StreamDecodeResult {
   columns: ColumnDef[];
@@ -1156,10 +1136,6 @@ export async function* streamEncodeRowBinary(
   }
 }
 
-// ============================================================================
-// Internal Helpers
-// ============================================================================
-
 const readLEB128 = readLEB128FromUtils;
 
 function write128(e: RowBinaryEncoder, value: bigint, signed: boolean): void {
@@ -1214,10 +1190,6 @@ function isExplicitDynamic(v: unknown): v is { type: string; value: unknown } {
     Object.keys(v).length === 2
   );
 }
-
-// ============================================================================
-// Type Signature Binary Encoding (for Dynamic/Variant/JSON headers)
-// ============================================================================
 
 const TYPE_CODES: Record<string, number> = {
   Nothing: 0x00,

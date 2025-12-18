@@ -1073,8 +1073,6 @@ class MapCodec implements Codec {
   }
 }
 
-// 7. Tuple Codec
-// Tuple stores each element as a column, so they need their own prefixes
 class TupleCodec implements Codec {
   readonly type: string;
   private elements: { name: string | null, codec: Codec }[];
@@ -1166,10 +1164,6 @@ class TupleCodec implements Codec {
   }
 }
 
-// 8. Variant Codec
-// Note: COMPACT mode (mode=1) exists for storage optimization but is not sent to HTTP clients.
-// ClickHouse always sends BASIC mode (mode=0) over HTTP. COMPACT mode is only used internally
-// for MergeTree storage. See: https://github.com/ClickHouse/ClickHouse/pull/62774
 class VariantCodec implements Codec {
   readonly type: string;
   private typeStrings: string[];
@@ -1307,7 +1301,6 @@ class VariantCodec implements Codec {
   }
 }
 
-// 9. Dynamic Codec (V3 FLATTENED only)
 class DynamicCodec implements Codec {
   readonly type = 'Dynamic';
   private types: string[] = [];
@@ -1434,7 +1427,6 @@ class DynamicCodec implements Codec {
   }
 }
 
-// 10. JSON Codec (V3 FLATTENED only)
 class JsonCodec implements Codec {
   readonly type = 'JSON';
   private paths: string[] = [];

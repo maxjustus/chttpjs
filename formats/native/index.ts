@@ -50,10 +50,6 @@ export interface Block {
   rowCount: number;
 }
 
-/** @deprecated Use Table instead */
-export type ColumnarResult = Table;
-
-export type StreamDecodeNativeResult = Table;
 
 interface BlockResult {
   columns: ColumnDef[];
@@ -408,7 +404,6 @@ export async function* streamDecodeNative(
   let columns: ColumnDef[] = [];
   let totalBytesReceived = 0;
   let blocksDecoded = 0;
-  let bufferUnderruns = 0;
 
   for await (const chunk of chunks) {
     streamBuffer.append(chunk);
@@ -445,7 +440,7 @@ export async function* streamDecodeNative(
   }
 
   if (options?.debug) {
-    console.log(`[streamDecodeNative] ${blocksDecoded} blocks, ${totalBytesReceived} bytes, ${bufferUnderruns} underruns`);
+    console.log(`[streamDecodeNative] ${blocksDecoded} blocks, ${totalBytesReceived} bytes`);
   }
 }
 
