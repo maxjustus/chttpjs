@@ -92,7 +92,7 @@ export class StreamingWriter {
     return this.flush();
   }
 
-  encodeQuery(qid: string, query: string, revision: bigint, settings: Record<string, string | number | boolean> = {}, compression: boolean = false): Uint8Array {
+  encodeQuery(qid: string, query: string, revision: bigint, settings: Record<string, string | number | boolean> = {}, compression: boolean = false, params: Record<string, string | number | boolean> = {}): Uint8Array {
     this.writeVarInt(ClientPacketId.Query);
     this.writeString(qid);
 
@@ -163,6 +163,15 @@ export class StreamingWriter {
     this.writeString(query);
 
     if (revision >= 54459n) { // DBMS_MIN_PROTOCOL_VERSION_WITH_PARAMETERS
+      // Encode parameters with CUSTOM flag - values must be quoted strings
+      const SETTING_FLAG_CUSTOM = 2;
+      for (const [key, val] of Object.entries(params)) {
+        this.writeString(key);
+        this.writeVarInt(SETTING_FLAG_CUSTOM);
+        // Format value as quoted string for server-side parsing
+        const escaped = String(val).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        this.writeString(`'${escaped}'`);
+      }
       this.writeString(""); // end of params
     }
 

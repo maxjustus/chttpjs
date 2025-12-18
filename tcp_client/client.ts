@@ -146,15 +146,15 @@ export class TcpClient {
 
     const effectiveRevision = revision < DBMS_TCP_PROTOCOL_VERSION ? revision : DBMS_TCP_PROTOCOL_VERSION;
 
-    if (effectiveRevision >= 54471n) await this.reader.readVarInt(); 
+    if (effectiveRevision >= 54471n) await this.reader.readVarInt();
 
     const timezone = effectiveRevision >= 54058n ? await this.reader.readString() : "";
     const displayName = effectiveRevision >= 54372n ? await this.reader.readString() : "";
     const patch = effectiveRevision >= 54401n ? await this.reader.readVarInt() : effectiveRevision;
 
     if (effectiveRevision >= 54470n) {
-      await this.reader.readString(); 
-      await this.reader.readString(); 
+      await this.reader.readString();
+      await this.reader.readString();
     }
 
     if (effectiveRevision >= 54461n) {
@@ -180,7 +180,7 @@ export class TcpClient {
     if (effectiveRevision >= 54479n) await this.reader.readVarInt();
 
     this._serverHello = { serverName, major, minor, revision: effectiveRevision, timezone, displayName, patch };
-    
+
     if (effectiveRevision >= 54458n) {
       const addendum = this.writer.encodeAddendum(effectiveRevision);
       this.socket.write(addendum);
@@ -189,7 +189,7 @@ export class TcpClient {
   }
 
   async execute(sql: string): Promise<void> {
-    for await (const _ of this.query(sql)) {}
+    for await (const _ of this.query(sql)) { }
   }
 
   async insert(sql: string, data: Table | AsyncIterable<Table> | Iterable<Table>) {
@@ -197,7 +197,6 @@ export class TcpClient {
 
     const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
       "compress": "0",
-      "allow_special_serialization_kinds_in_output_formats": "0"
     });
     this.socket.write(queryPacket);
 
@@ -207,7 +206,7 @@ export class TcpClient {
     let schemaReceived = false;
     while (!schemaReceived) {
       const packetId = Number(await this.reader.readVarInt());
-      
+
       switch (packetId) {
         case ServerPacketId.Data: {
           const block = await this.readBlock();
@@ -228,8 +227,8 @@ export class TcpClient {
       }
     }
 
-    const blocks = (data instanceof Table) 
-      ? [data] 
+    const blocks = (data instanceof Table)
+      ? [data]
       : (data as AsyncIterable<Table> | Iterable<Table>);
 
     let totalInserted = 0;
@@ -239,12 +238,12 @@ export class TcpClient {
         const colDef = table.columns[i];
         const colData = table.columnData[i];
         const codec = getCodec(colDef.type);
-        
+
         const writer = new BufferWriter();
         codec.writePrefix?.(writer, colData);
         const data = codec.encode(colData);
         writer.write(data);
-        
+
         encodedColumns.push({
           name: colDef.name,
           type: colDef.type,
@@ -263,7 +262,7 @@ export class TcpClient {
     while (true) {
       const packetId = Number(await this.reader.readVarInt());
       if (packetId === ServerPacketId.EndOfStream) break;
-      
+
       switch (packetId) {
         case ServerPacketId.Progress: await this.readProgress(); break;
         case ServerPacketId.ProfileInfo: await this.readProfileInfo(); break;
@@ -470,8 +469,8 @@ export class TcpClient {
 
   async *query(
     sql: string,
-    settings: Record<string, string> = {},
-    options?: { signal?: AbortSignal }
+    settings: Record<string, string | number | boolean> = {},
+    options: { signal?: AbortSignal; params?: Record<string, string | number | boolean> } = {}
   ): AsyncGenerator<Packet> {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
 
@@ -519,7 +518,7 @@ export class TcpClient {
       const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
         "allow_special_serialization_kinds_in_output_formats": "0",
         ...settings
-      }, useCompression);
+      }, useCompression, options.params ?? {});
       this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
       this.socket.write(queryPacket);
 
@@ -641,5 +640,23 @@ export class TcpClient {
   close() {
     this.socket?.destroy();
     this.socket = null;
+  }
+
+  /**
+   * Async disposable support for "await using" syntax.
+   * Automatically closes connection when scope exits.
+   */
+  async [Symbol.asyncDispose](): Promise<void> {
+    this.close();
+  }
+
+  /**
+   * Static factory that connects and returns a disposable client.
+   * Usage: await using client = await TcpClient.connect(options);
+   */
+  static async connect(options: TcpClientOptions): Promise<TcpClient> {
+    const client = new TcpClient(options);
+    await client.connect();
+    return client;
   }
 }

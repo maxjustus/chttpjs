@@ -198,4 +198,60 @@ describe("TCP Client Protocol Features", () => {
       client.close();
     }
   });
+
+  test("should use query parameters (UInt64)", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      let result: bigint | null = null;
+      for await (const packet of client.query(
+        "SELECT {value:UInt64} as v",
+        {},
+        { params: { value: 42 } }
+      )) {
+        if (packet.type === "Data" && packet.table.rowCount > 0) {
+          result = packet.table.getColumn("v")?.get(0) as bigint;
+        }
+      }
+      assert.strictEqual(result, 42n);
+    } finally {
+      client.close();
+    }
+  });
+
+  test("should use query parameters (String)", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      let result: string | null = null;
+      for await (const packet of client.query(
+        "SELECT {name:String} as s",
+        {},
+        { params: { name: "hello world" } }
+      )) {
+        if (packet.type === "Data" && packet.table.rowCount > 0) {
+          result = packet.table.getColumn("s")?.get(0) as string;
+        }
+      }
+      assert.strictEqual(result, "hello world");
+    } finally {
+      client.close();
+    }
+  });
+
+  test("should auto-close with await using (AsyncDisposable)", async () => {
+    let clientRef: TcpClient | null = null;
+    {
+      await using client = await TcpClient.connect(options);
+      clientRef = client;
+      // Verify connection works
+      let rows = 0;
+      for await (const packet of client.query("SELECT 1")) {
+        if (packet.type === "Data") rows += packet.table.rowCount;
+      }
+      assert.strictEqual(rows, 1);
+    }
+    // After scope exits, socket should be null (closed)
+    assert.strictEqual((clientRef as any).socket, null, "Socket should be closed after scope exit");
+  });
 });
