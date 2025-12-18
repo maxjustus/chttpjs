@@ -905,14 +905,26 @@ export function encodeRowBinary(
   columns: ColumnDef[],
   rows: unknown[][],
 ): Uint8Array {
+  if (!Array.isArray(rows)) {
+    throw new Error('encodeRowBinary: rows must be an array');
+  }
+
   const encoder = new RowBinaryEncoder();
   encoder.leb128(columns.length);
   for (const col of columns) encoder.string(col.name);
   for (const col of columns) encoder.string(col.type);
 
   const codecs = columns.map((c) => createCodec(c.type));
-  for (const row of rows) {
-    for (let i = 0; i < columns.length; i++) {
+  const expected = columns.length;
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    if (!Array.isArray(row)) {
+      throw new Error(`encodeRowBinary: Row ${r} is not an array`);
+    }
+    if (row.length !== expected) {
+      throw new Error(`encodeRowBinary: Row ${r} has ${row.length} values but schema expects ${expected} columns`);
+    }
+    for (let i = 0; i < expected; i++) {
       codecs[i].encode(encoder, row[i]);
     }
   }
@@ -1090,8 +1102,13 @@ export async function* streamEncodeRowBinary(
   rows: AsyncIterable<unknown[]> | Iterable<unknown[]>,
   options?: StreamingEncodeOptions,
 ): AsyncGenerator<Uint8Array> {
+  if (!Array.isArray(columns)) {
+    throw new Error('streamEncodeRowBinary: columns must be an array');
+  }
+
   const chunkSize = options?.chunkSize ?? 64 * 1024;
   const threshold = chunkSize - 4096; // Leave room for a row
+  const expected = columns.length;
 
   const encoder = new RowBinaryEncoder(chunkSize);
   const codecs = columns.map((c) => createCodec(c.type));
@@ -1107,9 +1124,16 @@ export async function* streamEncodeRowBinary(
     }
   }
 
+  let rowIndex = 0;
+
   // Fast path for sync iterables - no await per row
   if (Symbol.iterator in rows && !(Symbol.asyncIterator in rows)) {
     for (const row of rows as Iterable<unknown[]>) {
+      if (!Array.isArray(row) || row.length !== expected) {
+        throw new Error(
+          `streamEncodeRowBinary: Row ${rowIndex} has ${Array.isArray(row) ? row.length : 'non-array'} values but schema expects ${expected} columns`
+        );
+      }
       for (let i = 0; i < columns.length; i++) {
         codecs[i].encode(encoder, row[i]);
       }
@@ -1117,9 +1141,15 @@ export async function* streamEncodeRowBinary(
         yield encoder.buffer.slice(0, encoder.offset);
         encoder.offset = 0;
       }
+      rowIndex++;
     }
   } else {
     for await (const row of rows as AsyncIterable<unknown[]>) {
+      if (!Array.isArray(row) || row.length !== expected) {
+        throw new Error(
+          `streamEncodeRowBinary: Row ${rowIndex} has ${Array.isArray(row) ? row.length : 'non-array'} values but schema expects ${expected} columns`
+        );
+      }
       for (let i = 0; i < columns.length; i++) {
         codecs[i].encode(encoder, row[i]);
       }
@@ -1127,6 +1157,7 @@ export async function* streamEncodeRowBinary(
         yield encoder.buffer.slice(0, encoder.offset);
         encoder.offset = 0;
       }
+      rowIndex++;
     }
   }
 

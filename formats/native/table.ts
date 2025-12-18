@@ -43,6 +43,21 @@ export class Table implements Iterable<Row> {
     columns: ColumnDef[],
     columnData: (unknown[] | TypedArray | Column)[],
   ): Table {
+    // Validate column lengths match
+    if (columnData.length > 0) {
+      const firstLen = columnData[0]?.length ?? 0;
+      for (let i = 1; i < columnData.length; i++) {
+        const len = columnData[i]?.length ?? 0;
+        if (len !== firstLen) {
+          throw new Error(
+            `Table.fromColumnar: Column length mismatch. ` +
+            `Column '${columns[0]?.name ?? 0}' has ${firstLen} rows but ` +
+            `'${columns[i]?.name ?? i}' has ${len} rows. ` +
+            `All columns must have the same length.`
+          );
+        }
+      }
+    }
     const rowCount = columnData[0]?.length ?? 0;
     const cols: Column[] = columnData.map((data, i) => {
       // Already a Column - use as-is
@@ -216,6 +231,16 @@ export function tableFromArrays(
   schema: ColumnDef[],
   data: Record<string, unknown[] | TypedArray | Column>,
 ): Table {
+  // Check all schema columns exist in data
+  for (const col of schema) {
+    if (!(col.name in data)) {
+      throw new Error(
+        `tableFromArrays: Missing column '${col.name}' in data. ` +
+        `Schema expects: [${schema.map(c => c.name).join(', ')}]. ` +
+        `Got: [${Object.keys(data).join(', ')}]`
+      );
+    }
+  }
   const columnData = schema.map(col => data[col.name]);
   return Table.fromColumnar(schema, columnData);
 }
@@ -236,16 +261,24 @@ export function tableFromRows(
   schema: ColumnDef[],
   rows: unknown[][],
 ): Table {
-  // Transpose rows to columns
+  if (!Array.isArray(rows)) {
+    throw new Error('tableFromRows: rows must be an array');
+  }
+  // Transpose rows to columns, validating row lengths as we go
   const numCols = schema.length;
   const columns: unknown[][] = schema.map(() => new Array(rows.length));
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r];
+    if (!Array.isArray(row)) {
+      throw new Error(`tableFromRows: Row ${r} is not an array`);
+    }
+    if (row.length !== numCols) {
+      throw new Error(`tableFromRows: Row ${r} has ${row.length} values but schema expects ${numCols} columns`);
+    }
     for (let c = 0; c < numCols; c++) {
       columns[c][r] = row[c];
     }
   }
-  // Use codec.fromValues for each column
   const columnData = columns.map((arr, i) => getCodec(schema[i].type).fromValues(arr));
   return new Table({ columns: schema, columnData, rowCount: rows.length });
 }
@@ -265,8 +298,7 @@ export function tableFromCols(columns: Record<string, Column>): Table {
   const names = Object.keys(columns);
   const schema = names.map(name => ({ name, type: columns[name].type }));
   const columnData = names.map(name => columns[name]);
-  const rowCount = columnData[0]?.length ?? 0;
-  return new Table({ columns: schema, columnData, rowCount });
+  return Table.fromColumnar(schema, columnData);
 }
 
 /**
