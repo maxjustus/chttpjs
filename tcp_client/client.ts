@@ -1,4 +1,5 @@
 import * as net from "node:net";
+import * as tls from "node:tls";
 import { randomUUID } from "node:crypto";
 import { StreamingReader } from "./reader.ts";
 import { StreamingWriter } from "./writer.ts";
@@ -32,6 +33,10 @@ export interface TcpClientOptions {
   connectTimeout?: number;
   /** Query timeout in ms (default: 30000) */
   queryTimeout?: number;
+  /** Keep-alive interval in ms. 0 or undefined = disabled. */
+  keepAliveIntervalMs?: number;
+  /** TLS options. true for defaults, or tls.ConnectionOptions for custom config. */
+  tls?: boolean | tls.ConnectionOptions;
 }
 
 export interface ColumnSchema {
@@ -47,6 +52,7 @@ export class TcpClient {
   private _serverHello: ServerHello | null = null;
   private currentSchema: ColumnSchema[] | null = null;
   private deserializerState: DeserializerState = defaultDeserializerState();
+  private sessionTimezone: string | null = null;
 
   private log(...args: any[]) {
     if (this.options.debug) {
@@ -56,6 +62,9 @@ export class TcpClient {
 
   /** Server info from handshake, available after connect() */
   get serverHello() { return this._serverHello; }
+
+  /** Session timezone, updated by server TimezoneUpdate packets */
+  get timezone(): string | null { return this.sessionTimezone; }
 
   constructor(options: TcpClientOptions) {
     this.options = {
@@ -73,16 +82,30 @@ export class TcpClient {
     const timeout = this.options.connectTimeout ?? 10000;
 
     const connectPromise = new Promise<void>((resolve, reject) => {
-      this.socket = net.connect(this.options.port, this.options.host);
-      this.socket.on("connect", async () => {
+      const onConnected = async () => {
         try {
           this.reader = new StreamingReader(this.socket!);
           await this.handshake();
+          this.startKeepAliveTimer();
           resolve();
         } catch (err) {
           reject(err);
         }
-      });
+      };
+
+      const tlsOpts = this.options.tls;
+      if (tlsOpts) {
+        const opts: tls.ConnectionOptions = {
+          host: this.options.host,
+          port: this.options.port,
+          ...(typeof tlsOpts === 'object' ? tlsOpts : {})
+        };
+        this.socket = tls.connect(opts, onConnected);
+      } else {
+        this.socket = net.connect(this.options.port, this.options.host);
+        this.socket.on("connect", onConnected);
+      }
+
       this.socket.on("error", (err) => reject(err));
     });
 
@@ -508,6 +531,9 @@ export class TcpClient {
       this.currentSchema = null;
       this.log(`[query] waiting for response...`);
 
+      // Accumulate ProfileEvents deltas
+      const profileEventsAccumulated = new Map<string, bigint>();
+
       while (true) {
         this.log(`[query] reading packet id...`);
         const packetId = Number(await this.reader.readVarInt());
@@ -532,10 +558,30 @@ export class TcpClient {
           case ServerPacketId.ProfileInfo:
             yield { type: "ProfileInfo", info: await this.readProfileInfo() };
             break;
-          case ServerPacketId.ProfileEvents:
+          case ServerPacketId.ProfileEvents: {
             // ProfileEvents blocks are always uncompressed (diagnostic metadata)
-            yield { type: "ProfileEvents", table: await this.readBlock(false) };
+            // They send deltas, so we accumulate values across packets
+            const table = await this.readBlock(false);
+            const nameCol = table.getColumn("name");
+            const valueCol = table.getColumn("value");
+            const typeCol = table.getColumn("type");
+            if (nameCol && valueCol && typeCol) {
+              for (let i = 0; i < table.rowCount; i++) {
+                const name = nameCol.get(i) as string;
+                const value = valueCol.get(i) as bigint;
+                const eventType = typeCol.get(i) as number; // 1=increment, 2=gauge
+                if (eventType === 1) {
+                  // Increment: sum values
+                  profileEventsAccumulated.set(name, (profileEventsAccumulated.get(name) ?? 0n) + value);
+                } else {
+                  // Gauge: use latest value
+                  profileEventsAccumulated.set(name, value);
+                }
+              }
+            }
+            yield { type: "ProfileEvents", table, accumulated: profileEventsAccumulated };
             break;
+          }
           case ServerPacketId.Totals:
             yield { type: "Totals", table: await this.readBlock(useCompression) };
             break;
@@ -550,6 +596,10 @@ export class TcpClient {
             }
             break;
           }
+          case ServerPacketId.TimezoneUpdate:
+            this.sessionTimezone = await this.reader.readString();
+            this.log(`[query] timezone updated to: ${this.sessionTimezone}`);
+            break;
           case ServerPacketId.EndOfStream:
             yield { type: "EndOfStream" };
             return;
@@ -576,6 +626,15 @@ export class TcpClient {
     const packetId = Number(await this.reader.readVarInt());
     if (packetId !== ServerPacketId.Pong) {
       throw new Error(`Expected Pong (4), got packet ${packetId}`);
+    }
+  }
+
+  private startKeepAliveTimer(): void {
+    const interval = this.options.keepAliveIntervalMs;
+    if (interval && interval > 0 && this.socket) {
+      // Use TCP-level keep-alive - this is the proper way to maintain connections
+      // The interval is in milliseconds, setKeepAlive expects milliseconds for initialDelay
+      this.socket.setKeepAlive(true, interval);
     }
   }
 

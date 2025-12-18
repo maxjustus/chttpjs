@@ -114,4 +114,88 @@ describe("TCP Client Protocol Features", () => {
       client.close();
     }
   });
+
+  test("should accumulate ProfileEvents across packets", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      let packetCount = 0;
+      let lastAccumulated: Map<string, bigint> | null = null;
+
+      // Use frequent profile events to get multiple packets
+      for await (const packet of client.query(
+        "SELECT sleep(0.05), number FROM numbers(10)",
+        { send_profile_events: 1, profile_events_delay_ms: 25 }
+      )) {
+        if (packet.type === "ProfileEvents") {
+          packetCount++;
+          lastAccumulated = packet.accumulated;
+          // Verify accumulated is a Map with entries
+          assert.ok(packet.accumulated instanceof Map, "accumulated should be a Map");
+        }
+      }
+
+      assert.ok(packetCount > 0, "Should receive at least one ProfileEvents packet");
+      assert.ok(lastAccumulated!.size > 0, "Should have accumulated events");
+      // SelectedRows should be present and match our query
+      assert.strictEqual(lastAccumulated!.get("SelectedRows"), 10n, "SelectedRows should match");
+      console.log(`  (ProfileEvents packets: ${packetCount}, accumulated entries: ${lastAccumulated!.size})`);
+    } finally {
+      client.close();
+    }
+  });
+
+  test("should expose timezone getter", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      // Run a query - timezone may or may not be sent depending on server
+      for await (const _ of client.query("SELECT now()")) {}
+      // Just verify the getter works without error
+      const tz = client.timezone;
+      console.log(`  (Session timezone: ${tz ?? "not set"})`);
+    } finally {
+      client.close();
+    }
+  });
+
+  test("should enable TCP keep-alive when configured", async () => {
+    const client = new TcpClient({ ...options, keepAliveIntervalMs: 5000 });
+    await client.connect();
+    try {
+      // Connection should work with TCP keep-alive enabled
+      let rows = 0;
+      for await (const packet of client.query("SELECT 1")) {
+        if (packet.type === "Data") rows += packet.table.rowCount;
+      }
+      assert.strictEqual(rows, 1);
+    } finally {
+      client.close();
+    }
+  });
+
+  test("should connect with TLS when configured", async () => {
+    const client = new TcpClient({
+      host: "localhost",
+      port: 9440,
+      tls: { rejectUnauthorized: false }
+    });
+    try {
+      await client.connect();
+      let rows = 0;
+      for await (const packet of client.query("SELECT 1")) {
+        if (packet.type === "Data") rows += packet.table.rowCount;
+      }
+      assert.strictEqual(rows, 1);
+    } catch (err: any) {
+      // TLS port may not be configured - skip gracefully
+      if (err.code === 'ECONNREFUSED') {
+        console.log("  (TLS port 9440 not available, skipping)");
+        return;
+      }
+      throw err;
+    } finally {
+      client.close();
+    }
+  });
 });

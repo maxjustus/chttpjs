@@ -24,6 +24,7 @@ export const ServerPacketId = {
   Extremes: 8,
   Log: 10,
   ProfileEvents: 14,
+  TimezoneUpdate: 17,
 } as const;
 
 export const QueryProcessingStage = {
@@ -82,7 +83,7 @@ export type Packet =
   | { type: "Log", entries: LogEntry[] }
   | { type: "Progress", progress: Progress }
   | { type: "ProfileInfo", info: ProfileInfo }
-  | { type: "ProfileEvents", table: Table }
+  | { type: "ProfileEvents", table: Table, accumulated: Map<string, bigint> }
   | { type: "EndOfStream" };
 
 export const REVISIONS = {
