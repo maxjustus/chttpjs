@@ -64,8 +64,22 @@ export interface ProfileInfo {
   rowsBeforeAggregation: bigint;
 }
 
-export type Packet = 
+export interface LogEntry {
+  time: string;
+  timeMicroseconds: number;
+  hostName: string;
+  queryId: string;
+  threadId: bigint;
+  priority: number;  // 1=Fatal, 2=Critical, 3=Error, 4=Warning, 5=Notice, 6=Info, 7=Debug, 8=Trace
+  source: string;
+  text: string;
+}
+
+export type Packet =
   | { type: "Data", table: Table }
+  | { type: "Totals", table: Table }
+  | { type: "Extremes", table: Table }
+  | { type: "Log", entries: LogEntry[] }
   | { type: "Progress", progress: Progress }
   | { type: "ProfileInfo", info: ProfileInfo }
   | { type: "ProfileEvents", table: Table }

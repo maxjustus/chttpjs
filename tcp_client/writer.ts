@@ -92,7 +92,7 @@ export class StreamingWriter {
     return this.flush();
   }
 
-  encodeQuery(qid: string, query: string, revision: bigint, settings: Record<string, string> = {}, compression: boolean = false): Uint8Array {
+  encodeQuery(qid: string, query: string, revision: bigint, settings: Record<string, string | number | boolean> = {}, compression: boolean = false): Uint8Array {
     this.writeVarInt(ClientPacketId.Query);
     this.writeString(qid);
 
@@ -144,7 +144,7 @@ export class StreamingWriter {
       this.writeString(key);
       // Modern settings format: Flags -> Value
       this.writeVarInt(0);
-      this.writeString(val);
+      this.writeString(String(val));  // Convert number/boolean to string
     }
     this.writeString(""); // End of settings
 
@@ -169,7 +169,7 @@ export class StreamingWriter {
     return this.flush();
   }
 
-  encodeData(tableName: string, rowsCount: number, columns: { name: string, type: string, data: Uint8Array }[], revision: bigint, compress: boolean = false): Uint8Array {
+  encodeData(tableName: string, rowsCount: number, columns: { name: string, type: string, data: Uint8Array }[], revision: bigint, compress: boolean = false, method: number = Method.LZ4): Uint8Array {
     if (compress) {
       // Packet ID and table name are always uncompressed
       this.writeVarInt(ClientPacketId.Data);
@@ -178,7 +178,7 @@ export class StreamingWriter {
 
       // Encode block info + columns (without table name) then compress
       const payload = this.encodeDataBlockContent(rowsCount, columns, revision);
-      const compressed = encodeBlock(payload, Method.LZ4);
+      const compressed = encodeBlock(payload, method);
 
       // Combine: header (packet ID + table name) + compressed block
       const result = new Uint8Array(headerBytes.length + compressed.length);

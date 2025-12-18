@@ -8,6 +8,7 @@ import {
   type ServerHello,
   type ProfileInfo,
   type Packet,
+  type LogEntry,
   DBMS_TCP_PROTOCOL_VERSION
 } from "./types.ts";
 import { readBlockInfo } from "./protocol_data.ts";
@@ -15,7 +16,7 @@ import { getCodec, defaultDeserializerState } from "../formats/native/codecs.ts"
 import { BufferReader, BufferWriter } from "../formats/native/io.ts";
 import { Table } from "../formats/native/table.ts";
 import { asRows, traverseKindPlan, type DeserializerState, type KindPlan } from "../formats/native/index.ts";
-import { init as initCompression } from "../compression.ts";
+import { init as initCompression, Method } from "../compression.ts";
 import { parseTypeList, parseTupleElements } from "../formats/shared.ts"; // used by parseKindPlanStreaming
 
 export interface TcpClientOptions {
@@ -25,7 +26,8 @@ export interface TcpClientOptions {
   user?: string;
   password?: string;
   debug?: boolean;
-  compression?: boolean;
+  /** Compression: true/'lz4' for LZ4, 'zstd' for ZSTD, false to disable */
+  compression?: boolean | 'lz4' | 'zstd';
   /** Connection timeout in ms (default: 10000) */
   connectTimeout?: number;
   /** Query timeout in ms (default: 30000) */
@@ -309,6 +311,23 @@ export class TcpClient {
     return info;
   }
 
+  private parseLogBlock(table: Table): LogEntry[] {
+    const entries: LogEntry[] = [];
+    for (const row of asRows(table)) {
+      entries.push({
+        time: row.event_time as string,
+        timeMicroseconds: row.event_time_microseconds as number,
+        hostName: row.host_name as string,
+        queryId: row.query_id as string,
+        threadId: row.thread_id as bigint,
+        priority: row.priority as number,
+        source: row.source as string,
+        text: row.text as string,
+      });
+    }
+    return entries;
+  }
+
   private async readBlock(compressed: boolean = false): Promise<Table> {
     // Table name is always uncompressed, even when block data is compressed
     const tableName = await this.reader!.readString();
@@ -436,7 +455,8 @@ export class TcpClient {
     const signal = options?.signal;
     if (signal?.aborted) throw new Error("Query aborted before start");
 
-    const useCompression = this.options.compression ?? false;
+    const useCompression = !!this.options.compression;
+    const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
     const queryTimeout = this.options.queryTimeout ?? 30000;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let timedOut = false;
@@ -481,7 +501,7 @@ export class TcpClient {
       this.socket.write(queryPacket);
 
       // Send delimiter (compressed if compression is enabled)
-      const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression);
+      const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
       this.log(`[query] sending delimiter (${delimiter.length} bytes, compressed=${useCompression})`);
       this.socket.write(delimiter);
 
@@ -516,6 +536,20 @@ export class TcpClient {
             // ProfileEvents blocks are always uncompressed (diagnostic metadata)
             yield { type: "ProfileEvents", table: await this.readBlock(false) };
             break;
+          case ServerPacketId.Totals:
+            yield { type: "Totals", table: await this.readBlock(useCompression) };
+            break;
+          case ServerPacketId.Extremes:
+            yield { type: "Extremes", table: await this.readBlock(useCompression) };
+            break;
+          case ServerPacketId.Log: {
+            // Log blocks are always uncompressed (diagnostic metadata)
+            const table = await this.readBlock(false);
+            if (table.rowCount > 0) {
+              yield { type: "Log", entries: this.parseLogBlock(table) };
+            }
+            break;
+          }
           case ServerPacketId.EndOfStream:
             yield { type: "EndOfStream" };
             return;
