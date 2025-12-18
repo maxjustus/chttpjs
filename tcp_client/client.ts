@@ -11,11 +11,12 @@ import {
   DBMS_TCP_PROTOCOL_VERSION 
 } from "./types.ts";
 import { readBlockInfo } from "./protocol_data.ts";
-import { getCodec } from "../formats/native/codecs.ts";
+import { getCodec, defaultDeserializerState } from "../formats/native/codecs.ts";
 import { BufferReader, BufferWriter } from "../formats/native/io.ts";
 import { Table } from "../formats/native/table.ts";
-import { asRows } from "../formats/native/index.ts";
+import { asRows, type DeserializerState, type KindPlan } from "../formats/native/index.ts";
 import { init as initCompression } from "../compression.ts";
+import { parseTypeList, parseTupleElements } from "../formats/shared.ts";
 
 export interface TcpClientOptions {
   host: string;
@@ -38,6 +39,7 @@ export class TcpClient {
   private options: TcpClientOptions;
   private _serverHello: ServerHello | null = null;
   private currentSchema: ColumnSchema[] | null = null;
+  private deserializerState: DeserializerState = defaultDeserializerState();
 
   private log(...args: any[]) {
     if (this.options.debug) {
@@ -87,8 +89,6 @@ export class TcpClient {
     this.socket.write(hello);
 
     const packetId = Number(await this.reader.readVarInt());
-    this.log(`Handshake: Got PacketID ${packetId}`);
-    
     if (packetId === ServerPacketId.Exception) {
       throw new Error(`Server Exception: ${await this.reader.readString()}`);
     }
@@ -102,18 +102,20 @@ export class TcpClient {
     const minor = await this.reader.readVarInt();
     const revision = await this.reader.readVarInt();
 
-    if (revision >= 54471n) await this.reader.readVarInt(); 
+    const effectiveRevision = revision < DBMS_TCP_PROTOCOL_VERSION ? revision : DBMS_TCP_PROTOCOL_VERSION;
 
-    const timezone = revision >= 54058n ? await this.reader.readString() : "";
-    const displayName = revision >= 54372n ? await this.reader.readString() : "";
-    const patch = revision >= 54401n ? await this.reader.readVarInt() : revision;
+    if (effectiveRevision >= 54471n) await this.reader.readVarInt(); 
 
-    if (revision >= 54470n) {
+    const timezone = effectiveRevision >= 54058n ? await this.reader.readString() : "";
+    const displayName = effectiveRevision >= 54372n ? await this.reader.readString() : "";
+    const patch = effectiveRevision >= 54401n ? await this.reader.readVarInt() : effectiveRevision;
+
+    if (effectiveRevision >= 54470n) {
       await this.reader.readString(); 
       await this.reader.readString(); 
     }
 
-    if (revision >= 54461n) {
+    if (effectiveRevision >= 54461n) {
       const rulesSize = Number(await this.reader.readVarInt());
       for (let i = 0; i < rulesSize; i++) {
         await this.reader.readString();
@@ -121,68 +123,58 @@ export class TcpClient {
       }
     }
 
-    if (revision >= 54462n) await this.reader.readU64LE();
+    if (effectiveRevision >= 54462n) await this.reader.readU64LE();
 
-    if (revision >= 54474n) { // DBMS_MIN_REVISION_WITH_SERVER_SETTINGS
+    if (effectiveRevision >= 54474n) {
       while (true) {
         const name = await this.reader.readString();
         if (name === "") break;
-        await this.reader.readVarInt(); // flags
-        await this.reader.readString(); // value
+        await this.reader.readVarInt();
+        await this.reader.readString();
       }
     }
 
-    if (revision >= 54477n) await this.reader.readVarInt();
-    if (revision >= 54479n) await this.reader.readVarInt();
+    if (effectiveRevision >= 54477n) await this.reader.readVarInt();
+    if (effectiveRevision >= 54479n) await this.reader.readVarInt();
 
-    this._serverHello = { serverName, major, minor, revision, timezone, displayName, patch };
+    this._serverHello = { serverName, major, minor, revision: effectiveRevision, timezone, displayName, patch };
     
-    if (revision >= 54458n) {
-      this.log("Handshake: Sending Addendum...");
-      const addendum = this.writer.encodeAddendum(revision);
+    if (effectiveRevision >= 54458n) {
+      const addendum = this.writer.encodeAddendum(effectiveRevision);
       this.socket.write(addendum);
     }
     this.log("Handshake: Complete!");
   }
 
   async execute(sql: string): Promise<void> {
-    for await (const _ of this.query(sql)) {
-      // Just drain
-    }
+    for await (const _ of this.query(sql)) {}
   }
 
   async insert(sql: string, data: Table | AsyncIterable<Table> | Iterable<Table>) {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
 
-    this.log("Insert: Sending query...");
     const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
-      "compress": "0"
+      "compress": "0",
+      "allow_special_serialization_kinds_in_output_formats": "0"
     });
     this.socket.write(queryPacket);
 
     const queryDelimiter = this.writer.encodeData("", 0, [], this.serverHello.revision);
     this.socket.write(queryDelimiter);
 
-    this.log("Insert: Waiting for Header...");
     let schemaReceived = false;
     while (!schemaReceived) {
       const packetId = Number(await this.reader.readVarInt());
-      this.log(`Insert: Packet ${packetId} while waiting for header`);
       
       switch (packetId) {
         case ServerPacketId.Data: {
           const block = await this.readBlock();
           this.currentSchema = block.columns.map(c => ({ name: c.name, type: c.type }));
           schemaReceived = true;
-          this.log(`Insert: Header received with ${block.columns.length} columns`);
           break;
         }
-        case ServerPacketId.Progress:
-          await this.readProgress();
-          break;
-        case ServerPacketId.Log:
-          await this.readBlock();
-          break;
+        case ServerPacketId.Progress: await this.readProgress(); break;
+        case ServerPacketId.Log: await this.readBlock(); break;
         case 11: // TableColumns
           await this.reader.readString();
           await this.reader.readString();
@@ -200,7 +192,6 @@ export class TcpClient {
 
     let totalInserted = 0;
     for await (const table of blocks) {
-      this.log(`Insert: Sending Data Block (${table.rowCount} rows)...`);
       const encodedColumns = [];
       for (let i = 0; i < table.columns.length; i++) {
         const colDef = table.columns[i];
@@ -224,15 +215,11 @@ export class TcpClient {
       totalInserted += table.rowCount;
     }
 
-    this.log("Insert: Sending End-of-Data Delimiter...");
-    // Delimiter MUST be 0 columns and 0 rows to signal end of stream
     const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision);
     this.socket.write(delimiter);
 
-    this.log("Insert: Draining responses...");
     while (true) {
       const packetId = Number(await this.reader.readVarInt());
-      this.log(`Insert: Packet ${packetId} in drain loop`);
       if (packetId === ServerPacketId.EndOfStream) break;
       
       switch (packetId) {
@@ -241,16 +228,12 @@ export class TcpClient {
         case ServerPacketId.Data:
         case ServerPacketId.Log:
         case ServerPacketId.ProfileEvents:
-          const block = await this.readBlock();
-          this.log(`  Read side-band block: ${block.rowCount} rows`);
+          await this.readBlock();
           break;
         case ServerPacketId.Exception:
           throw new Error(`Insert Commit Error: ${await this.reader.readString()}`);
-        default:
-          this.log(`Insert: Skipping unknown packet ${packetId}`);
       }
     }
-    
     this.log(`Successfully inserted ${totalInserted} rows.`);
   }
 
@@ -267,6 +250,28 @@ export class TcpClient {
     }
     if (this.serverHello!.revision >= 54460n) progress.elapsedNs = await this.reader!.readVarInt();
     return progress;
+  }
+
+  private async parseKindPlanStreaming(typeStr: string, plan: KindPlan, path: number[]) {
+    const kind = Number(await this.reader!.readU8());
+    plan.set(path.join(","), kind);
+
+    if (typeStr.startsWith("Tuple")) {
+      const elements = parseTupleElements(typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")));
+      for (let i = 0; i < elements.length; i++) {
+        await this.parseKindPlanStreaming(elements[i].type, plan, [...path, i]);
+      }
+    } else if (typeStr.startsWith("Array")) {
+      const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
+      await this.parseKindPlanStreaming(innerType, plan, [...path, 0]);
+    } else if (typeStr.startsWith("Map")) {
+      const args = parseTypeList(typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")));
+      await this.parseKindPlanStreaming(args[0], plan, [...path, 0]);
+      await this.parseKindPlanStreaming(args[1], plan, [...path, 1]);
+    } else if (typeStr.startsWith("Nullable")) {
+      const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
+      await this.parseKindPlanStreaming(innerType, plan, [...path, 0]);
+    }
   }
 
   private async readProfileInfo(): Promise<ProfileInfo> {
@@ -299,26 +304,43 @@ export class TcpClient {
     for (let i = 0; i < columnsCount; i++) {
       const colName = await this.reader!.readString();
       const colType = await this.reader!.readString();
+
+      let kindPlan: KindPlan | undefined = undefined;
       if (this.serverHello!.revision >= 54454n) {
-        const hasCustom = await this.reader!.readU8();
-        if (hasCustom) await this.skipKinds(colType);
+        const hasCustom = await this.reader!.readU8() !== 0;
+        if (hasCustom) {
+          kindPlan = new Map();
+          await this.parseKindPlanStreaming(colType, kindPlan, []);
+        }
       }
+
       columns.push({ name: colName, type: colType });
 
       const codec = getCodec(colType);
+      const state = { ...this.deserializerState, kindPlan };
+
+      if (rowsCount === 0) {
+        // For empty blocks, some codecs might still need to read prefixes, 
+        // but generally we can just get an empty column.
+        // Let's use a dummy BufferReader to see if it wants to read anything.
+        const tempReader = new BufferReader(new Uint8Array(0));
+        columnData.push(codec.decode(tempReader, 0, state, []));
+        continue;
+      }
+
       while (true) {
         const currentBuffer = this.reader!.peekAll();
         const tempReader = new BufferReader(currentBuffer);
         try {
           codec.readPrefix?.(tempReader);
-          const data = codec.decode(tempReader, rowsCount);
+          const data = codec.decode(tempReader, rowsCount, state, []);
           this.reader!.consume(tempReader.offset);
           columnData.push(data);
           break;
         } catch (err: any) {
           if (err.message && err.message.includes("Unexpected end of buffer")) {
             const more = await this.reader!.nextChunk();
-            if (!more) throw new Error("EOF while decoding block");
+            if (!more) throw new Error(`EOF while decoding block column ${colName} (${colType})`);
             continue;
           }
           throw err;
@@ -333,11 +355,13 @@ export class TcpClient {
     });
   }
 
-  async *query(sql: string): AsyncGenerator<Packet> {
+  async *query(sql: string, settings: Record<string, string> = {}): AsyncGenerator<Packet> {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
 
     const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
-      "compress": "0"
+      "compress": "0",
+      "allow_special_serialization_kinds_in_output_formats": "0",
+      ...settings
     });
     this.socket.write(queryPacket);
 
@@ -349,7 +373,7 @@ export class TcpClient {
 
     while (true) {
       const packetId = Number(await this.reader.readVarInt());
-      this.log(`Query: PacketID ${packetId}`);
+      // console.log(`[TcpClient] packetId=${packetId}`);
       
       switch (packetId) {
         case ServerPacketId.Data: {
@@ -370,7 +394,6 @@ export class TcpClient {
           yield { type: "ProfileEvents", table: await this.readBlock() };
           break;
         case ServerPacketId.EndOfStream:
-          this.log("Query: EndOfStream");
           yield { type: "EndOfStream" };
           return;
         case ServerPacketId.Exception:
@@ -378,22 +401,6 @@ export class TcpClient {
         default:
           throw new Error(`Unknown packet ID: ${packetId}. Cannot proceed.`);
       }
-    }
-  }
-
-  private async skipKinds(typeStr: string) {
-    const kind = await this.reader!.readU8();
-    if (typeStr.startsWith("Array(")) {
-      const inner = typeStr.slice(6, -1);
-      await this.skipKinds(inner);
-    } else if (typeStr.startsWith("Map(")) {
-      const args = typeStr.slice(4, -1);
-      const [k, v] = args.split(", ");
-      await this.skipKinds(k);
-      await this.skipKinds(v);
-    } else if (typeStr.startsWith("Nullable(")) {
-      const inner = typeStr.slice(9, -1);
-      await this.skipKinds(inner);
     }
   }
 

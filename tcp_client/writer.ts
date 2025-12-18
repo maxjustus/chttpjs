@@ -108,7 +108,7 @@ export class StreamingWriter {
     this.writeU8(1); // interface: TCP
     this.writeString("chttp-client"); // os_user
     this.writeString("localhost"); // client_hostname
-    this.writeString("chttp-client"); // client_name
+    this.writeString("ClickHouse"); // client_name
     this.writeVarInt(24); // client_version_major
     this.writeVarInt(8);  // client_version_minor
     this.writeVarInt(DBMS_TCP_PROTOCOL_VERSION);

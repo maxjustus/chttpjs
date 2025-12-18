@@ -22,6 +22,7 @@ import {
 } from "../shared.ts";
 
 import { BufferWriter, BufferReader, type TypedArrayConstructor } from "./io.ts";
+import { type DeserializerState } from "./index.ts";
 import {
   type Column,
   type DiscriminatorArray,
@@ -37,6 +38,12 @@ import {
   countAndIndexDiscriminators,
 } from "./columns.ts";
 
+export function defaultDeserializerState(): DeserializerState {
+  return {
+    sparseRuntime: new Map(),
+  };
+}
+
 const MS_PER_DAY = 86400000;
 
 // LowCardinality encoding flags
@@ -51,11 +58,13 @@ const LC_INDEX_U32 = 2n;
 function decodeGroups(
   reader: BufferReader,
   codecs: Codec[],
-  counts: Map<number, number>
+  counts: Map<number, number>,
+  state: DeserializerState,
+  path: number[]
 ): Map<number, Column> {
   const groups = new Map<number, Column>();
   for (let i = 0; i < codecs.length; i++) {
-    if (counts.has(i)) groups.set(i, codecs[i].decode(reader, counts.get(i)!));
+    if (counts.has(i)) groups.set(i, codecs[i].decode(reader, counts.get(i)!, state, [...path, i]));
   }
   return groups;
 }
@@ -104,7 +113,7 @@ export interface Codec {
   /** ClickHouse type string this codec handles */
   readonly type: string;
   encode(col: Column, sizeHint?: number): Uint8Array;
-  decode(reader: BufferReader, rows: number): Column;
+  decode(reader: BufferReader, rows: number, state: DeserializerState, path: number[]): Column;
   fromValues(values: unknown[]): Column;
   builder(size: number): ColumnBuilder;
   zeroValue(): unknown;
@@ -113,13 +122,139 @@ export interface Codec {
   // Nested types need to handle prefix writing/reading
   writePrefix?(writer: BufferWriter, col: Column): void;
   readPrefix?(reader: BufferReader): void;
+  // Dense decoding (without sparse check) - used by readSparse
+  decodeDense?(reader: BufferReader, rows: number, state: DeserializerState, path: number[]): Column;
 }
 
-class NumericCodec<T extends TypedArray> implements Codec {
+/**
+ * Base class for codecs that support sparse serialization.
+ * Centralizes the sparse check pattern - subclasses implement decodeDense().
+ */
+export abstract class BaseCodec implements Codec {
+  abstract readonly type: string;
+  abstract encode(col: Column, sizeHint?: number): Uint8Array;
+  abstract fromValues(values: unknown[]): Column;
+  abstract builder(size: number): ColumnBuilder;
+  abstract zeroValue(): unknown;
+  abstract estimateSize(rows: number): number;
+  abstract decodeDense(reader: BufferReader, rows: number, state: DeserializerState, path: number[]): Column;
+
+  decode(reader: BufferReader, rows: number, state: DeserializerState, path: number[]): Column {
+    if (state.kindPlan?.get(path.join(",")) === 1) {
+      return readSparse(this, reader, rows, state, path);
+    }
+    return this.decodeDense(reader, rows, state, path);
+  }
+}
+
+const END_OF_GRANULE_FLAG = 1n << 62n;
+
+function readSparse(codec: Codec, reader: BufferReader, rows: number, state: DeserializerState, path: number[]): Column {
+  const pathStr = path.join(",");
+  const [initialTrailing, hasValueAfter] = state.sparseRuntime.get(pathStr) || [0, false];
+  
+  let trailingDefaults = initialTrailing;
+  let hasValueAfterDefaults = hasValueAfter;
+  
+  const indices: number[] = [];
+  let totalRows = trailingDefaults;
+  let tmpOffset = 0; // We don't support partial read requests yet, so tmpOffset is always 0
+  let skippedValuesRows = 0;
+  let first = true;
+
+  if (hasValueAfterDefaults) {
+    if (trailingDefaults >= tmpOffset) {
+      indices.push(trailingDefaults - tmpOffset);
+      tmpOffset = 0;
+      first = false;
+    } else {
+      skippedValuesRows += 1;
+      tmpOffset -= (trailingDefaults + 1);
+    }
+    trailingDefaults = 0;
+    totalRows += 1;
+  }
+
+  // Read offset stream: VarInts encode gaps between non-default values
+  // Each VarInt = defaults before next non-default. END flag marks last entry.
+  while (true) {
+    let v = BigInt(reader.readVarInt64());
+    const end = (v & END_OF_GRANULE_FLAG) !== 0n;
+    if (end) {
+      v &= ~END_OF_GRANULE_FLAG;
+    }
+
+    let groupSize = Number(v);
+    let nextTotalRows = totalRows + groupSize;
+
+    // Check if we've exceeded the requested rows
+    if (nextTotalRows >= rows) {
+      trailingDefaults = nextTotalRows - rows;
+      hasValueAfterDefaults = !end;
+      break;
+    }
+
+    // END flag with remaining defaults
+    if (end) {
+      hasValueAfterDefaults = false;
+      trailingDefaults = groupSize;
+      break;
+    }
+
+    // This VarInt represents a non-default value at position (startOfGroup + groupSize)
+    const startOfGroup = !first && indices.length > 0 ? indices[indices.length - 1] + 1 : 0;
+    if (groupSize >= tmpOffset) {
+      indices.push(startOfGroup + groupSize - tmpOffset);
+      tmpOffset = 0;
+      first = false;
+    } else {
+      skippedValuesRows += 1;
+      tmpOffset -= (groupSize + 1);
+    }
+
+    trailingDefaults = 0;
+    totalRows = nextTotalRows + 1;
+  }
+
+  state.sparseRuntime.set(pathStr, [trailingDefaults, hasValueAfterDefaults]);
+
+  const zero = codec.zeroValue();
+  
+  // Use decodeDense if available, otherwise fall back to decode with fresh state
+  const decodeFn = (r: BufferReader, n: number) =>
+    codec.decodeDense ? codec.decodeDense(r, n, defaultDeserializerState(), [])
+                      : codec.decode(r, n, defaultDeserializerState(), []);
+
+  if (skippedValuesRows > 0) {
+    decodeFn(reader, skippedValuesRows);
+  }
+
+  if (indices.length === 0) {
+    return codec.fromValues(new Array(rows).fill(zero));
+  }
+
+  const values = decodeFn(reader, indices.length);
+  
+  // Materialize to dense column
+  const resultValues = new Array(rows);
+  for (let i = 0; i < rows; i++) resultValues[i] = zero;
+  
+  for (let i = 0; i < indices.length; i++) {
+    const idx = indices[i];
+    if (idx < rows) {
+      resultValues[idx] = values.get(i);
+    }
+  }
+  
+  return codec.fromValues(resultValues);
+}
+
+class NumericCodec<T extends TypedArray> extends BaseCodec {
   readonly type: string;
   private Ctor: TypedArrayConstructor<T>;
   private converter?: (v: unknown) => number | bigint;
   constructor(type: string, Ctor: TypedArrayConstructor<T>, converter?: (v: unknown) => number | bigint) {
+    super();
     this.type = type;
     this.Ctor = Ctor;
     this.converter = converter;
@@ -138,7 +273,7 @@ class NumericCodec<T extends TypedArray> implements Codec {
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): DataColumn<T> {
+  decodeDense(reader: BufferReader, rows: number): Column {
     return new DataColumn(this.type, reader.readTypedArray(this.Ctor, rows));
   }
 
@@ -187,7 +322,7 @@ function fromValuesViaBuilder(codec: Codec, values: unknown[]): Column {
   return b.finish();
 }
 
-class StringCodec implements Codec {
+class StringCodec extends BaseCodec {
   readonly type = 'String';
 
   encode(col: Column, sizeHint?: number): Uint8Array {
@@ -199,7 +334,7 @@ class StringCodec implements Codec {
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): DataColumn<string[]> {
+  decodeDense(reader: BufferReader, rows: number): Column {
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) values[i] = reader.readString();
     return new DataColumn(this.type, values);
@@ -217,7 +352,7 @@ class StringCodec implements Codec {
   estimateSize(rows: number) { return rows * 33; }
 }
 
-class UUIDCodec implements Codec {
+class UUIDCodec extends BaseCodec {
   readonly type = 'UUID';
 
   encode(col: Column): Uint8Array {
@@ -238,7 +373,7 @@ class UUIDCodec implements Codec {
     return buf;
   }
 
-  decode(reader: BufferReader, rows: number): DataColumn<string[]> {
+  decodeDense(reader: BufferReader, rows: number): Column {
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const b = reader.buffer.subarray(reader.offset, reader.offset + 16);
@@ -266,10 +401,11 @@ class UUIDCodec implements Codec {
   estimateSize(rows: number) { return rows * 16; }
 }
 
-class FixedStringCodec implements Codec {
+class FixedStringCodec extends BaseCodec {
   readonly type: string;
   readonly len: number;
   constructor(len: number) {
+    super();
     this.len = len;
     this.type = `FixedString(${len})`;
   }
@@ -289,7 +425,7 @@ class FixedStringCodec implements Codec {
     return buf;
   }
 
-  decode(reader: BufferReader, rows: number): DataColumn<Uint8Array[]> {
+  decodeDense(reader: BufferReader, rows: number): Column {
     const values: Uint8Array[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       values[i] = reader.buffer.slice(reader.offset, reader.offset + this.len);
@@ -330,12 +466,13 @@ class FixedStringCodec implements Codec {
   estimateSize(rows: number) { return rows * this.len; }
 }
 
-class BigIntCodec implements Codec {
+class BigIntCodec extends BaseCodec {
   readonly type: string;
   private byteSize: 16 | 32;
   private signed: boolean;
 
   constructor(type: string, byteSize: 16 | 32, signed: boolean) {
+    super();
     this.type = type;
     this.byteSize = byteSize;
     this.signed = signed;
@@ -352,7 +489,7 @@ class BigIntCodec implements Codec {
     return buf;
   }
 
-  decode(reader: BufferReader, rows: number): DataColumn<bigint[]> {
+  decodeDense(reader: BufferReader, rows: number): Column {
     const values: bigint[] = new Array(rows);
     const readFn = this.byteSize === 16 ? readBigInt128 : readBigInt256;
     for (let i = 0; i < rows; i++) {
@@ -374,12 +511,13 @@ class BigIntCodec implements Codec {
   estimateSize(rows: number) { return rows * this.byteSize; }
 }
 
-class DecimalCodec implements Codec {
+class DecimalCodec extends BaseCodec {
   readonly type: string;
   private byteSize: 4 | 8 | 16 | 32;
   private scale: number;
 
   constructor(type: string) {
+    super();
     this.type = type;
     this.byteSize = decimalByteSize(type);
     this.scale = extractDecimalScale(type);
@@ -415,7 +553,7 @@ class DecimalCodec implements Codec {
     return buf;
   }
 
-  decode(reader: BufferReader, rows: number): DataColumn<string[]> {
+  decodeDense(reader: BufferReader, rows: number): Column {
     const values: string[] = new Array(rows);
 
     for (let i = 0; i < rows; i++) {
@@ -453,10 +591,11 @@ class DecimalCodec implements Codec {
   estimateSize(rows: number) { return rows * this.byteSize; }
 }
 
-class DateTime64Codec implements Codec {
+class DateTime64Codec extends BaseCodec {
   readonly type: string;
   private precision: number;
   constructor(type: string, precision: number) {
+    super();
     this.type = type;
     this.precision = precision;
   }
@@ -481,7 +620,7 @@ class DateTime64Codec implements Codec {
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): DataColumn<ClickHouseDateTime64[]> {
+  decodeDense(reader: BufferReader, rows: number): Column {
     const arr = reader.readTypedArray(BigInt64Array, rows);
     const values: ClickHouseDateTime64[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
@@ -525,12 +664,13 @@ class DateTime64Codec implements Codec {
 }
 
 // handles Date, Date32, DateTime (ms since epoch / multiplier)
-class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Codec {
+class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> extends BaseCodec {
   readonly type: string;
   private Ctor: TypedArrayConstructor<T>;
   private multiplier: number;
 
   constructor(type: string, Ctor: TypedArrayConstructor<T>, multiplier: number) {
+    super();
     this.type = type;
     this.Ctor = Ctor;
     this.multiplier = multiplier;
@@ -546,7 +686,7 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): DataColumn<Date[]> {
+  decodeDense(reader: BufferReader, rows: number): Column {
     const arr = reader.readTypedArray(this.Ctor, rows);
     const values: Date[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
@@ -583,7 +723,7 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> implements Co
   estimateSize(rows: number) { return rows * this.Ctor.BYTES_PER_ELEMENT; }
 }
 
-class IPv4Codec implements Codec {
+class IPv4Codec extends BaseCodec {
   readonly type = 'IPv4';
 
   encode(col: Column): Uint8Array {
@@ -597,7 +737,7 @@ class IPv4Codec implements Codec {
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decode(reader: BufferReader, rows: number): DataColumn<string[]> {
+  decodeDense(reader: BufferReader, rows: number): Column {
     const arr = reader.readTypedArray(Uint32Array, rows);
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
@@ -619,7 +759,7 @@ class IPv4Codec implements Codec {
   estimateSize(rows: number) { return rows * 4; }
 }
 
-class IPv6Codec implements Codec {
+class IPv6Codec extends BaseCodec {
   readonly type = 'IPv6';
 
   encode(col: Column): Uint8Array {
@@ -633,7 +773,7 @@ class IPv6Codec implements Codec {
     return result;
   }
 
-  decode(reader: BufferReader, rows: number): DataColumn<string[]> {
+  decodeDense(reader: BufferReader, rows: number): Column {
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const bytes = reader.readBytes(16);
@@ -655,11 +795,12 @@ class IPv6Codec implements Codec {
 }
 
 // When used as a column in Map/Tuple, inner codec's prefix needs to be handled
-class ArrayCodec implements Codec {
+class ArrayCodec extends BaseCodec {
   readonly type: string;
   private inner: Codec;
 
   constructor(type: string, inner: Codec) {
+    super();
     this.type = type;
     this.inner = inner;
   }
@@ -688,10 +829,10 @@ class ArrayCodec implements Codec {
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): ArrayColumn {
+  decodeDense(reader: BufferReader, rows: number, state: DeserializerState, path: number[]): Column {
     const offsets = reader.readTypedArray(BigUint64Array, rows);
     const totalCount = rows > 0 ? Number(offsets[rows - 1]) : 0;
-    const inner = this.inner.decode(reader, totalCount);
+    const inner = this.inner.decode(reader, totalCount, state, [...path, 0]);
     return new ArrayColumn(this.type, offsets, inner);
   }
 
@@ -733,11 +874,12 @@ class ArrayCodec implements Codec {
 }
 
 // Delegates prefix handling to inner codec
-class NullableCodec implements Codec {
+class NullableCodec extends BaseCodec {
   readonly type: string;
   private inner: Codec;
 
   constructor(type: string, inner: Codec) {
+    super();
     this.type = type;
     this.inner = inner;
   }
@@ -766,9 +908,9 @@ class NullableCodec implements Codec {
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): NullableColumn {
+  decodeDense(reader: BufferReader, rows: number, state: DeserializerState, path: number[]): Column {
     const nullFlags = reader.readTypedArray(Uint8Array, rows);
-    const inner = this.inner.decode(reader, rows);
+    const inner = this.inner.decode(reader, rows, state, [...path, 0]);
     return new NullableColumn(this.type, nullFlags, inner);
   }
 
@@ -818,12 +960,13 @@ class NullableCodec implements Codec {
 // When wrapping Nullable(T), the dictionary stores T values (not Nullable(T)) and index 0
 // is reserved for NULL. This avoids storing null flags per dictionary entry - nullness is
 // encoded in the index itself.
-class LowCardinalityCodec implements Codec {
+class LowCardinalityCodec extends BaseCodec {
   readonly type: string;
   private inner: Codec;
   private dictCodec: Codec; // Codec to use for dictionary (may differ from inner for Nullable)
 
   constructor(type: string, inner: Codec) {
+    super();
     this.type = type;
     this.inner = inner;
     // For Nullable inner types, dictionary stores unwrapped type (nulls use index 0)
@@ -889,7 +1032,7 @@ class LowCardinalityCodec implements Codec {
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): Column {
+  decodeDense(reader: BufferReader, rows: number): Column {
     if (rows === 0) return new DataColumn(this.type, []);
 
     const flags = reader.view.getBigUint64(reader.offset, true);
@@ -901,7 +1044,8 @@ class LowCardinalityCodec implements Codec {
     const dictSize = Number(reader.view.getBigUint64(reader.offset, true));
     reader.offset += 8;
 
-    const dict = this.dictCodec.decode(reader, dictSize);
+    // Dictionary values are never sparse
+    const dict = this.dictCodec.decode(reader, dictSize, defaultDeserializerState(), []);
 
     const count = Number(reader.view.getBigUint64(reader.offset, true));
     reader.offset += 8;
@@ -968,12 +1112,13 @@ class LowCardinalityCodec implements Codec {
 
 // Map is serialized as Array(Tuple(K, V))
 // Prefixes are written at top level, not inside the data.
-class MapCodec implements Codec {
+class MapCodec extends BaseCodec {
   readonly type: string;
   private keyCodec: Codec;
   private valCodec: Codec;
 
   constructor(type: string, keyCodec: Codec, valCodec: Codec) {
+    super();
     this.type = type;
     this.keyCodec = keyCodec;
     this.valCodec = valCodec;
@@ -1002,11 +1147,11 @@ class MapCodec implements Codec {
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): MapColumn {
+  decodeDense(reader: BufferReader, rows: number, state: DeserializerState, path: number[]): Column {
     const offsets = reader.readTypedArray(BigUint64Array, rows);
     const total = rows > 0 ? Number(offsets[rows - 1]) : 0;
-    const keys = this.keyCodec.decode(reader, total);
-    const vals = this.valCodec.decode(reader, total);
+    const keys = this.keyCodec.decode(reader, total, state, [...path, 0]);
+    const vals = this.valCodec.decode(reader, total, state, [...path, 1]);
     return new MapColumn(this.type, offsets, keys, vals, reader.options?.mapAsArray ?? false);
   }
 
@@ -1073,12 +1218,13 @@ class MapCodec implements Codec {
   }
 }
 
-class TupleCodec implements Codec {
+class TupleCodec extends BaseCodec {
   readonly type: string;
   private elements: { name: string | null, codec: Codec }[];
   private isNamed: boolean;
 
   constructor(type: string, elements: { name: string | null, codec: Codec }[], isNamed: boolean) {
+    super();
     this.type = type;
     this.elements = elements;
     this.isNamed = isNamed;
@@ -1108,8 +1254,8 @@ class TupleCodec implements Codec {
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): TupleColumn {
-    const cols = this.elements.map(e => e.codec.decode(reader, rows));
+  decodeDense(reader: BufferReader, rows: number, state: DeserializerState, path: number[]): Column {
+    const cols = this.elements.map((e, i) => e.codec.decode(reader, rows, state, [...path, i]));
     return new TupleColumn(
       this.type,
       this.elements.map(e => ({ name: e.name })),
@@ -1199,10 +1345,10 @@ class VariantCodec implements Codec {
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): VariantColumn {
+  decode(reader: BufferReader, rows: number, state: DeserializerState, path: number[]): VariantColumn {
     const discriminators = reader.readTypedArray(Uint8Array, rows);
     const { counts, indices } = countAndIndexDiscriminators(discriminators, VARIANT_NULL_DISCRIMINATOR);
-    const groups = decodeGroups(reader, this.codecs, counts);
+    const groups = decodeGroups(reader, this.codecs, counts, state, path);
     return new VariantColumn(this.type, discriminators, groups, indices);
   }
 
@@ -1352,7 +1498,7 @@ class DynamicCodec implements Codec {
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): DynamicColumn {
+  decode(reader: BufferReader, rows: number, state: DeserializerState, path: number[]): DynamicColumn {
     const nullDisc = this.types.length;
     const discLimit = nullDisc + 1;
 
@@ -1362,7 +1508,7 @@ class DynamicCodec implements Codec {
     else discriminators = reader.readTypedArray(Uint32Array, rows);
 
     const { counts, indices } = countAndIndexDiscriminators(discriminators, nullDisc);
-    const groups = decodeGroups(reader, this.codecs, counts);
+    const groups = decodeGroups(reader, this.codecs, counts, state, path);
     return new DynamicColumn(this.types, discriminators, groups, indices);
   }
 
@@ -1476,10 +1622,12 @@ class JsonCodec implements Codec {
     return writer.finish();
   }
 
-  decode(reader: BufferReader, rows: number): JsonColumn {
+  decode(reader: BufferReader, rows: number, state: DeserializerState, path: number[]): JsonColumn {
     const pathColumns = new Map<string, DynamicColumn>();
-    for (const path of this.paths) {
-      pathColumns.set(path, this.pathCodecs.get(path)!.decode(reader, rows));
+    for (let i = 0; i < this.paths.length; i++) {
+      const p = this.paths[i];
+      // JSON paths are encoded as Dynamic columns. We use the path index as the path component.
+      pathColumns.set(p, this.pathCodecs.get(p)!.decode(reader, rows, state, [...path, i]));
     }
 
     return new JsonColumn(this.paths, pathColumns, rows);

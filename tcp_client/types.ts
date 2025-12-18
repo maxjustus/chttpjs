@@ -1,6 +1,8 @@
 import { Table } from "../formats/native/table.ts";
 
-export const DBMS_TCP_PROTOCOL_VERSION = 54479;
+// Modern revision. We disable sparse/custom serialization via settings
+// (allow_special_serialization_kinds_in_output_formats=0) to keep the protocol simple.
+export const DBMS_TCP_PROTOCOL_VERSION = 54479n;
 
 export const ClientPacketId = {
   Hello: 0,

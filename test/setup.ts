@@ -9,7 +9,7 @@ export async function startClickHouse() {
   console.log("Starting ClickHouse container...");
 
   container = await new ClickHouseContainer(
-    "clickhouse/clickhouse-server:latest",
+    "clickhouse/clickhouse-server:25.8",
   )
     .withDatabase("default")
     .withUsername("default")
@@ -18,14 +18,16 @@ export async function startClickHouse() {
 
   const host = container.getHost();
   const port = container.getMappedPort(8123);
+  const tcpPort = container.getMappedPort(9000);
   const url = `http://${host}:${port}`;
 
-  console.log(`ClickHouse started at ${url}`);
+  console.log(`ClickHouse started at ${url} (TCP: ${tcpPort})`);
   return {
     container,
     url,
     host,
     port,
+    tcpPort,
     username: "default",
     password: "password",
   };

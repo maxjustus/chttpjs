@@ -50,6 +50,23 @@ export interface Block {
   rowCount: number;
 }
 
+/**
+ * Maps type tree path (e.g. [0, 1] for second element of nested tuple)
+ * to serialization kind (0 = Default, 1 = Sparse).
+ */
+export type KindPlan = Map<string, number>;
+
+/**
+ * State maintained during a block deserialization.
+ */
+export interface DeserializerState {
+  kindPlan?: KindPlan;
+  /**
+   * Tracks partial sparse groups across granules/blocks.
+   * Map key is the path string, value is [trailing_defaults, has_value_after_defaults].
+   */
+  sparseRuntime: Map<string, [number, boolean]>;
+}
 
 interface BlockResult {
   columns: ColumnDef[];
@@ -71,10 +88,21 @@ interface BlockEstimate {
 function estimateBlockSize(
   data: Uint8Array,
   offset: number,
+  options?: DecodeOptions,
 ): BlockEstimate | null {
   try {
-    const reader = new BufferReader(data, offset);
+    const reader = new BufferReader(data, offset, options);
     const startOffset = reader.offset;
+
+    const clientVersion = options?.clientVersion ?? 0;
+    if (clientVersion > 0) {
+      while (true) {
+        const fieldId = reader.readVarint();
+        if (fieldId === 0) break;
+        if (fieldId === 1) reader.offset += 1; // is_overflows
+        else if (fieldId === 2) reader.offset += 4; // bucket_num
+      }
+    }
 
     const numCols = reader.readVarint();
     const numRows = reader.readVarint();
@@ -86,10 +114,19 @@ function estimateBlockSize(
 
     // Read column names and types to estimate data size
     let dataEstimate = 0;
+
     for (let i = 0; i < numCols; i++) {
       reader.readString(); // name
-      const type = reader.readString();
-      dataEstimate += getCodec(type).estimateSize(numRows);
+      const typeStr = reader.readString();
+      
+      if (clientVersion >= 54454) {
+        const hasCustom = reader.buffer[reader.offset++] !== 0;
+        if (hasCustom) {
+          traverseKindPlan(reader, typeStr, []);
+        }
+      }
+
+      dataEstimate += getCodec(typeStr).estimateSize(numRows);
     }
 
     const headerSize = reader.offset - startOffset;
@@ -98,6 +135,33 @@ function estimateBlockSize(
   } catch {
     // Not enough data even for header
     return null;
+  }
+}
+
+import { parseTypeList, parseTupleElements } from "../shared.ts";
+
+/**
+ * Traverse type tree for kind plan. If plan is provided, records kinds; otherwise just skips.
+ */
+function traverseKindPlan(reader: BufferReader, typeStr: string, path: number[], plan?: KindPlan): void {
+  const kind = reader.buffer[reader.offset++];
+  plan?.set(path.join(","), kind);
+
+  if (typeStr.startsWith("Tuple")) {
+    const elements = parseTupleElements(typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")));
+    for (let i = 0; i < elements.length; i++) {
+      traverseKindPlan(reader, elements[i].type, [...path, i], plan);
+    }
+  } else if (typeStr.startsWith("Array")) {
+    const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
+    traverseKindPlan(reader, innerType, [...path, 0], plan);
+  } else if (typeStr.startsWith("Map")) {
+    const args = parseTypeList(typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")));
+    traverseKindPlan(reader, args[0], [...path, 0], plan);
+    traverseKindPlan(reader, args[1], [...path, 1], plan);
+  } else if (typeStr.startsWith("Nullable")) {
+    const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
+    traverseKindPlan(reader, innerType, [...path, 0], plan);
   }
 }
 
@@ -113,6 +177,16 @@ function decodeNativeBlock(
 ): BlockResult {
   const reader = new BufferReader(data, offset, options);
   const startOffset = reader.offset;
+
+  const clientVersion = options?.clientVersion ?? 0;
+  if (clientVersion > 0) {
+    while (true) {
+      const fieldId = reader.readVarint();
+      if (fieldId === 0) break;
+      if (fieldId === 1) reader.offset += 1; // is_overflows
+      else if (fieldId === 2) reader.offset += 4; // bucket_num
+    }
+  }
 
   const numCols = reader.readVarint();
   const numRows = reader.readVarint();
@@ -131,15 +205,30 @@ function decodeNativeBlock(
   const columns: ColumnDef[] = [];
   const columnData: Column[] = [];
 
-  // Native format: per-column [name, type, prefix, data]
+  const state: DeserializerState = {
+    sparseRuntime: new Map()
+  };
+
+  // Native format: per-column [name, type, [has_custom, [kinds...]], prefix, data]
   for (let i = 0; i < numCols; i++) {
     const name = reader.readString();
     const type = reader.readString();
     columns.push({ name, type });
 
+    let hasCustomSerialization = false;
+    if (clientVersion >= 54454) {
+      hasCustomSerialization = reader.buffer[reader.offset++] !== 0;
+    }
+
+    state.kindPlan = undefined;
+    if (hasCustomSerialization) {
+      state.kindPlan = new Map();
+      traverseKindPlan(reader, type, [], state.kindPlan);
+    }
+
     const codec = getCodec(type);
     codec.readPrefix?.(reader);
-    columnData.push(codec.decode(reader, numRows));
+    columnData.push(codec.decode(reader, numRows, state, []));
   }
 
   return {
@@ -337,7 +426,7 @@ function decodeFromStream(streamBuffer: StreamBuffer, options?: DecodeOptions): 
   const buffer = streamBuffer.getReadView();
   if (buffer.length === 0) return null;
 
-  const estimate = estimateBlockSize(buffer, 0);
+  const estimate = estimateBlockSize(buffer, 0, options);
   if (estimate === null) return null;
 
   // We try to decode if we have enough data according to the estimate.

@@ -116,6 +116,20 @@ export class BufferReader {
     return result;
   }
 
+  readVarInt64(): bigint {
+    let result = 0n, shift = 0n;
+    while (true) {
+      if (this.offset >= this.buffer.length) {
+        throw new Error(`Unexpected end of buffer reading varint64 at offset ${this.offset}`);
+      }
+      const byte = BigInt(this.buffer[this.offset++]);
+      result |= (byte & 0x7fn) << shift;
+      if ((byte & 0x80n) === 0n) break;
+      shift += 7n;
+    }
+    return result;
+  }
+
   readString(): string {
     const len = this.readVarint();
     if (this.offset + len > this.buffer.length) {

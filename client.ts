@@ -393,12 +393,14 @@ interface QueryOptions {
   signal?: AbortSignal;
   /** Request timeout in milliseconds */
   timeout?: number;
+  /** Client version string (e.g. "24.8") or numeric revision */
+  clientVersion?: string | number;
 }
 
 async function* query(
   query: string,
   sessionId: string,
-  options: QueryOptions = {},
+  options: QueryOptions & Record<string, any> = {},
 ): AsyncGenerator<Uint8Array, void, unknown> {
   await init();
   const baseUrl = options.baseUrl || "http://localhost:8123/";
@@ -413,12 +415,29 @@ async function* query(
     params.compress = "1";
   }
 
+  if (options.clientVersion) {
+    params.client_protocol_version = String(options.clientVersion);
+  }
+
+  // Include any other settings/params passed in options
+  const reserved = ["baseUrl", "auth", "compression", "signal", "timeout", "clientVersion"];
+  for (const [key, value] of Object.entries(options)) {
+    if (!reserved.includes(key) && value !== undefined) {
+      params[key] = String(value);
+    }
+  }
+
   const url = buildReqUrl(baseUrl, params, options.auth);
+
+  const headers: Record<string, string> = {
+    "Connection": "close",
+    "User-Agent": `chttp/${options.clientVersion || "1.0"}`,
+  };
 
   const response = await fetch(url.toString(), {
     method: "POST",
     body: query,
-    headers: { "Connection": "close" },
+    headers,
     signal: createSignal(options.signal, options.timeout),
   });
 

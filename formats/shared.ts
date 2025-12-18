@@ -27,6 +27,8 @@ export interface DecodeResult {
 export interface DecodeOptions {
   /** Decode Map types as Array<[K, V]> instead of Map<K, V> to preserve duplicate keys */
   mapAsArray?: boolean;
+  /** Client version or protocol revision (e.g. 54454) */
+  clientVersion?: number;
 }
 
 export interface Cursor {
