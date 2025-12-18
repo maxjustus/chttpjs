@@ -418,4 +418,59 @@ This works because these are fixed-width scalar types where the Native column fo
 
 ### Sparse serialization
 
-TODO:
+WIP: some AI crap that's somewhat useful that I need to clean up / validate.
+
+✦ Sparse serialization (introduced in ClickHouse 22.9, protocol revision 54454) is a storage and wire optimization for columns
+  with a high percentage of default values. Instead of storing every row, it only stores the non-default values and a sparse
+  index of their positions.
+
+  Custom Serialization Header
+
+  In the TCP protocol, every column in a Data packet (if revision >= 54454) is preceded by a 1-byte flag
+  has_custom_serialization.
+
+  If has_custom_serialization is 1, the column uses a custom serialization "Kinds" plan. ClickHouse sends a recursive tree of
+  "Kind" bytes, one for each node in the type tree (e.g., Array(Int32) sends one byte for the Array and one for the Int32).
+
+
+  ┌──────┬─────────┬───────────────────────────┐
+  │ Kind │ Name    │ Description               │
+  ├──────┼─────────┼───────────────────────────┤
+  │ 0x00 │ Default │ Standard columnar format. │
+  │ 0x01 │ Sparse  │ Sparse serialization.     │
+  └──────┴─────────┴───────────────────────────┘
+
+  Sparse Layout (Kind 0x01)
+
+  When a type node is marked as Sparse, its data layout changes significantly:
+
+   1. Sparse Index (Offsets): A sequence of Varints representing the gaps between non-default values.
+       * Each Varint v indicates that the next v rows contain the default value.
+       * If the Varint has bit 62 ($1 \ll 62$) set, it is the End of Stream marker. It indicates the number of trailing default
+         values until the end of the block.
+       * The index reading continues until the sum of all gaps and non-default values matches the num_rows of the block.
+
+   2. Non-Default Values: Immediately following the complete index, the non-default values are stored contiguously using the
+      standard codec for that type.
+       * There is exactly one value for every gap Varint that did not have the "End of Stream" bit set.
+
+  Visualization Example
+  Consider a String column with 10 rows, where only rows 1 and 5 have values ("A" and "B"), and the rest are empty strings (the
+  default).
+
+  Index Section:
+   * Varint(1): 1 default row (row 0), followed by a value.
+   * Varint(3): 3 default rows (rows 2, 3, 4), followed by a value.
+   * Varint(0x4000000000000004): Bit 62 set + value 4. 4 trailing default rows (rows 6, 7, 8, 9). End of block.
+
+  Data Section:
+   * String("A") (for the first gap)
+   * String("B") (for the second gap)
+
+  Resulting Column:
+  ["", "A", "", "", "", "B", "", "", "", ""]
+
+  Interaction with Container Types
+  Sparse serialization can be applied to any level of a container. For example, in a Nullable(UInt64), the Nullable node itself
+  could be dense while the inner UInt64 node is sparse. If the Nullable node is sparse, the "default value" used for gaps is
+  NULL.
