@@ -257,4 +257,14 @@ export class StreamingWriter {
     view.setInt32(0, v, true);
     this.offset += 4;
   }
+
+  encodeCancel(): Uint8Array {
+    this.writeVarInt(ClientPacketId.Cancel);
+    return this.flush();
+  }
+
+  encodePing(): Uint8Array {
+    this.writeVarInt(ClientPacketId.Ping);
+    return this.flush();
+  }
 }

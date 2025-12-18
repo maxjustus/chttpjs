@@ -2,6 +2,7 @@
 import { TEXT_DECODER } from "../formats/shared.ts";
 import { decodeBlock } from "../compression.ts";
 import { BufferReader } from "../formats/native/io.ts";
+import { ClickHouseException } from "./types.ts";
 
 /**
  * A streaming byte reader that handles async buffering and optional ClickHouse compression.
@@ -205,6 +206,20 @@ export class StreamingReader {
     const val = view.getBigUint64(0, true);
     this.offset += 8;
     return val;
+  }
+
+  /**
+   * Reads a ClickHouse exception from the stream.
+   * Format: code (i32), name (String), message (String), stack_trace (String), has_nested (u8)
+   */
+  async readException(): Promise<ClickHouseException> {
+    const code = await this.readInt32LE();
+    const name = await this.readString();
+    const message = await this.readString();
+    const stackTrace = await this.readString();
+    const hasNested = (await this.readU8()) !== 0;
+    const nested = hasNested ? await this.readException() : undefined;
+    return new ClickHouseException(code, name, message, stackTrace, hasNested, nested);
   }
 
   /**

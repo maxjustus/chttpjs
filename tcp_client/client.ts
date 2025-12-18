@@ -26,6 +26,10 @@ export interface TcpClientOptions {
   password?: string;
   debug?: boolean;
   compression?: boolean;
+  /** Connection timeout in ms (default: 10000) */
+  connectTimeout?: number;
+  /** Query timeout in ms (default: 30000) */
+  queryTimeout?: number;
 }
 
 export interface ColumnSchema {
@@ -64,7 +68,9 @@ export class TcpClient {
 
   async connect(): Promise<void> {
     await initCompression();
-    return new Promise((resolve, reject) => {
+    const timeout = this.options.connectTimeout ?? 10000;
+
+    const connectPromise = new Promise<void>((resolve, reject) => {
       this.socket = net.connect(this.options.port, this.options.host);
       this.socket.on("connect", async () => {
         try {
@@ -77,6 +83,15 @@ export class TcpClient {
       });
       this.socket.on("error", (err) => reject(err));
     });
+
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      setTimeout(() => {
+        this.socket?.destroy();
+        reject(new Error(`Connection timeout after ${timeout}ms`));
+      }, timeout);
+    });
+
+    return Promise.race([connectPromise, timeoutPromise]);
   }
 
   private async handshake() {
@@ -92,7 +107,7 @@ export class TcpClient {
 
     const packetId = Number(await this.reader.readVarInt());
     if (packetId === ServerPacketId.Exception) {
-      throw new Error(`Server Exception: ${await this.reader.readString()}`);
+      throw await this.reader.readException();
     }
 
     if (packetId !== ServerPacketId.Hello) {
@@ -182,7 +197,7 @@ export class TcpClient {
           await this.reader.readString();
           break;
         case ServerPacketId.Exception:
-          throw new Error(`Insert Init Error: ${await this.reader.readString()}`);
+          throw await this.reader.readException();
         default:
           throw new Error(`Unexpected packet while waiting for insert header: ${packetId}`);
       }
@@ -233,7 +248,7 @@ export class TcpClient {
           await this.readBlock();
           break;
         case ServerPacketId.Exception:
-          throw new Error(`Insert Commit Error: ${await this.reader.readString()}`);
+          throw await this.reader.readException();
       }
     }
     this.log(`Successfully inserted ${totalInserted} rows.`);
@@ -411,64 +426,122 @@ export class TcpClient {
     });
   }
 
-  async *query(sql: string, settings: Record<string, string> = {}): AsyncGenerator<Packet> {
+  async *query(
+    sql: string,
+    settings: Record<string, string> = {},
+    options?: { signal?: AbortSignal }
+  ): AsyncGenerator<Packet> {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
 
+    const signal = options?.signal;
+    if (signal?.aborted) throw new Error("Query aborted before start");
+
     const useCompression = this.options.compression ?? false;
+    const queryTimeout = this.options.queryTimeout ?? 30000;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let timedOut = false;
+    let cancelled = false;
 
-    // The compression flag in the query packet enables bidirectional compression:
-    // - When 1: client sends compressed Data blocks, server sends compressed Data blocks
-    // - When 0: both sides send uncompressed
-    const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
-      "allow_special_serialization_kinds_in_output_formats": "0",
-      ...settings
-    }, useCompression);
-    this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
-    this.socket.write(queryPacket);
-
-    // Send delimiter (compressed if compression is enabled)
-    const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression);
-    this.log(`[query] sending delimiter (${delimiter.length} bytes, compressed=${useCompression})`);
-    this.socket.write(delimiter);
-
-    this.currentSchema = null;
-    this.log(`[query] waiting for response...`);
-
-    while (true) {
-      this.log(`[query] reading packet id...`);
-      const packetId = Number(await this.reader.readVarInt());
-      this.log(`[query] packetId=${packetId}, useCompression=${useCompression}`);
-
-      switch (packetId) {
-        case ServerPacketId.Data: {
-          // With compression=1, ALL Data blocks from server are compressed
-          this.log(`[query] reading Data block (compressed=${useCompression})...`);
-          const table = await this.readBlock(useCompression);
-          this.log(`[query] got Data block with ${table.rowCount} rows`);
-          if (this.currentSchema === null) {
-            this.currentSchema = table.columns.map(c => ({ name: c.name, type: c.type }));
-          }
-          if (table.rowCount > 0) yield { type: "Data", table };
-          break;
-        }
-        case ServerPacketId.Progress:
-          yield { type: "Progress", progress: await this.readProgress() };
-          break;
-        case ServerPacketId.ProfileInfo:
-          yield { type: "ProfileInfo", info: await this.readProfileInfo() };
-          break;
-        case ServerPacketId.ProfileEvents:
-          // ProfileEvents blocks are always uncompressed (diagnostic metadata)
-          yield { type: "ProfileEvents", table: await this.readBlock(false) };
-          break;
-        case ServerPacketId.EndOfStream:
-          yield { type: "EndOfStream" };
-          return;
-        case ServerPacketId.Exception:
-          throw new Error(`Query Error: ${await this.reader.readString()}`);
-        default:
-          throw new Error(`Unknown packet ID: ${packetId}. Cannot proceed.`);
+    const startTimeout = () => {
+      if (queryTimeout > 0) {
+        timeoutId = setTimeout(() => {
+          timedOut = true;
+          this.socket?.destroy();
+        }, queryTimeout);
       }
+    };
+
+    const clearQueryTimeout = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
+
+    const abortHandler = () => {
+      if (!cancelled && this.socket) {
+        cancelled = true;
+        this.socket.write(this.writer.encodeCancel());
+      }
+    };
+
+    signal?.addEventListener("abort", abortHandler);
+
+    try {
+      startTimeout();
+
+      // The compression flag in the query packet enables bidirectional compression:
+      // - When 1: client sends compressed Data blocks, server sends compressed Data blocks
+      // - When 0: both sides send uncompressed
+      const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
+        "allow_special_serialization_kinds_in_output_formats": "0",
+        ...settings
+      }, useCompression);
+      this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
+      this.socket.write(queryPacket);
+
+      // Send delimiter (compressed if compression is enabled)
+      const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression);
+      this.log(`[query] sending delimiter (${delimiter.length} bytes, compressed=${useCompression})`);
+      this.socket.write(delimiter);
+
+      this.currentSchema = null;
+      this.log(`[query] waiting for response...`);
+
+      while (true) {
+        this.log(`[query] reading packet id...`);
+        const packetId = Number(await this.reader.readVarInt());
+        if (timedOut) throw new Error(`Query timeout after ${queryTimeout}ms`);
+        this.log(`[query] packetId=${packetId}, useCompression=${useCompression}`);
+
+        switch (packetId) {
+          case ServerPacketId.Data: {
+            // With compression=1, ALL Data blocks from server are compressed
+            this.log(`[query] reading Data block (compressed=${useCompression})...`);
+            const table = await this.readBlock(useCompression);
+            this.log(`[query] got Data block with ${table.rowCount} rows`);
+            if (this.currentSchema === null) {
+              this.currentSchema = table.columns.map(c => ({ name: c.name, type: c.type }));
+            }
+            if (table.rowCount > 0) yield { type: "Data", table };
+            break;
+          }
+          case ServerPacketId.Progress:
+            yield { type: "Progress", progress: await this.readProgress() };
+            break;
+          case ServerPacketId.ProfileInfo:
+            yield { type: "ProfileInfo", info: await this.readProfileInfo() };
+            break;
+          case ServerPacketId.ProfileEvents:
+            // ProfileEvents blocks are always uncompressed (diagnostic metadata)
+            yield { type: "ProfileEvents", table: await this.readBlock(false) };
+            break;
+          case ServerPacketId.EndOfStream:
+            yield { type: "EndOfStream" };
+            return;
+          case ServerPacketId.Exception:
+            throw await this.reader.readException();
+          default:
+            throw new Error(`Unknown packet ID: ${packetId}. Cannot proceed.`);
+        }
+      }
+    } finally {
+      clearQueryTimeout();
+      signal?.removeEventListener("abort", abortHandler);
+    }
+  }
+
+  /**
+   * Send a ping packet and wait for pong response.
+   * Useful for checking connection health.
+   */
+  async ping(): Promise<void> {
+    if (!this.socket || !this.reader) throw new Error("Not connected");
+
+    this.socket.write(this.writer.encodePing());
+    const packetId = Number(await this.reader.readVarInt());
+    if (packetId !== ServerPacketId.Pong) {
+      throw new Error(`Expected Pong (4), got packet ${packetId}`);
     }
   }
 

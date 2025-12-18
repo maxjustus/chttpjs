@@ -79,3 +79,31 @@ export const REVISIONS = {
   DBMS_MIN_REVISION_WITH_SERVER_LOGS: 54406n,
   DBMS_MIN_PROTOCOL_VERSION_WITH_PROFILE_EVENTS_IN_INSERT: 54456n,
 };
+
+/**
+ * ClickHouse server exception with full error details.
+ */
+export class ClickHouseException extends Error {
+  readonly code: number;
+  readonly exceptionName: string;
+  readonly serverStackTrace: string;
+  readonly hasNested: boolean;
+  readonly nested?: ClickHouseException;
+
+  constructor(
+    code: number,
+    exceptionName: string,
+    message: string,
+    serverStackTrace: string,
+    hasNested: boolean,
+    nested?: ClickHouseException
+  ) {
+    super(`${exceptionName}: ${message}`);
+    this.name = 'ClickHouseException';
+    this.code = code;
+    this.exceptionName = exceptionName;
+    this.serverStackTrace = serverStackTrace;
+    this.hasNested = hasNested;
+    this.nested = nested;
+  }
+}
