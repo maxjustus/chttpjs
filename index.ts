@@ -37,14 +37,3 @@ export {
   type DecodeOptions,
   ClickHouseDateTime64,
 } from "./native/index.ts";
-export {
-  TcpClient,
-  recordBatches,
-  type TcpClientOptions,
-  type Packet,
-  type Progress,
-  type ProfileInfo,
-  type LogEntry,
-  type ServerHello,
-  ClickHouseException,
-} from "./tcp_client/index.ts";

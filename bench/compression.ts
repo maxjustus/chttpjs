@@ -29,7 +29,7 @@ function generateTestDataSets(): TestDataSet[] {
   const datasets: TestDataSet[] = [];
 
   // 1. High entropy - random bytes (incompressible)
-  const randomBytes = new Uint8Array(500_000);
+  const randomBytes = new Uint8Array(5_000_000);
   // getRandomValues has 64KB limit, fill in chunks
   for (let i = 0; i < randomBytes.length; i += 65536) {
     const chunk = randomBytes.subarray(
@@ -45,7 +45,7 @@ function generateTestDataSets(): TestDataSet[] {
   });
 
   // 2. Very low entropy - repeated pattern
-  const repeated = new Uint8Array(500_000);
+  const repeated = new Uint8Array(5_000_000);
   const pattern = encoder.encode("AAAAAAAAAA");
   for (let i = 0; i < repeated.length; i++) {
     repeated[i] = pattern[i % pattern.length];
@@ -59,7 +59,7 @@ function generateTestDataSets(): TestDataSet[] {
   // 3. Low entropy - repeated JSON objects
   const repeatedJson: string[] = [];
   const sameObj = JSON.stringify({ id: 1, name: "test", value: 100 });
-  for (let i = 0; i < 5000; i++) {
+  for (let i = 0; i < 50_000; i++) {
     repeatedJson.push(sameObj);
   }
   datasets.push({
@@ -70,7 +70,7 @@ function generateTestDataSets(): TestDataSet[] {
 
   // 4. Medium entropy - typical JSON with variation
   const variedJson: string[] = [];
-  for (let i = 0; i < 5000; i++) {
+  for (let i = 0; i < 50_000; i++) {
     variedJson.push(
       JSON.stringify({
         id: i,
@@ -89,7 +89,7 @@ function generateTestDataSets(): TestDataSet[] {
 
   // 5. Medium-high entropy - UUIDs
   const uuids: string[] = [];
-  for (let i = 0; i < 10000; i++) {
+  for (let i = 0; i < 100_000; i++) {
     uuids.push(crypto.randomUUID());
   }
   datasets.push({
@@ -108,7 +108,7 @@ function generateTestDataSets(): TestDataSet[] {
     "User authentication failed",
     "File not found",
   ];
-  for (let i = 0; i < 5000; i++) {
+  for (let i = 0; i < 50_000; i++) {
     const ts = new Date(Date.now() + i * 1000).toISOString();
     logs.push(`${ts} ${levels[i % 4]} ${messages[i % 5]} id=${i}`);
   }
