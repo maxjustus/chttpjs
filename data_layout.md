@@ -471,60 +471,131 @@ This works because these are fixed-width scalar types where the Native column fo
 
 ### Sparse serialization
 
-WIP: some AI crap that's somewhat useful that I need to clean up / validate.
+Introduced in Protocol Revision 54454 (ClickHouse 22.9)
 
-✦ Sparse serialization (introduced in ClickHouse 22.9, protocol revision 54454) is a storage and wire optimization for columns
-with a high percentage of default values. Instead of storing every row, it only stores the non-default values and a sparse
-index of their positions.
+Sparse serialization is an optimization that stores only "non-default" values. It splits a column into two logical streams: an
+Index (describing where values exist) and the Values (the data itself). Note that the when requesting Native via the HTTP api the default
+client_revision is 0, so you won't see sparse columns. However when using TCP protocol with client_revision >= 54454,
+sparse columns may be sent by the server.
 
-Custom Serialization Header
+1. Activation & Structure Header
 
-In the TCP protocol, every column in a Data packet (if revision >= 54454) is preceded by a 1-byte flag
-has_custom_serialization.
+When client_revision >= 54454, every column block begins with a 1-byte flag:
 
-If has_custom_serialization is 1, the column uses a custom serialization "Kinds" plan. ClickHouse sends a recursive tree of
-"Kind" bytes, one for each node in the type tree (e.g., Array(Int32) sends one byte for the Array and one for the Int32).
+ - `has_custom_serialization` (UInt8):
+   - 0: The column uses standard (Dense) encoding. Proceed as normal.
+   - 1: The column uses Custom serialization. You must parse the Serialization Tree.
 
-┌──────┬─────────┬───────────────────────────┐
-│ Kind │ Name │ Description │
-├──────┼─────────┼───────────────────────────┤
-│ 0x00 │ Default │ Standard columnar format. │
-│ 0x01 │ Sparse │ Sparse serialization. │
-└──────┴─────────┴───────────────────────────┘
+2. The Serialization Tree (The "Plan")
 
-Sparse Layout (Kind 0x01)
+If has_custom_serialization == 1, the parser must determine which parts of the column are Sparse. This is done via a Depth-First
+Traversal of the column's type hierarchy.
 
-When a type node is marked as Sparse, its data layout changes significantly:
+For every node in the type tree (columns and sub-columns), read 1 byte to determine the SerializationKind:
 
-1.  Sparse Index (Offsets): A sequence of Varints representing the gaps between non-default values.
-    - Each Varint v indicates that the next v rows contain the default value.
-    - If the Varint has bit 62 ($1 \ll 62$) set, it is the End of Stream marker. It indicates the number of trailing default
-      values until the end of the block.
-    - The index reading continues until the sum of all gaps and non-default values matches the num_rows of the block.
+ - `0x00` (Dense): Standard layout.
+ - `0x01` (Sparse): Sparse layout.
 
-2.  Non-Default Values: Immediately following the complete index, the non-default values are stored contiguously using the
-    standard codec for that type.
-    - There is exactly one value for every gap Varint that did not have the "End of Stream" bit set.
+Example: `Array(Tuple(A Nullable(UInt64), B String))`
 
-Visualization Example
-Consider a String column with 10 rows, where only rows 1 and 5 have values ("A" and "B"), and the rest are empty strings (the
-default).
+The traversal order (and thus the sequence of "Kind" bytes read) is:
 
-Index Section:
+ 1. Array (The list/offsets itself)
+ 2. Tuple (The struct container)
+ 3. Nullable (Wrapper for A)
+ 4. UInt64 (Value of A)
+ 5. String (Value of B)
 
-- Varint(1): 1 default row (row 0), followed by a value.
-- Varint(3): 3 default rows (rows 2, 3, 4), followed by a value.
-- Varint(0x4000000000000004): Bit 62 set + value 4. 4 trailing default rows (rows 6, 7, 8, 9). End of block.
+If `A` is the only sparse component, the bytes read would be: `0, 0, 0, 1, 0`.
 
-Data Section:
+3. Sparse Layout (Kind 0x01)
 
-- String("A") (for the first gap)
-- String("B") (for the second gap)
+When a node is identified as Sparse, its data segment is encoded differently. It is split into two contiguous sections: the Index
+followed by the Values.
 
-Resulting Column:
-["", "A", "", "", "", "B", "", "", "", ""]
+A. The Sparse Index (Gap Encoding)
 
-Interaction with Container Types
-Sparse serialization can be applied to any level of a container. For example, in a Nullable(UInt64), the Nullable node itself
-could be dense while the inner UInt64 node is sparse. If the Nullable node is sparse, the "default value" used for gaps is
-NULL.
+The index encodes the positions of valid data by recording the size of the "gaps" (consecutive default values) between them.
+
+ - Format: A sequence of UInt64 (encoded as Varint).
+ - Logic:
+   - Each Varint represents a count of Default Values (a gap) to skip.
+   - After skipping the gap, the next row implies the presence of one Non-Default Value (which will be read from the Data section).
+ - Termination (End of Block):
+   - If a Varint has Bit 62 set (value & (1 << 62)), it is the Tail Marker.
+   - Remove the bit to get the count.
+   - This count represents the remaining default values until the end of the block.
+   - No value follows this gap.
+
+Index Parsing Loop:
+
+```
+  1 current_row = 0
+  2 while current_row < num_rows:
+  3     gap = read_varint()
+  4
+  5     # Check for End of Stream (Bit 62)
+  6     if gap & 0x4000000000000000:
+  7         real_gap = gap ^ 0x4000000000000000
+  8         current_row += real_gap
+  9         break # End of block
+ 10
+ 11     current_row += gap
+ 12     # Row at 'current_row' has a value.
+ 13     # Record this position to read from Values stream later.
+ 14     current_row += 1
+```
+
+B. The Values (Data Section)
+
+Immediately following the Index is the Data Stream.
+
+ - It contains the non-default values encoded using the standard codec for that type.
+ - Count: The number of values usually equals the number of "Gap Varints" read (excluding the Tail Marker).
+ - Note on Defaults:
+   - For Nullable(T), the "Default" is NULL. The Values stream contains only non-null T.
+   - For Numbers, "Default" is 0.
+   - For Strings, "Default" is "".
+
+4. Visual Example
+
+Column: String (Sparse)
+Rows: 10
+Data: ["", "A", "", "", "", "B", "", "", "", ""]
+Default: ""
+
+Wire Layout:
+
+```
+  1 [Kind: 0x01] (Sparse)
+  2 
+  3 [Index Section]
+  4 1. Varint(1)
+  5    -> Skip 1 (Row 0 is default).
+  6    -> Row 1 is "A".
+  7
+  8 2. Varint(3)
+  9    -> Skip 3 (Rows 2, 3, 4 are default).
+ 10    -> Row 5 is "B".
+ 11
+ 12 3. Varint(4 | 1<<62) (Tail Marker)
+ 13    -> Skip 4 (Rows 6, 7, 8, 9 are default).
+ 14    -> End of block.
+ 15
+ 16 [Data Section]
+ 17 1. String("A")
+ 18 2. String("B")
+```
+
+5. Interaction with Container Types
+
+Sparse serialization acts as a wrapper around the underlying type.
+
+ - Sparse Array: The offsets are sparse. Most rows are empty arrays.
+ - Sparse Nullable: The null map is effectively sparse. Gaps are NULLs; the Data stream contains only the non-NULL values (Dense).
+ - Nested Sparse:
+   - Nullable(Sparse(UInt64)):
+     - Nullable wrapper is Dense.
+     - Inner UInt64 is Sparse.
+     - Layout: [NullMap (Dense)] [SparseIndex] [UInt64 Values].
+     - Result: You can have explicit 0 values that are not NULL, but 0 is the default for the sparse stream, so they are optimized away.
