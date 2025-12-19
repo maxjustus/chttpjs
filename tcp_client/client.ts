@@ -570,103 +570,110 @@ export class TcpClient {
     signal?.addEventListener("abort", abortHandler);
 
     try {
-      startTimeout();
+      try {
+        startTimeout();
 
-      // The compression flag in the query packet enables bidirectional compression:
-      // - When 1: client sends compressed Data blocks, server sends compressed Data blocks
-      // - When 0: both sides send uncompressed
-      const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
-        "allow_special_serialization_kinds_in_output_formats": "0",
-        ...settings
-      }, useCompression, options.params ?? {});
-      this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
-      this.socket.write(queryPacket);
+        // The compression flag in the query packet enables bidirectional compression:
+        // - When 1: client sends compressed Data blocks, server sends compressed Data blocks
+        // - When 0: both sides send uncompressed
+        const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
+          "allow_special_serialization_kinds_in_output_formats": "0",
+          ...settings
+        }, useCompression, options.params ?? {});
+        this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
+        this.socket.write(queryPacket);
 
-      // Send delimiter (compressed if compression is enabled)
-      const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
-      this.log(`[query] sending delimiter (${delimiter.length} bytes, compressed=${useCompression})`);
-      this.socket.write(delimiter);
+        // Send delimiter (compressed if compression is enabled)
+        const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
+        this.log(`[query] sending delimiter (${delimiter.length} bytes, compressed=${useCompression})`);
+        this.socket.write(delimiter);
 
-      this.currentSchema = null;
-      this.log(`[query] waiting for response...`);
+        this.currentSchema = null;
+        this.log(`[query] waiting for response...`);
 
-      // Accumulate ProfileEvents deltas
-      const profileEventsAccumulated = new Map<string, bigint>();
+        // Accumulate ProfileEvents deltas
+        const profileEventsAccumulated = new Map<string, bigint>();
 
-      while (true) {
-        this.log(`[query] reading packet id...`);
-        const packetId = Number(await this.reader.readVarInt());
-        if (timedOut) throw new Error(`Query timeout after ${queryTimeout}ms`);
-        this.log(`[query] packetId=${packetId}, useCompression=${useCompression}`);
+        while (true) {
+          this.log(`[query] reading packet id...`);
+          const packetId = Number(await this.reader.readVarInt());
+          if (timedOut) throw new Error(`Query timeout after ${queryTimeout}ms`);
+          this.log(`[query] packetId=${packetId}, useCompression=${useCompression}`);
 
-        switch (packetId) {
-          case ServerPacketId.Data: {
-            // With compression=1, ALL Data blocks from server are compressed
-            this.log(`[query] reading Data block (compressed=${useCompression})...`);
-            const table = await this.readBlock(useCompression);
-            this.log(`[query] got Data block with ${table.rowCount} rows`);
-            if (this.currentSchema === null) {
-              this.currentSchema = table.columns.map(c => ({ name: c.name, type: c.type }));
+          switch (packetId) {
+            case ServerPacketId.Data: {
+              // With compression=1, ALL Data blocks from server are compressed
+              this.log(`[query] reading Data block (compressed=${useCompression})...`);
+              const table = await this.readBlock(useCompression);
+              this.log(`[query] got Data block with ${table.rowCount} rows`);
+              if (this.currentSchema === null) {
+                this.currentSchema = table.columns.map(c => ({ name: c.name, type: c.type }));
+              }
+              if (table.rowCount > 0) yield { type: "Data", table };
+              break;
             }
-            if (table.rowCount > 0) yield { type: "Data", table };
-            break;
-          }
-          case ServerPacketId.Progress:
-            yield { type: "Progress", progress: await this.readProgress() };
-            break;
-          case ServerPacketId.ProfileInfo:
-            yield { type: "ProfileInfo", info: await this.readProfileInfo() };
-            break;
-          case ServerPacketId.ProfileEvents: {
-            // ProfileEvents blocks are always uncompressed (diagnostic metadata)
-            // They send deltas, so we accumulate values across packets
-            const table = await this.readBlock(false);
-            const nameCol = table.getColumn("name");
-            const valueCol = table.getColumn("value");
-            const typeCol = table.getColumn("type");
-            if (nameCol && valueCol && typeCol) {
-              for (let i = 0; i < table.rowCount; i++) {
-                const name = nameCol.get(i) as string;
-                const value = valueCol.get(i) as bigint;
-                const eventType = typeCol.get(i) as number; // 1=increment, 2=gauge
-                if (eventType === 1) {
-                  // Increment: sum values
-                  profileEventsAccumulated.set(name, (profileEventsAccumulated.get(name) ?? 0n) + value);
-                } else {
-                  // Gauge: use latest value
-                  profileEventsAccumulated.set(name, value);
+            case ServerPacketId.Progress:
+              yield { type: "Progress", progress: await this.readProgress() };
+              break;
+            case ServerPacketId.ProfileInfo:
+              yield { type: "ProfileInfo", info: await this.readProfileInfo() };
+              break;
+            case ServerPacketId.ProfileEvents: {
+              // ProfileEvents blocks are always uncompressed (diagnostic metadata)
+              // They send deltas, so we accumulate values across packets
+              const table = await this.readBlock(false);
+              const nameCol = table.getColumn("name");
+              const valueCol = table.getColumn("value");
+              const typeCol = table.getColumn("type");
+              if (nameCol && valueCol && typeCol) {
+                for (let i = 0; i < table.rowCount; i++) {
+                  const name = nameCol.get(i) as string;
+                  const value = valueCol.get(i) as bigint;
+                  const eventType = typeCol.get(i) as number; // 1=increment, 2=gauge
+                  if (eventType === 1) {
+                    // Increment: sum values
+                    profileEventsAccumulated.set(name, (profileEventsAccumulated.get(name) ?? 0n) + value);
+                  } else {
+                    // Gauge: use latest value
+                    profileEventsAccumulated.set(name, value);
+                  }
                 }
               }
+              yield { type: "ProfileEvents", table, accumulated: profileEventsAccumulated };
+              break;
             }
-            yield { type: "ProfileEvents", table, accumulated: profileEventsAccumulated };
-            break;
-          }
-          case ServerPacketId.Totals:
-            yield { type: "Totals", table: await this.readBlock(useCompression) };
-            break;
-          case ServerPacketId.Extremes:
-            yield { type: "Extremes", table: await this.readBlock(useCompression) };
-            break;
-          case ServerPacketId.Log: {
-            // Log blocks are always uncompressed (diagnostic metadata)
-            const table = await this.readBlock(false);
-            if (table.rowCount > 0) {
-              yield { type: "Log", entries: this.parseLogBlock(table) };
+            case ServerPacketId.Totals:
+              yield { type: "Totals", table: await this.readBlock(useCompression) };
+              break;
+            case ServerPacketId.Extremes:
+              yield { type: "Extremes", table: await this.readBlock(useCompression) };
+              break;
+            case ServerPacketId.Log: {
+              // Log blocks are always uncompressed (diagnostic metadata)
+              const table = await this.readBlock(false);
+              if (table.rowCount > 0) {
+                yield { type: "Log", entries: this.parseLogBlock(table) };
+              }
+              break;
             }
-            break;
+            case ServerPacketId.TimezoneUpdate:
+              this.sessionTimezone = await this.reader.readString();
+              this.log(`[query] timezone updated to: ${this.sessionTimezone}`);
+              break;
+            case ServerPacketId.EndOfStream:
+              yield { type: "EndOfStream" };
+              return;
+            case ServerPacketId.Exception:
+              throw await this.reader.readException();
+            default:
+              throw new Error(`Unknown packet ID: ${packetId}. Cannot proceed.`);
           }
-          case ServerPacketId.TimezoneUpdate:
-            this.sessionTimezone = await this.reader.readString();
-            this.log(`[query] timezone updated to: ${this.sessionTimezone}`);
-            break;
-          case ServerPacketId.EndOfStream:
-            yield { type: "EndOfStream" };
-            return;
-          case ServerPacketId.Exception:
-            throw await this.reader.readException();
-          default:
-            throw new Error(`Unknown packet ID: ${packetId}. Cannot proceed.`);
         }
+      } catch (err: any) {
+        if (timedOut && (err.message === "Premature close" || err.code === "ERR_STREAM_PREMATURE_CLOSE")) {
+          throw new Error(`Query timeout after ${queryTimeout}ms`);
+        }
+        throw err;
       }
     } finally {
       clearQueryTimeout();

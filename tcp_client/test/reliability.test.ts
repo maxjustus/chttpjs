@@ -53,11 +53,10 @@ describe("TCP Client Reliability", () => {
       assert.fail("Should have thrown a timeout error");
     } catch (err: any) {
       // Socket is destroyed on timeout, which can manifest as various errors
+      // The client should now wrap "Premature close" into a timeout error
       assert.ok(
-        err.message.includes("timeout") ||
-        err.message.includes("end of stream") ||
-        err.message.includes("Premature close"),
-        `Should be timeout/close error, got: ${err.message}`
+        err.message.includes("timeout"),
+        `Should be timeout error, got: ${err.message}`
       );
     } finally {
       client.close();
