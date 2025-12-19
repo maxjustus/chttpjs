@@ -267,7 +267,7 @@ async function main() {
       } else await decodeNative(encNative);
     } else if (format === "rowbinary") {
       if (operation === "encode") encodeRowBinary(columns, rows);
-      else decodeRowBinary(columns, encRowBin);
+      else decodeRowBinary(encRowBin);
     } else {
       if (operation === "encode") encodeJson(objects);
       else decodeJson(encJson);

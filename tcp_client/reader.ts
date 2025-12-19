@@ -3,6 +3,7 @@ import { TEXT_DECODER } from "../formats/shared.ts";
 import { decodeBlock } from "../compression.ts";
 import { ClickHouseException } from "./types.ts";
 import { readVarInt64, BufferUnderflowError } from "../formats/native/io.ts";
+import { Compression } from "../formats/native/constants.ts";
 
 /**
  * A streaming byte reader that handles async buffering and optional ClickHouse compression.
@@ -46,17 +47,18 @@ export class StreamingReader {
   }
 
   private async pullCompressedBlock(): Promise<void> {
-    const checksum = await this.readRaw(16);
-    const header = await this.readRaw(9);
+    const checksum = await this.readRaw(Compression.CHECKSUM_SIZE);
+    const header = await this.readRaw(Compression.HEADER_SIZE);
     
+    // Header format: 1 byte method, 4 bytes compressed size, 4 bytes uncompressed size
     const compressedSizeWithHeader = new DataView(header.buffer, header.byteOffset + 1, 4).getUint32(0, true);
-    const compressedDataSize = compressedSizeWithHeader - 9;
+    const compressedDataSize = compressedSizeWithHeader - Compression.HEADER_SIZE;
     const compressedData = await this.readRaw(compressedDataSize);
 
-    const fullBlock = new Uint8Array(16 + 9 + compressedData.length);
+    const fullBlock = new Uint8Array(Compression.FULL_HEADER_SIZE + compressedData.length);
     fullBlock.set(checksum, 0);
-    fullBlock.set(header, 16);
-    fullBlock.set(compressedData, 25);
+    fullBlock.set(header, Compression.CHECKSUM_SIZE);
+    fullBlock.set(compressedData, Compression.FULL_HEADER_SIZE);
 
     this.feed(decodeBlock(fullBlock));
   }
@@ -192,16 +194,16 @@ export class StreamingReader {
   }
 
   async readCompressedBlock(): Promise<Uint8Array> {
-    const checksum = await this.readFixed(16);
-    const header = await this.readFixed(9);
+    const checksum = await this.readFixed(Compression.CHECKSUM_SIZE);
+    const header = await this.readFixed(Compression.HEADER_SIZE);
     const compressedSizeWithHeader = new DataView(header.buffer, header.byteOffset + 1, 4).getUint32(0, true);
-    const compressedDataSize = compressedSizeWithHeader - 9;
+    const compressedDataSize = compressedSizeWithHeader - Compression.HEADER_SIZE;
     const compressedData = await this.readFixed(compressedDataSize);
 
-    const fullBlock = new Uint8Array(16 + 9 + compressedData.length);
+    const fullBlock = new Uint8Array(Compression.FULL_HEADER_SIZE + compressedData.length);
     fullBlock.set(checksum, 0);
-    fullBlock.set(header, 16);
-    fullBlock.set(compressedData, 25);
+    fullBlock.set(header, Compression.CHECKSUM_SIZE);
+    fullBlock.set(compressedData, Compression.FULL_HEADER_SIZE);
 
     return decodeBlock(fullBlock);
   }

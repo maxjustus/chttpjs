@@ -4,7 +4,6 @@ import {
   encodeNative,
   decodeNative,
   Table,
-  TableBuilder,
   streamEncodeNative,
   streamDecodeNative,
   toArrayRows,
@@ -15,31 +14,13 @@ import {
   makeBuilder,
   type ColumnDef,
 } from "../formats/native/index.ts";
-
-// Helper to encode rows via TableBuilder
-function encodeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
-  const builder = new TableBuilder(columns);
-  for (const row of rows) builder.appendRow(row);
-  return encodeNative(builder.finish());
-}
-
-// Helper to convert sync iterable to async
-async function* toAsync<T>(iter: Iterable<T>): AsyncIterable<T> {
-  for (const item of iter) yield item;
-}
-
-// Helper to collect async generator results
-async function collect<T>(gen: AsyncIterable<T>): Promise<T[]> {
-  const results: T[] = [];
-  for await (const item of gen) results.push(item);
-  return results;
-}
+import { encodeNativeRows, toAsync, collect } from "./test_utils.ts";
 
 describe("encodeNative", () => {
   it("encodes empty block", async () => {
     const columns: ColumnDef[] = [{ name: "id", type: "Int32" }];
     const rows: unknown[][] = [];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
 
     // Should have: 1 col, 0 rows, "id", "Int32", no data
     assert.ok(encoded.length > 0);
@@ -53,7 +34,7 @@ describe("encodeNative", () => {
   it("encodes Int32 column", async () => {
     const columns: ColumnDef[] = [{ name: "id", type: "Int32" }];
     const rows = [[1], [2], [3]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const table = await decodeNative(encoded);
 
     assert.ok(table instanceof Table);
@@ -80,7 +61,7 @@ describe("encodeNative", () => {
       [1, "alice", 1.5],
       [2, "bob", 2.5],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const table = await decodeNative(encoded);
 
     assert.deepStrictEqual(table.columns, columns);
@@ -109,7 +90,7 @@ describe("encodeNative", () => {
       [-128, -32768, -2147483648, -9223372036854775808n, 255, 65535, 4294967295, 18446744073709551615n],
       [127, 32767, 2147483647, 9223372036854775807n, 0, 0, 0, 0n],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
 
     assert.deepStrictEqual(decoded.columns, columns);
@@ -125,7 +106,7 @@ describe("encodeNative", () => {
       [3.14, 3.141592653589793],
       [-1.5, -1.5],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
 
     assert.deepStrictEqual(decoded.columns, columns);
@@ -138,7 +119,7 @@ describe("encodeNative", () => {
   it("encodes String with unicode", async () => {
     const columns: ColumnDef[] = [{ name: "text", type: "String" }];
     const rows = [["hello"], ["世界"], ["🎉"], [""]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
 
     assert.deepStrictEqual(decoded.columns, columns);
@@ -148,7 +129,7 @@ describe("encodeNative", () => {
   it("encodes Nullable", async () => {
     const columns: ColumnDef[] = [{ name: "val", type: "Nullable(Int32)" }];
     const rows = [[1], [null], [3]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
 
     assert.deepStrictEqual(decoded.columns, columns);
@@ -158,7 +139,7 @@ describe("encodeNative", () => {
   it("encodes Array", async () => {
     const columns: ColumnDef[] = [{ name: "arr", type: "Array(Int32)" }];
     const rows = [[[1, 2, 3]], [[]], [[42]]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -175,7 +156,7 @@ describe("encodeNative", () => {
       [{ a: 1, b: 2 }],
       [{}],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -188,7 +169,7 @@ describe("encodeNative", () => {
   it("encodes Tuple", async () => {
     const columns: ColumnDef[] = [{ name: "t", type: "Tuple(Int32, String)" }];
     const rows = [[[1, "a"]], [[2, "b"]]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
 
     assert.deepStrictEqual(decoded.columns, columns);
@@ -198,7 +179,7 @@ describe("encodeNative", () => {
   it("encodes named Tuple", async () => {
     const columns: ColumnDef[] = [{ name: "t", type: "Tuple(id Int32, name String)" }];
     const rows = [[{ id: 1, name: "alice" }], [{ id: 2, name: "bob" }]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -209,7 +190,7 @@ describe("encodeNative", () => {
   it("encodes UUID", async () => {
     const columns: ColumnDef[] = [{ name: "id", type: "UUID" }];
     const rows = [["550e8400-e29b-41d4-a716-446655440000"]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -225,7 +206,7 @@ describe("encodeNative", () => {
     const date = new Date("2024-01-15");
     const datetime = new Date("2024-01-15T10:30:00Z");
     const rows = [[date, datetime]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -267,8 +248,8 @@ describe("streamDecodeNative", () => {
     const columns: ColumnDef[] = [{ name: "id", type: "Int32" }];
 
     // Create two separate blocks
-    const block1 = encodeRows(columns, [[1], [2]]);
-    const block2 = encodeRows(columns, [[3], [4]]);
+    const block1 = encodeNativeRows(columns, [[1], [2]]);
+    const block2 = encodeNativeRows(columns, [[3], [4]]);
 
     // Stream them
     const results = await collect(streamDecodeNative(toAsync([block1, block2])));
@@ -282,7 +263,7 @@ describe("streamDecodeNative", () => {
 
   it("handles partial chunks", async () => {
     const columns: ColumnDef[] = [{ name: "id", type: "Int32" }];
-    const block = encodeRows(columns, [[1], [2], [3]]);
+    const block = encodeNativeRows(columns, [[1], [2], [3]]);
 
     // Split block into small chunks
     const chunk1 = block.subarray(0, 5);
@@ -301,7 +282,7 @@ describe("additional scalar types", () => {
   it("encodes FixedString", async () => {
     const columns: ColumnDef[] = [{ name: "fs", type: "FixedString(5)" }];
     const rows = [["hello"], ["world"], ["hi\0\0\0"]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -316,7 +297,7 @@ describe("additional scalar types", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Date32" }];
     const date = new Date("2024-01-15");
     const rows = [[date]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -328,7 +309,7 @@ describe("additional scalar types", () => {
     const columns: ColumnDef[] = [{ name: "dt", type: "DateTime64(3)" }];
     const date = new Date("2024-01-15T10:30:00.123Z");
     const rows = [[date]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -341,7 +322,7 @@ describe("additional scalar types", () => {
   it("encodes IPv4", async () => {
     const columns: ColumnDef[] = [{ name: "ip", type: "IPv4" }];
     const rows = [["192.168.1.1"], ["10.0.0.1"]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -353,7 +334,7 @@ describe("additional scalar types", () => {
   it("encodes IPv6", async () => {
     const columns: ColumnDef[] = [{ name: "ip", type: "IPv6" }];
     const rows = [["2001:db8::1"], ["::1"]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -365,7 +346,7 @@ describe("additional scalar types", () => {
   it("encodes Enum8", async () => {
     const columns: ColumnDef[] = [{ name: "e", type: "Enum8('a' = 1, 'b' = 2)" }];
     const rows = [[1], [2], [1]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
 
     assert.deepStrictEqual(decoded.columns, columns);
@@ -375,7 +356,7 @@ describe("additional scalar types", () => {
   it("encodes Decimal64", async () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Decimal64(4)" }];
     const rows = [["123.4567"], ["-999.9999"]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -387,7 +368,7 @@ describe("additional scalar types", () => {
   it("encodes Int128", async () => {
     const columns: ColumnDef[] = [{ name: "i", type: "Int128" }];
     const rows = [[170141183460469231731687303715884105727n], [-170141183460469231731687303715884105728n]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -400,7 +381,7 @@ describe("additional scalar types", () => {
     const columns: ColumnDef[] = [{ name: "u", type: "UInt256" }];
     const maxU256 = (1n << 256n) - 1n;
     const rows = [[maxU256], [0n]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -414,7 +395,7 @@ describe("LowCardinality", () => {
   it("encodes LowCardinality(String)", async () => {
     const columns: ColumnDef[] = [{ name: "lc", type: "LowCardinality(String)" }];
     const rows = [["a"], ["b"], ["a"], ["c"], ["b"], ["a"]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
 
     assert.deepStrictEqual(decoded.columns, columns);
@@ -424,7 +405,7 @@ describe("LowCardinality", () => {
   it("encodes LowCardinality(Nullable(String))", async () => {
     const columns: ColumnDef[] = [{ name: "lc", type: "LowCardinality(Nullable(String))" }];
     const rows = [["a"], [null], ["b"], [null], ["a"]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
 
     assert.deepStrictEqual(decoded.columns, columns);
@@ -434,7 +415,7 @@ describe("LowCardinality", () => {
   it("encodes LowCardinality(FixedString(3))", async () => {
     const columns: ColumnDef[] = [{ name: "lc", type: "LowCardinality(FixedString(3))" }];
     const rows = [["abc"], ["def"], ["abc"], ["ghi"]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -448,7 +429,7 @@ describe("LowCardinality", () => {
   it("handles empty LowCardinality", async () => {
     const columns: ColumnDef[] = [{ name: "lc", type: "LowCardinality(String)" }];
     const rows: unknown[][] = [];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
 
     assert.deepStrictEqual(decoded.columns, columns);
@@ -458,7 +439,7 @@ describe("LowCardinality", () => {
   it("encodes LowCardinality(Int32) with duplicate values", async () => {
     const columns: ColumnDef[] = [{ name: "lc", type: "LowCardinality(Int32)" }];
     const rows = [[42], [100], [42], [100], [42]]; // duplicates to test deduplication
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -476,7 +457,7 @@ describe("LowCardinality", () => {
     const d2 = new Date("2024-06-30");
     const d1dup = new Date("2024-01-15"); // same date, different object
     const rows = [[d1], [d2], [d1dup], [d2]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -494,7 +475,7 @@ describe("LowCardinality", () => {
     const dt2 = new Date("2024-06-30T15:45:00Z");
     const dt1dup = new Date("2024-01-15T10:30:00Z"); // same datetime, different object
     const rows = [[dt1], [dt2], [dt1dup]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -509,7 +490,7 @@ describe("Geo types", () => {
   it("encodes Point", async () => {
     const columns: ColumnDef[] = [{ name: "p", type: "Point" }];
     const rows = [[[1.5, 2.5]], [[3.0, 4.0]], [[-1.0, -2.0]]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -526,7 +507,7 @@ describe("Geo types", () => {
       [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],  // Square
       [[[0, 0], [2, 0], [1, 1], [0, 0]]],          // Triangle
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -541,7 +522,7 @@ describe("Geo types", () => {
     const outerRing = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]];
     const hole = [[2, 2], [8, 2], [8, 8], [2, 8], [2, 2]];
     const rows = [[[outerRing, hole]]];  // row 0, col 0 = [ring1, ring2]
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -556,7 +537,7 @@ describe("Geo types", () => {
     const poly1 = [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]];  // simple square
     const poly2 = [[[5, 5], [6, 5], [6, 6], [5, 6], [5, 5]]];  // another square
     const rows = [[[poly1, poly2]]];  // row 0, col 0 = [polygon1, polygon2]
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -575,7 +556,7 @@ describe("Variant", () => {
       [[1, 42n]],       // UInt64 (disc 1)
       [[0, "world"]],   // String (disc 0)
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -592,7 +573,7 @@ describe("Variant", () => {
       [null],           // null discriminator (0xFF)
       [[1, 123n]],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -604,7 +585,7 @@ describe("Variant", () => {
   it("encodes Variant with all nulls", async () => {
     const columns: ColumnDef[] = [{ name: "v", type: "Variant(String, Int32)" }];
     const rows = [[null], [null], [null]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -621,7 +602,7 @@ describe("Variant", () => {
       [[1, "test"]],      // String
       [[0, []]],          // Empty array
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -641,7 +622,7 @@ describe("Dynamic", () => {
       [42],             // Int64 (inferred)
       ["world"],        // String
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -658,7 +639,7 @@ describe("Dynamic", () => {
       [null],
       [123],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -670,7 +651,7 @@ describe("Dynamic", () => {
   it("encodes Dynamic with all nulls", async () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
     const rows = [[null], [null], [null]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -687,7 +668,7 @@ describe("Dynamic", () => {
       ["text"],
       [200n],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -705,7 +686,7 @@ describe("JSON", () => {
       [{ name: "alice", age: 30 }],
       [{ name: "bob", age: 25 }],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -725,7 +706,7 @@ describe("JSON", () => {
       [{ name: "bob" }],  // missing age
       [{ age: 40 }],      // missing name
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -744,7 +725,7 @@ describe("JSON", () => {
   it("encodes empty JSON objects", async () => {
     const columns: ColumnDef[] = [{ name: "j", type: "JSON" }];
     const rows = [[{}], [{}]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -757,7 +738,7 @@ describe("round-trip with complex nested types", () => {
   it("Array of Nullable", async () => {
     const columns: ColumnDef[] = [{ name: "arr", type: "Array(Nullable(Int32))" }];
     const rows = [[[1, null, 3]], [[null, null]], [[]]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     assert.deepStrictEqual(toArrayRows(decoded), rows);
   });
@@ -765,7 +746,7 @@ describe("round-trip with complex nested types", () => {
   it("Tuple with Array", async () => {
     const columns: ColumnDef[] = [{ name: "t", type: "Tuple(Array(Int32), String)" }];
     const rows = [[[[1, 2], "a"]], [[[3], "b"]]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -782,7 +763,7 @@ describe("round-trip with complex nested types", () => {
   it("Map with Array values", async () => {
     const columns: ColumnDef[] = [{ name: "m", type: "Map(String, Array(Int32))" }];
     const rows = [[{ a: [1, 2], b: [3] }]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -803,7 +784,7 @@ describe("DateTime64 precision edge cases", () => {
     const columns: ColumnDef[] = [{ name: "dt", type: "DateTime64(1)" }];
     const date = new Date("2024-01-15T10:30:00.500Z"); // 500ms -> 5 deciseconds
     const rows = [[date]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -818,7 +799,7 @@ describe("DateTime64 precision edge cases", () => {
     const columns: ColumnDef[] = [{ name: "dt", type: "DateTime64(2)" }];
     const date = new Date("2024-01-15T10:30:00.120Z"); // 120ms -> 12 centiseconds
     const rows = [[date]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -832,7 +813,7 @@ describe("DateTime64 precision edge cases", () => {
     const columns: ColumnDef[] = [{ name: "dt", type: "DateTime64(0)" }];
     const date = new Date("2024-01-15T10:30:00.999Z"); // 999ms -> truncated to 0
     const rows = [[date]];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -853,7 +834,7 @@ describe("LowCardinality empty values edge cases", () => {
       [[[], [], []]],                      // All maps empty
       [[[["c", 3n]]]],                     // No empty maps
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded, { mapAsArray: true });
     const decodedRows = toArrayRows(decoded);
 
@@ -872,7 +853,7 @@ describe("LowCardinality empty values edge cases", () => {
       [[]],  // Empty map
       [[["c", 3n]]],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded, { mapAsArray: true });
     const decodedRows = toArrayRows(decoded);
 
@@ -908,7 +889,7 @@ describe("Deep nested structure edge cases", () => {
       ]]],
     ];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded, { mapAsArray: true });
     const decodedRows = toArrayRows(decoded);
 
@@ -937,7 +918,7 @@ describe("Deep nested structure edge cases", () => {
       [[{ id: 3, tags: [["b", 2n], ["c", 3n]] }]],
     ];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded, { mapAsArray: true });
     const decodedRows = toArrayRows(decoded);
 
@@ -956,7 +937,7 @@ describe("ArrayCodec code paths", () => {
       [new Int32Array([])],
       [new Int32Array([-2147483648, 0, 2147483647])],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -971,7 +952,7 @@ describe("ArrayCodec code paths", () => {
       [new Uint32Array([0, 100, 4294967295])],
       [new Uint32Array([42])],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -985,7 +966,7 @@ describe("ArrayCodec code paths", () => {
       [[-32768, 0, 32767]],
       [[1, 2, 3]],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -1001,7 +982,7 @@ describe("ArrayCodec code paths", () => {
       [[-9223372036854775808n, 0n, 9223372036854775807n]],
       [[]],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -1018,7 +999,7 @@ describe("ArrayCodec code paths", () => {
     const rows = [
       [[0n, 18446744073709551615n]],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -1033,7 +1014,7 @@ describe("ArrayCodec code paths", () => {
       [[false]],
       [[]],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -1050,7 +1031,7 @@ describe("ArrayCodec code paths", () => {
       [[1.5, -2.5, 0, Infinity, -Infinity]],
       [new Float64Array([3.14, 2.718])],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -1063,7 +1044,7 @@ describe("ArrayCodec code paths", () => {
     const rows = [
       [[1.0, NaN, 2.0]],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 
@@ -1080,7 +1061,7 @@ describe("ArrayCodec code paths", () => {
       [new Float32Array([1.5, -2.5, 0])],
       [[3.14, NaN, Infinity]],
     ];
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeNative(encoded);
     const decodedRows = toArrayRows(decoded);
 

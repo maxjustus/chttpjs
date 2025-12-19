@@ -11,7 +11,8 @@ import {
   type Packet,
   type LogEntry,
   DBMS_TCP_PROTOCOL_VERSION,
-  REVISIONS
+  REVISIONS,
+  ProfileEventType,
 } from "./types.ts";
 import { getCodec } from "../formats/native/codecs.ts";
 import { BufferWriter, BufferUnderflowError } from "../formats/native/io.ts";
@@ -295,9 +296,9 @@ export class TcpClient {
           }
           case ServerPacketId.Progress: await this.readProgress(); break;
           case ServerPacketId.Log: await this.readBlock(false); break;
-          case 11: // TableColumns
-            await this.reader.readString();
-            await this.reader.readString();
+          case ServerPacketId.TableColumns:
+            await this.reader.readString(); // external table name
+            await this.reader.readString(); // columns description
             break;
           case ServerPacketId.Exception:
             throw await this.reader.readException();
@@ -366,17 +367,24 @@ export class TcpClient {
   }
 
   private async readProgress(): Promise<Progress> {
+    const rev = this.serverHello!.revision;
     const progress: Progress = {
       readRows: await this.reader!.readVarInt(),
       readBytes: await this.reader!.readVarInt(),
-      totalRowsToRead: this.serverHello!.revision >= 54406n ? await this.reader!.readVarInt() : 0n,
+      totalRowsToRead: rev >= REVISIONS.DBMS_MIN_REVISION_WITH_SERVER_LOGS ? await this.reader!.readVarInt() : 0n,
     };
-    if (this.serverHello!.revision >= 54463n) progress.totalBytesToRead = await this.reader!.readVarInt();
-    if (this.serverHello!.revision >= 54420n) {
+    if (rev >= REVISIONS.DBMS_MIN_REVISION_WITH_TOTAL_BYTES_TO_READ) {
+      progress.totalBytesToRead = await this.reader!.readVarInt();
+    }
+    // writtenRows/writtenBytes added between DBMS_MIN_REVISION_WITH_SERVER_LOGS and DBMS_MIN_REVISION_WITH_TOTAL_BYTES_TO_READ
+    // The exact revision is 54420, which isn't in our named constants (falls in the 54401-54441 gap)
+    if (rev >= 54420n) {
       progress.writtenRows = await this.reader!.readVarInt();
       progress.writtenBytes = await this.reader!.readVarInt();
     }
-    if (this.serverHello!.revision >= 54460n) progress.elapsedNs = await this.reader!.readVarInt();
+    if (rev >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_ELAPSED_NS_IN_PROGRESS) {
+      progress.elapsedNs = await this.reader!.readVarInt();
+    }
     return progress;
   }
 
@@ -391,7 +399,7 @@ export class TcpClient {
       appliedAggregation: false,
       rowsBeforeAggregation: 0n,
     };
-    if (this.serverHello!.revision >= 54469n) {
+    if (this.serverHello!.revision >= REVISIONS.DBMS_MIN_REVISION_WITH_APPLIED_AGGREGATION) {
       info.appliedAggregation = (await this.reader!.readU8()) !== 0;
       info.rowsBeforeAggregation = await this.reader!.readVarInt();
     }
@@ -417,13 +425,15 @@ export class TcpClient {
 
   private async readBlock(compressed: boolean = false): Promise<Table> {
     // Table name is always uncompressed, even when block data is compressed
-    await this.reader!.readString(); 
+    await this.reader!.readString();
 
     const options = { clientVersion: Number(this.serverHello!.revision) };
 
     if (compressed) {
       const decompressed = await this.reader!.readCompressedBlock();
+      const start = performance.now();
       const result = decodeNativeBlock(decompressed, 0, options);
+      result.decodeTimeMs = performance.now() - start;
       return Table.from(result);
     }
 
@@ -431,7 +441,9 @@ export class TcpClient {
     while (true) {
       const currentBuffer = this.reader!.peekAll();
       try {
+        const start = performance.now();
         const result = decodeNativeBlock(currentBuffer, 0, options);
+        result.decodeTimeMs = performance.now() - start;
         this.reader!.consume(result.bytesConsumed);
         return Table.from(result);
       } catch (err) {
@@ -445,6 +457,7 @@ export class TcpClient {
     }
   }
 
+  // TODO: we should make the use flattened v3 setting automatically enabled until we support the other dynamic encodings
   async *query(
     sql: string,
     settings: Record<string, string | number | boolean> = {},
@@ -565,12 +578,11 @@ export class TcpClient {
                 for (let i = 0; i < table.rowCount; i++) {
                   const name = nameCol.get(i) as string;
                   const value = valueCol.get(i) as bigint;
-                  const eventType = typeCol.get(i) as number; // 1=increment, 2=gauge
-                  if (eventType === 1) {
-                    // Increment: sum values
+                  const eventType = typeCol.get(i) as number;
+                  if (eventType === ProfileEventType.Increment) {
                     profileEventsAccumulated.set(name, (profileEventsAccumulated.get(name) ?? 0n) + value);
                   } else {
-                    // Gauge: use latest value
+                    // ProfileEventType.Gauge: use latest value
                     profileEventsAccumulated.set(name, value);
                   }
                 }

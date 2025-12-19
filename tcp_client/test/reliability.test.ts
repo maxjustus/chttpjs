@@ -12,9 +12,17 @@ describe("TCP Client Reliability", () => {
     password: ""
   };
 
-  test("should parse exception with full details", async () => {
+  async function withClient<T>(fn: (client: TcpClient) => Promise<T>): Promise<T> {
     const client = new TcpClient(options);
     await client.connect();
+    try {
+      return await fn(client);
+    } finally {
+      client.close();
+    }
+  }
+
+  test("should parse exception with full details", () => withClient(async (client) => {
     try {
       for await (const _ of client.query("SELECT * FROM nonexistent_table_xyz123")) {}
       assert.fail("Should have thrown an exception");
@@ -24,22 +32,13 @@ describe("TCP Client Reliability", () => {
       assert.strictEqual(err.exceptionName, "DB::Exception", "Should have exception name");
       assert.ok(err.message.includes("does not exist"), "Message should mention table does not exist");
       assert.ok(err.serverStackTrace.length > 0, "Should have stack trace");
-    } finally {
-      client.close();
     }
-  });
+  }));
 
-  test("should ping and receive pong", async () => {
-    const client = new TcpClient(options);
-    await client.connect();
-    try {
-      await client.ping();
-      // If we get here without error, ping succeeded
-      assert.ok(true);
-    } finally {
-      client.close();
-    }
-  });
+  test("should ping and receive pong", () => withClient(async (client) => {
+    await client.ping();
+    assert.ok(true);
+  }));
 
   test("should timeout query that takes too long", async () => {
     const client = new TcpClient({
@@ -63,47 +62,28 @@ describe("TCP Client Reliability", () => {
     }
   });
 
-  test("should cancel query via AbortSignal", async () => {
-    const client = new TcpClient(options);
-    await client.connect();
-
+  test("should cancel query via AbortSignal", () => withClient(async (client) => {
     const controller = new AbortController();
-
-    // Cancel after 50ms
     setTimeout(() => controller.abort(), 50);
 
     try {
-      // Start a slow query
-      for await (const _ of client.query(
-        "SELECT sleep(10)",
-        {},
-        { signal: controller.signal }
-      )) {}
-      // Query may complete early due to cancellation
+      for await (const _ of client.query("SELECT sleep(10)", {}, { signal: controller.signal })) {}
     } catch (err: any) {
-      // Expected - either abort error or server-side cancellation
       assert.ok(true, "Query was cancelled or errored as expected");
-    } finally {
-      client.close();
     }
-  });
+  }));
 
-  test("should reject query if already aborted", async () => {
-    const client = new TcpClient(options);
-    await client.connect();
-
+  test("should reject query if already aborted", () => withClient(async (client) => {
     const controller = new AbortController();
-    controller.abort(); // Abort before query starts
+    controller.abort();
 
     try {
       for await (const _ of client.query("SELECT 1", {}, { signal: controller.signal })) {}
       assert.fail("Should have thrown an error");
     } catch (err: any) {
       assert.ok(err.message.includes("aborted"), "Should mention aborted");
-    } finally {
-      client.close();
     }
-  });
+  }));
 
   test("should handle connection timeout", async () => {
     const client = new TcpClient({
@@ -168,12 +148,9 @@ describe("TCP Client Reliability", () => {
     }
   });
 
-  test("should reject insert if already aborted", async () => {
-    const client = new TcpClient(options);
-    await client.connect();
-
+  test("should reject insert if already aborted", () => withClient(async (client) => {
     const controller = new AbortController();
-    controller.abort(); // Abort before insert starts
+    controller.abort();
 
     try {
       const table = Table.fromColumnar(
@@ -184,10 +161,8 @@ describe("TCP Client Reliability", () => {
       assert.fail("Should have thrown an error");
     } catch (err: any) {
       assert.ok(err.message.includes("aborted"), "Should mention aborted");
-    } finally {
-      client.close();
     }
-  });
+  }));
 
   test("should cancel connect via AbortSignal", async () => {
     const controller = new AbortController();

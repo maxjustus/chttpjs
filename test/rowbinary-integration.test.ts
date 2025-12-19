@@ -8,12 +8,13 @@ import {
   decodeRowBinary,
   type ColumnDef,
 } from "../formats/rowbinary.ts";
+import { consume, generateSessionId } from "./test_utils.ts";
 
 describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
   let clickhouse: Awaited<ReturnType<typeof startClickHouse>>;
   let baseUrl: string;
   let auth: { username: string; password: string };
-  const sessionId = "rowbinary_" + Date.now().toString();
+  const sessionId = generateSessionId("rowbinary");
 
   before(async () => {
     await init();
@@ -28,12 +29,11 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
 
   describe("Basic types", () => {
     it("should insert with RowBinaryWithNamesAndTypes format", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_basic (id UInt32, name String, value Float64) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -67,21 +67,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[0].name, "alice");
       assert.strictEqual(parsed.data[2].value, 3.5);
 
-      for await (const _ of query("DROP TABLE test_rb_basic", sessionId, {
+      await consume(query("DROP TABLE test_rb_basic", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert RowBinary with Nullable columns", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_nullable (id UInt32, value Nullable(Int32)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -115,21 +113,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[1].value, null);
       assert.strictEqual(parsed.data[2].value, 300);
 
-      for await (const _ of query("DROP TABLE test_rb_nullable", sessionId, {
+      await consume(query("DROP TABLE test_rb_nullable", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert RowBinary with Array columns", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_array (id UInt32, tags Array(String), values Array(Int32)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -163,21 +159,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.deepStrictEqual(parsed.data[0].tags, ["foo", "bar"]);
       assert.deepStrictEqual(parsed.data[0].values, [10, 20, 30]);
 
-      for await (const _ of query("DROP TABLE test_rb_array", sessionId, {
+      await consume(query("DROP TABLE test_rb_array", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert RowBinary with Tuple columns", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_tuple (id UInt32, data Tuple(String, Int32, Float64)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -208,21 +202,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data.length, 2);
       assert.deepStrictEqual(parsed.data[0].data, ["alice", 100, 1.5]);
 
-      for await (const _ of query("DROP TABLE test_rb_tuple", sessionId, {
+      await consume(query("DROP TABLE test_rb_tuple", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert RowBinary with Map columns", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_map (id UInt32, attrs Map(String, Int32)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -253,23 +245,21 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data.length, 3);
       assert.deepStrictEqual(parsed.data[0].attrs, { foo: 100, bar: 200 });
 
-      for await (const _ of query("DROP TABLE test_rb_map", sessionId, {
+      await consume(query("DROP TABLE test_rb_map", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
   });
 
   describe("Date/Time types", () => {
     it("should insert RowBinary with Date32", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_date32 (id UInt32, d Date32) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -301,21 +291,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[0].d, "2024-01-15");
       assert.strictEqual(parsed.data[1].d, "1950-06-20");
 
-      for await (const _ of query("DROP TABLE test_rb_date32", sessionId, {
+      await consume(query("DROP TABLE test_rb_date32", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert RowBinary with DateTime64", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_dt64 (id UInt32, dt DateTime64(3)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -346,23 +334,21 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.ok(parsed.data[0].dt.includes("2024-01-15"));
       assert.ok(parsed.data[0].dt.includes("12:30:45"));
 
-      for await (const _ of query("DROP TABLE test_rb_dt64", sessionId, {
+      await consume(query("DROP TABLE test_rb_dt64", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
   });
 
   describe("String types", () => {
     it("should insert RowBinary with FixedString", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_fixedstring (id UInt32, code FixedString(4)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -394,23 +380,21 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[0].code, "ABCD");
       assert.ok(parsed.data[1].code.startsWith("XY"));
 
-      for await (const _ of query("DROP TABLE test_rb_fixedstring", sessionId, {
+      await consume(query("DROP TABLE test_rb_fixedstring", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
   });
 
   describe("Network/ID types", () => {
     it("should insert RowBinary with UUID", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_uuid (id UInt32, uuid UUID) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -447,21 +431,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         "00000000-0000-0000-0000-000000000000",
       );
 
-      for await (const _ of query("DROP TABLE test_rb_uuid", sessionId, {
+      await consume(query("DROP TABLE test_rb_uuid", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert RowBinary with IPv4 and IPv6", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_ip (id UInt32, ip4 IPv4, ip6 IPv6) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -494,23 +476,21 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[1].ip4, "10.0.0.1");
       assert.ok(parsed.data[0].ip6.includes("2001"));
 
-      for await (const _ of query("DROP TABLE test_rb_ip", sessionId, {
+      await consume(query("DROP TABLE test_rb_ip", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
   });
 
   describe("Big integer types", () => {
     it("should insert RowBinary with Int128/UInt128", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_int128 (id UInt32, signed Int128, unsigned UInt128) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -534,31 +514,30 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         query(
           "SELECT * FROM test_rb_int128 ORDER BY id FORMAT JSON",
           sessionId,
-          { baseUrl, auth },
+          { baseUrl, auth, output_format_json_quote_64bit_integers: "1" },
         ),
       );
 
+      if (process.env.DEBUG) console.log("Int128 JSON result:", result);
       const parsed = JSON.parse(result);
       assert.strictEqual(parsed.data.length, 2);
       assert.strictEqual(parsed.data[0].signed, "12345678901234567890");
       assert.strictEqual(parsed.data[0].unsigned, "98765432109876543210");
       assert.strictEqual(parsed.data[1].signed, "-12345678901234567890");
 
-      for await (const _ of query("DROP TABLE test_rb_int128", sessionId, {
+      await consume(query("DROP TABLE test_rb_int128", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert RowBinary with Int256/UInt256", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_int256 (id UInt32, signed Int256, unsigned UInt256) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -583,7 +562,7 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         query(
           "SELECT * FROM test_rb_int256 ORDER BY id FORMAT JSON",
           sessionId,
-          { baseUrl, auth },
+          { baseUrl, auth, output_format_json_quote_64bit_integers: "1" },
         ),
       );
 
@@ -593,23 +572,21 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[0].unsigned, bigVal.toString());
       assert.strictEqual(parsed.data[1].signed, (-bigVal).toString());
 
-      for await (const _ of query("DROP TABLE test_rb_int256", sessionId, {
+      await consume(query("DROP TABLE test_rb_int256", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
   });
 
   describe("Decimal types", () => {
     it("should insert RowBinary with Decimal32/Decimal64", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_decimal (id UInt32, d32 Decimal32(2), d64 Decimal64(4)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       // Must use Decimal(precision, scale) format to match ClickHouse
       const columns: ColumnDef[] = [
@@ -644,21 +621,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(Number(parsed.data[0].d64), 12345.6789);
       assert.strictEqual(Number(parsed.data[1].d32), -99.99);
 
-      for await (const _ of query("DROP TABLE test_rb_decimal", sessionId, {
+      await consume(query("DROP TABLE test_rb_decimal", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert RowBinary with Decimal128/Decimal256", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_decimal_big (id UInt32, d128 Decimal128(10), d256 Decimal256(20)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       // Decimal128/256 must use Decimal(precision, scale) format to match ClickHouse
       const columns: ColumnDef[] = [
@@ -695,23 +670,21 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.ok(d128.includes("123456789"));
       assert.ok(d256.includes("1234567890"));
 
-      for await (const _ of query("DROP TABLE test_rb_decimal_big", sessionId, {
+      await consume(query("DROP TABLE test_rb_decimal_big", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
   });
 
   describe("Enum types", () => {
     it("should insert RowBinary with Enum8", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_enum8 (id UInt32, status Enum8('pending' = 0, 'active' = 1, 'done' = 2)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -748,21 +721,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[1].status, "active");
       assert.strictEqual(parsed.data[2].status, "done");
 
-      for await (const _ of query("DROP TABLE test_rb_enum8", sessionId, {
+      await consume(query("DROP TABLE test_rb_enum8", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert RowBinary with Enum16", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_enum16 (id UInt32, priority Enum16('low' = 1, 'medium' = 100, 'high' = 1000)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -799,23 +770,21 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[1].priority, "medium");
       assert.strictEqual(parsed.data[2].priority, "high");
 
-      for await (const _ of query("DROP TABLE test_rb_enum16", sessionId, {
+      await consume(query("DROP TABLE test_rb_enum16", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
   });
 
   describe("Complex/Nested types", () => {
     it("should insert RowBinary with nested Tuple and Array", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_nested (id UInt32, data Tuple(String, Array(Int32), Tuple(Float64, String))) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -858,12 +827,11 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         [2.71, "nested"],
       ]);
 
-      for await (const _ of query("DROP TABLE test_rb_nested", sessionId, {
+      await consume(query("DROP TABLE test_rb_nested", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
   });
 
@@ -871,23 +839,21 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
     it("should insert RowBinary with Variant", async () => {
       // Variant requires ClickHouse 24.1+ with allow_experimental_variant_type
       try {
-        for await (const _ of query(
+        await consume(query(
           "SET allow_experimental_variant_type = 1",
           sessionId,
           { baseUrl, auth, compression: "none" },
-        )) {
-        }
+        ));
       } catch {
         // Setting may not exist in older versions
       }
 
       try {
-        for await (const _ of query(
+        await consume(query(
           "CREATE TABLE IF NOT EXISTS test_rb_variant (id UInt32, v Variant(String, Int32, Float64)) ENGINE = Memory",
           sessionId,
           { baseUrl, auth, compression: "none" },
-        )) {
-        }
+        ));
       } catch (err) {
         // Skip test if Variant not supported
         console.log(
@@ -932,23 +898,21 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[3].v, null);
       assert.strictEqual(parsed.data[3].vtype, "None");
 
-      for await (const _ of query("DROP TABLE test_rb_variant", sessionId, {
+      await consume(query("DROP TABLE test_rb_variant", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
   });
 
   describe("Decoding", () => {
     it("should query and decode with RowBinaryWithNamesAndTypes format", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_decode (id UInt32, name String, value Float64, flag Bool) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -987,21 +951,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(decoded.rows[0][1], "alice");
       assert.strictEqual(decoded.rows[0][3], true);
 
-      for await (const _ of query("DROP TABLE test_rb_decode", sessionId, {
+      await consume(query("DROP TABLE test_rb_decode", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should decode complex types from ClickHouse", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_decode_complex (id UInt32, tags Array(String), attrs Map(String, Int32), data Tuple(String, Float64)) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1042,24 +1004,22 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       const tuple0 = decoded.rows[0][3] as unknown[];
       assert.strictEqual(tuple0[0], "hello");
 
-      for await (const _ of query(
+      await consume(query(
         "DROP TABLE test_rb_decode_complex",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
     });
   });
 
   describe("JSON type", () => {
     it("should insert and query JSON column with various value types", async () => {
       // ClickHouse 24.1+ supports JSON type
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_json (id UInt32, data JSON) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1094,21 +1054,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(Number(parsed.data[0]["data.num"]), 42);
       assert.strictEqual(parsed.data[1]["data.str"], "world");
 
-      for await (const _ of query("DROP TABLE test_rb_json", sessionId, {
+      await consume(query("DROP TABLE test_rb_json", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert JSON with null values", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_json_null (id UInt32, data JSON) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1146,21 +1104,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       );
       assert.strictEqual(parsed.data[1]["data.name"], "bob");
 
-      for await (const _ of query("DROP TABLE test_rb_json_null", sessionId, {
+      await consume(query("DROP TABLE test_rb_json_null", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert JSON with Date values", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_json_date (id UInt32, data JSON) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1201,21 +1157,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
         `timestamp should be parseable: ${timestampValue}`,
       );
 
-      for await (const _ of query("DROP TABLE test_rb_json_date", sessionId, {
+      await consume(query("DROP TABLE test_rb_json_date", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should round-trip JSON via RowBinaryWithNamesAndTypes", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_json_rt (id UInt32, data JSON) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1247,23 +1201,21 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       const jsonData = decoded.rows[0][1] as Record<string, unknown>;
       assert.strictEqual(jsonData.name, "test");
 
-      for await (const _ of query("DROP TABLE test_rb_json_rt", sessionId, {
+      await consume(query("DROP TABLE test_rb_json_rt", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
   });
 
   describe("Dynamic type", () => {
     it("should insert and query Dynamic column with inferred types", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_dynamic (id UInt32, data Dynamic) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1306,21 +1258,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[3].dtype, "Float64");
       assert.strictEqual(parsed.data[4].data, null);
 
-      for await (const _ of query("DROP TABLE test_rb_dynamic", sessionId, {
+      await consume(query("DROP TABLE test_rb_dynamic", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
 
     it("should insert Dynamic with explicit types", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_dynamic_explicit (id UInt32, data Dynamic) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1358,21 +1308,19 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[2].dtype, "Array(String)");
       assert.deepStrictEqual(parsed.data[2].data, ["a", "b", "c"]);
 
-      for await (const _ of query(
+      await consume(query(
         "DROP TABLE test_rb_dynamic_explicit",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
     });
 
     it("should round-trip Dynamic via RowBinaryWithNamesAndTypes", async () => {
-      for await (const _ of query(
+      await consume(query(
         "CREATE TABLE IF NOT EXISTS test_rb_dynamic_rt (id UInt32, data Dynamic) ENGINE = Memory",
         sessionId,
         { baseUrl, auth, compression: "none" },
-      )) {
-      }
+      ));
 
       const columns: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -1411,12 +1359,11 @@ describe("RowBinary Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(row1data.value, "hello");
       assert.strictEqual(decoded.rows[2][1], null);
 
-      for await (const _ of query("DROP TABLE test_rb_dynamic_rt", sessionId, {
+      await consume(query("DROP TABLE test_rb_dynamic_rt", sessionId, {
         baseUrl,
         auth,
         compression: "none",
-      })) {
-      }
+      }));
     });
   });
 });

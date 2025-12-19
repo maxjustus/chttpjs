@@ -10,21 +10,7 @@ import {
   Float32NaN,
   Float64NaN,
 } from "../formats/rowbinary.ts";
-
-// Helper to compare arrays (works with TypedArrays too)
-function assertArrayEqual(
-  actual: ArrayLike<unknown>,
-  expected: unknown[],
-): void {
-  assert.strictEqual(
-    actual.length,
-    expected.length,
-    `length mismatch: ${actual.length} vs ${expected.length}`,
-  );
-  for (let i = 0; i < expected.length; i++) {
-    assert.strictEqual(actual[i], expected[i], `mismatch at index ${i}`);
-  }
-}
+import { assertArrayEqual } from "./test_utils.ts";
 
 // Helper to read LEB128
 function readLEB128(bytes: Uint8Array, offset: number): [number, number] {

@@ -21,6 +21,7 @@ export class Table implements Iterable<Row> {
   readonly columns: ColumnDef[];
   readonly columnData: Column[];
   readonly rowCount: number;
+  readonly decodeTimeMs?: number;
 
   private nameToIndex: Map<string, number>;
 
@@ -28,6 +29,7 @@ export class Table implements Iterable<Row> {
     this.columns = block.columns;
     this.columnData = block.columnData;
     this.rowCount = block.rowCount;
+    this.decodeTimeMs = block.decodeTimeMs;
     this.nameToIndex = new Map(this.columns.map((c, i) => [c.name, i]));
   }
 

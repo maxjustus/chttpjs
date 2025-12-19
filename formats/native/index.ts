@@ -19,7 +19,8 @@ import {
 
 import { BufferWriter, BufferReader } from "./io.ts";
 import { getCodec } from "./codecs.ts";
-import { type Column } from "./columns.ts";
+import { type Column, DataColumn } from "./columns.ts";
+import { BlockInfoField } from "./constants.ts";
 import {
   Table,
   TableBuilder,
@@ -55,6 +56,7 @@ export interface Block {
   columns: ColumnDef[];
   columnData: Column[]; // columnData[colIndex]
   rowCount: number;
+  decodeTimeMs?: number;
 }
 
 /**
@@ -87,6 +89,7 @@ interface BlockResult {
   rowCount: number;
   bytesConsumed: number;
   isEndMarker: boolean;
+  decodeTimeMs?: number;
 }
 
 interface BlockEstimate {
@@ -111,10 +114,11 @@ function estimateBlockSize(
     if (clientVersion > 0) {
       while (true) {
         const fieldId = reader.readVarint();
-        if (fieldId === 0) break;
-        if (fieldId === 1)
+        if (fieldId === BlockInfoField.End) break;
+        if (fieldId === BlockInfoField.IsOverflows)
           reader.offset += 1; // is_overflows
-        else if (fieldId === 2) reader.offset += 4; // bucket_num
+        else if (fieldId === BlockInfoField.BucketNum)
+          reader.offset += 4; // bucket_num
       }
     }
 
@@ -213,10 +217,11 @@ export function decodeNativeBlock(
   if (clientVersion > 0) {
     while (true) {
       const fieldId = reader.readVarint();
-      if (fieldId === 0) break;
-      if (fieldId === 1)
+      if (fieldId === BlockInfoField.End) break;
+      if (fieldId === BlockInfoField.IsOverflows)
         reader.offset += 1; // is_overflows
-      else if (fieldId === 2) reader.offset += 4; // bucket_num
+      else if (fieldId === BlockInfoField.BucketNum)
+        reader.offset += 4; // bucket_num
     }
   }
 
@@ -254,8 +259,14 @@ export function decodeNativeBlock(
     }
 
     const state: DeserializerState = { serNode, sparseRuntime: new Map() };
-    codec.readPrefix?.(reader);
-    columnData.push(codec.decode(reader, numRows, state));
+    // Only read prefix and decode when there are rows - empty blocks are schema-only
+    if (numRows > 0) {
+      codec.readPrefix?.(reader);
+      columnData.push(codec.decode(reader, numRows, state));
+    } else {
+      // Schema-only block: no prefix or data, create empty column
+      columnData.push(new DataColumn(type, []));
+    }
   }
 
   return {

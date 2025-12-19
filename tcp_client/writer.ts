@@ -1,5 +1,15 @@
 
-import { ClientPacketId, DBMS_TCP_PROTOCOL_VERSION, QueryProcessingStage, REVISIONS, QueryKind, Interface } from "./types.ts";
+import {
+  ClientPacketId,
+  DBMS_TCP_PROTOCOL_VERSION,
+  QueryProcessingStage,
+  REVISIONS,
+  QueryKind,
+  Interface,
+  CLIENT_VERSION,
+  DBMS_PARALLEL_REPLICAS_PROTOCOL_VERSION,
+} from "./types.ts";
+import { BlockInfoField } from "../formats/native/constants.ts";
 import { encodeBlock, Method, type MethodCode } from "../compression.ts";
 import { BufferWriter } from "../formats/native/io.ts";
 
@@ -49,8 +59,8 @@ export class StreamingWriter {
   encodeHello(database: string, user: string, pass: string): Uint8Array {
     this.writeVarInt(ClientPacketId.Hello);
     this.writeString("chttp-client 0.1.0");
-    this.writeVarInt(24); // Client version major
-    this.writeVarInt(8);  // Client version minor
+    this.writeVarInt(CLIENT_VERSION.MAJOR);
+    this.writeVarInt(CLIENT_VERSION.MINOR);
     this.writeVarInt(DBMS_TCP_PROTOCOL_VERSION);
     this.writeString(database);
     this.writeString(user);
@@ -67,7 +77,7 @@ export class StreamingWriter {
       this.writeString("notchunked"); // client flags
     }
     if (revision >= REVISIONS.DBMS_MIN_REVISION_WITH_VERSIONED_PARALLEL_REPLICAS_PROTOCOL) {
-      this.writeVarInt(4); // DBMS_PARALLEL_REPLICAS_PROTOCOL_VERSION
+      this.writeVarInt(DBMS_PARALLEL_REPLICAS_PROTOCOL_VERSION);
     }
     return this.flush();
   }
@@ -90,8 +100,8 @@ export class StreamingWriter {
     this.writeString("chttp-client"); // os_user
     this.writeString("localhost");    // client_hostname
     this.writeString("ClickHouse");   // client_name
-    this.writeVarInt(24); // major
-    this.writeVarInt(8);  // minor
+    this.writeVarInt(CLIENT_VERSION.MAJOR);
+    this.writeVarInt(CLIENT_VERSION.MINOR);
     this.writeVarInt(DBMS_TCP_PROTOCOL_VERSION);
 
     if (revision >= REVISIONS.DBMS_MIN_REVISION_WITH_QUOTA_KEY_IN_CLIENT_INFO) {
@@ -181,19 +191,16 @@ export class StreamingWriter {
 
   private encodeDataBlockContent(rowsCount: number, columns: { name: string, type: string, data: Uint8Array }[], revision: bigint): Uint8Array {
     const contentWriter = new BufferWriter();
-    
+
     if (revision > 0n) {
-      // BlockInfo: uses field-based encoding. Field 0 marks the end.
-      
-      // Field 1: is_overflows (bool)
-      contentWriter.writeVarint(1); 
-      contentWriter.writeU8(0); // false
-      
-      // Field 2: bucket_num (Int32)
-      contentWriter.writeVarint(2);
-      contentWriter.writeI32LE(-1);
-      
-      contentWriter.writeVarint(0); // End of BlockInfo
+      // BlockInfo: field-based encoding where field 0 marks end
+      contentWriter.writeVarint(BlockInfoField.IsOverflows);
+      contentWriter.writeU8(0); // is_overflows = false
+
+      contentWriter.writeVarint(BlockInfoField.BucketNum);
+      contentWriter.writeI32LE(-1); // bucket_num = -1 (no bucket)
+
+      contentWriter.writeVarint(BlockInfoField.End);
     }
 
     contentWriter.writeVarint(columns.length);

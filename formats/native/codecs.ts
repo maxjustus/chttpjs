@@ -42,9 +42,20 @@ import {
   JsonColumn,
   NullableColumn,
   ArrayColumn,
-  VARIANT_NULL_DISCRIMINATOR,
   countAndIndexDiscriminators,
 } from "./columns.ts";
+
+import {
+  SerializationKind,
+  LowCardinality as LC,
+  Dynamic,
+  JSON,
+  Variant,
+  Sparse,
+  UUID as UUIDConst,
+  IPv6 as IPv6Const,
+  Time,
+} from "./constants.ts";
 
 export function defaultDeserializerState(): DeserializerState {
   return {
@@ -53,13 +64,8 @@ export function defaultDeserializerState(): DeserializerState {
   };
 }
 
-const MS_PER_DAY = 86400000;
-
-// LowCardinality encoding flags
-const LC_FLAG_ADDITIONAL_KEYS = 1n << 9n;
-const LC_INDEX_U8 = 0n;
-const LC_INDEX_U16 = 1n;
-const LC_INDEX_U32 = 2n;
+// Alias for brevity
+const { MS_PER_DAY, MS_PER_SECOND } = Time;
 
 /**
  * Decode groups from reader based on discriminator counts.
@@ -82,8 +88,6 @@ function decodeGroups(
   }
   return groups;
 }
-
-const MS_PER_SECOND = 1000;
 
 export interface ColumnBuilder {
   append(value: unknown): ColumnBuilder;
@@ -165,7 +169,7 @@ export abstract class BaseCodec implements Codec {
   ): Column;
 
   decode(reader: BufferReader, rows: number, state: DeserializerState): Column {
-    if (state.serNode.kind === 1) {
+    if (state.serNode.kind === SerializationKind.Sparse) {
       return readSparse(this, reader, rows, state);
     }
     return this.decodeDense(reader, rows, state);
@@ -176,8 +180,6 @@ export abstract class BaseCodec implements Codec {
     return { kind, children: [] };
   }
 }
-
-const END_OF_GRANULE_FLAG = 1n << 62n;
 
 function readSparse(
   codec: Codec,
@@ -217,9 +219,9 @@ function readSparse(
   // Each VarInt = defaults before next non-default. END flag marks last entry.
   while (true) {
     let v = BigInt(reader.readVarInt64());
-    const end = (v & END_OF_GRANULE_FLAG) !== 0n;
+    const end = (v & Sparse.END_OF_GRANULE_FLAG) !== 0n;
     if (end) {
-      v &= ~END_OF_GRANULE_FLAG;
+      v &= ~Sparse.END_OF_GRANULE_FLAG;
     }
 
     let groupSize = Number(v);
@@ -429,7 +431,7 @@ class UUIDCodec extends BaseCodec {
 
   encode(col: Column): Uint8Array {
     const len = col.length;
-    const buf = new Uint8Array(len * 16);
+    const buf = new Uint8Array(len * UUIDConst.BYTE_SIZE);
 
     for (let i = 0; i < len; i++) {
       const u = String(col.get(i));
@@ -451,7 +453,7 @@ class UUIDCodec extends BaseCodec {
     rows: number,
     _state: DeserializerState,
   ): Column {
-    reader.ensureAvailable(rows * 16);
+    reader.ensureAvailable(rows * UUIDConst.BYTE_SIZE);
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const b = reader.buffer.subarray(reader.offset, reader.offset + 16);
@@ -482,7 +484,7 @@ class UUIDCodec extends BaseCodec {
     return "00000000-0000-0000-0000-000000000000";
   }
   estimateSize(rows: number) {
-    return rows * 16;
+    return rows * UUIDConst.BYTE_SIZE;
   }
 }
 
@@ -910,7 +912,7 @@ class IPv6Codec extends BaseCodec {
 
   encode(col: Column): Uint8Array {
     const len = col.length;
-    const result = new Uint8Array(len * 16);
+    const result = new Uint8Array(len * IPv6Const.BYTE_SIZE);
     for (let i = 0; i < len; i++) {
       const v = String(col.get(i));
       const bytes = ipv6ToBytes(v);
@@ -926,7 +928,7 @@ class IPv6Codec extends BaseCodec {
   ): Column {
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
-      const bytes = reader.readBytes(16);
+      const bytes = reader.readBytes(IPv6Const.BYTE_SIZE);
       values[i] = bytesToIpv6(bytes);
     }
     return new DataColumn(this.type, values);
@@ -944,7 +946,7 @@ class IPv6Codec extends BaseCodec {
     return "::";
   }
   estimateSize(rows: number) {
-    return rows * 16;
+    return rows * IPv6Const.BYTE_SIZE;
   }
 }
 
@@ -1175,7 +1177,7 @@ class LowCardinalityCodec extends BaseCodec {
   }
 
   writePrefix(writer: BufferWriter) {
-    writer.write(new Uint8Array(new BigUint64Array([1n]).buffer));
+    writer.writeU64LE(LC.VERSION);
   }
 
   readPrefix(reader: BufferReader) {
@@ -1216,34 +1218,25 @@ class LowCardinalityCodec extends BaseCodec {
       }
     }
 
-    let indexType = LC_INDEX_U8;
+    let indexType: bigint = LC.INDEX_U8;
     let IndexArray: any = Uint8Array;
-    if (dictValues.length > 255) {
-      indexType = LC_INDEX_U16;
+    if (dictValues.length > LC.INDEX_U8_MAX) {
+      indexType = LC.INDEX_U16;
       IndexArray = Uint16Array;
     }
-    if (dictValues.length > 65535) {
-      indexType = LC_INDEX_U32;
+    if (dictValues.length > LC.INDEX_U16_MAX) {
+      indexType = LC.INDEX_U32;
       IndexArray = Uint32Array;
     }
 
-    writer.write(
-      new Uint8Array(
-        new BigUint64Array([LC_FLAG_ADDITIONAL_KEYS | indexType]).buffer,
-      ),
-    );
+    // Flag + IndexType in lower 8 bits
+    writer.writeU64LE(LC.FLAG_ADDITIONAL_KEYS | indexType);
 
     // Build dictionary column from unique values
-    writer.write(
-      new Uint8Array(new BigUint64Array([BigInt(dictValues.length)]).buffer),
-    );
+    writer.writeU64LE(BigInt(dictValues.length));
     const dictHint = this.dictCodec.estimateSize(dictValues.length);
-    writer.write(
-      this.dictCodec.encode(this.dictCodec.fromValues(dictValues), dictHint),
-    );
-    writer.write(
-      new Uint8Array(new BigUint64Array([BigInt(col.length)]).buffer),
-    );
+    writer.write(this.dictCodec.encode(this.dictCodec.fromValues(dictValues), dictHint));
+    writer.writeU64LE(BigInt(col.length));
     writer.write(new Uint8Array(new IndexArray(indices).buffer));
 
     return writer.finish();
@@ -1257,7 +1250,7 @@ class LowCardinalityCodec extends BaseCodec {
     if (rows === 0) return new DataColumn(this.type, []);
 
     const flags = reader.readU64LE();
-    const typeInfo = Number(flags & 0xffn);
+    const indexType = Number(flags & LC.INDEX_TYPE_MASK);
     const isNullable = this.inner instanceof NullableCodec;
 
     const dictSize = Number(reader.readU64LE());
@@ -1272,10 +1265,11 @@ class LowCardinalityCodec extends BaseCodec {
     const count = Number(reader.readU64LE());
 
     let indices: TypedArray;
-    if (typeInfo === 0) indices = reader.readTypedArray(Uint8Array, count);
-    else if (typeInfo === 1)
+    if (indexType === Number(LC.INDEX_U8))
+      indices = reader.readTypedArray(Uint8Array, count);
+    else if (indexType === Number(LC.INDEX_U16))
       indices = reader.readTypedArray(Uint16Array, count);
-    else if (typeInfo === 2)
+    else if (indexType === Number(LC.INDEX_U32))
       indices = reader.readTypedArray(Uint32Array, count);
     else indices = reader.readTypedArray(BigUint64Array, count);
 
@@ -1660,13 +1654,11 @@ class VariantCodec implements Codec {
   }
 
   writePrefix(writer: BufferWriter) {
-    // UInt64 LE mode flag: 0=BASIC (row-by-row), 1=COMPACT (granule-based, storage only)
-    const BASIC_MODE = new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0]);
-    writer.write(BASIC_MODE);
+    writer.writeU64LE(Variant.MODE_BASIC);
   }
 
   readPrefix(reader: BufferReader) {
-    reader.offset += 8; // Skip encoding mode flag - always BASIC (0) for HTTP clients
+    reader.offset += 8; // Skip encoding mode flag
   }
 
   encode(col: Column, sizeHint?: number): Uint8Array {
@@ -1692,7 +1684,7 @@ class VariantCodec implements Codec {
     const discriminators = reader.readTypedArray(Uint8Array, rows);
     const { counts, indices } = countAndIndexDiscriminators(
       discriminators,
-      VARIANT_NULL_DISCRIMINATOR,
+      Variant.NULL_DISCRIMINATOR,
     );
     const groups = decodeGroups(reader, this.codecs, counts, state);
     return new VariantColumn(this.type, discriminators, groups, indices);
@@ -1705,7 +1697,7 @@ class VariantCodec implements Codec {
     for (let i = 0; i < values.length; i++) {
       const v = values[i];
       if (v === null) {
-        discriminators[i] = VARIANT_NULL_DISCRIMINATOR;
+        discriminators[i] = Variant.NULL_DISCRIMINATOR;
       } else if (
         Array.isArray(v) &&
         v.length === 2 &&
@@ -1760,7 +1752,7 @@ class VariantCodec implements Codec {
     for (let i = 0; i < values.length; i++) {
       const v = values[i];
       if (v === null) {
-        discriminators[i] = VARIANT_NULL_DISCRIMINATOR;
+        discriminators[i] = Variant.NULL_DISCRIMINATOR;
       } else if (
         Array.isArray(v) &&
         v.length === 2 &&
@@ -1847,7 +1839,7 @@ class DynamicCodec implements Codec {
     this.types = dyn.types;
     this.codecs = this.types.map((t) => getCodec(t));
 
-    writer.write(new Uint8Array(new BigUint64Array([3n]).buffer));
+    writer.writeU64LE(Dynamic.VERSION_V3);
     writer.writeVarint(this.types.length);
     for (const t of this.types) writer.writeString(t);
 
@@ -1859,7 +1851,7 @@ class DynamicCodec implements Codec {
 
   readPrefix(reader: BufferReader) {
     const version = reader.readU64LE();
-    if (version !== 3n)
+    if (version !== Dynamic.VERSION_V3)
       throw new Error(`Dynamic: only V3 supported, got V${version}`);
 
     const count = reader.readVarint();
@@ -2011,7 +2003,7 @@ class JsonCodec implements Codec {
   writePrefix(writer: BufferWriter, col: Column) {
     const json = col as JsonColumn;
     this.paths = json.paths;
-    writer.write(new Uint8Array(new BigUint64Array([3n]).buffer));
+    writer.writeU64LE(JSON.VERSION_V3);
     writer.writeVarint(this.paths.length);
     for (const p of this.paths) writer.writeString(p);
 
@@ -2025,7 +2017,8 @@ class JsonCodec implements Codec {
 
   readPrefix(reader: BufferReader) {
     const ver = reader.readU64LE();
-    if (ver !== 3n) throw new Error(`JSON: only V3 supported, got V${ver}`);
+    if (ver !== JSON.VERSION_V3)
+      throw new Error(`JSON: only V3 supported, got V${ver}`);
 
     const count = reader.readVarint();
     this.paths = [];

@@ -4,6 +4,16 @@ import { Table } from "../formats/native/table.ts";
 // (allow_special_serialization_kinds_in_output_formats=0) to keep the protocol simple.
 export const DBMS_TCP_PROTOCOL_VERSION = 54479n;
 
+/** Client version sent in Hello and Query packets (ClickHouse version we're mimicking) */
+export const CLIENT_VERSION = {
+  MAJOR: 24,
+  MINOR: 8,
+  PATCH: 0,
+} as const;
+
+/** Protocol version for parallel replicas feature negotiation */
+export const DBMS_PARALLEL_REPLICAS_PROTOCOL_VERSION = 4;
+
 export const ClientPacketId = {
   Hello: 0,
   Query: 1,
@@ -22,9 +32,19 @@ export const ServerPacketId = {
   ProfileInfo: 6,
   Totals: 7,
   Extremes: 8,
+  // 9 = TablesStatusResponse (not used in query flow)
   Log: 10,
+  TableColumns: 11,
+  // 12 = PartUUIDs, 13 = ReadTaskRequest (internal)
   ProfileEvents: 14,
+  // 15 = MergeTreeAllRangesAnnouncement, 16 = MergeTreeReadTaskRequest (internal)
   TimezoneUpdate: 17,
+} as const;
+
+/** ProfileEvents event type codes */
+export const ProfileEventType = {
+  Increment: 1, // Counter that accumulates across packets
+  Gauge: 2, // Point-in-time measurement (use latest value)
 } as const;
 
 export const QueryProcessingStage = {
@@ -34,17 +54,17 @@ export const QueryProcessingStage = {
   WithMergableStateAfterAggregation: 3,
 } as const;
 
-export enum QueryKind {
-  None = 0,
-  InitialQuery = 1,
-  SecondaryQuery = 2,
-}
+export const QueryKind = {
+  None: 0,
+  InitialQuery: 1,
+  SecondaryQuery: 2,
+} as const;
 
-export enum Interface {
-  TCP = 1,
-  HTTP = 2,
-  GRPC = 3,
-}
+export const Interface = {
+  TCP: 1,
+  HTTP: 2,
+  GRPC: 3,
+} as const;
 
 export interface ServerHello {
   serverName: string;

@@ -9,6 +9,54 @@ import {
   type TypedArray,
 } from "../shared.ts";
 
+/**
+ * VarInt (LEB128) encoding constants.
+ * VarInt encodes integers in 7-bit groups with continuation bit.
+ *
+ * Each byte: [C][D D D D D D D]
+ *            ^  ^^^^^^^^^^^^^
+ *            |  7 data bits (0x7F mask)
+ *            continuation bit (0x80) - 1 = more bytes follow
+ */
+const VarInt = {
+  // Number versions for 32-bit fast path
+  /** Continuation bit (0x80) - if set, more bytes follow */
+  CONT_BIT: 0x80,
+  /** Data mask (0x7F) - lower 7 bits contain data */
+  DATA_MASK_NUM: 0x7f,
+  /** Bits of data per byte */
+  BITS_PER_BYTE_NUM: 7,
+
+  // BigInt versions for 64-bit operations
+  /** Continuation bit threshold - if byte >= 0x80, more bytes follow */
+  CONTINUATION_THRESHOLD: 0x80n,
+  /** Data bits mask - lower 7 bits contain actual data */
+  DATA_MASK: 0x7fn,
+  /** Continuation bit to set on non-terminal bytes */
+  CONTINUATION_BIT: 0x80n,
+  /** Number of data bits per byte */
+  BITS_PER_BYTE: 7n,
+
+  /** Maximum bytes for a 64-bit VarInt (ceil(64/7) = 10) */
+  MAX_BYTES_64: 10,
+} as const;
+
+/**
+ * Buffer size constants.
+ */
+const BufferSize: {
+  /** Default initial buffer size for BufferWriter (64KB) */
+  DEFAULT_WRITER: number;
+  /** Single-byte VarInt threshold - lengths < 128 fit in one byte */
+  SINGLE_BYTE_VARINT_MAX: number;
+  /** UTF-8 worst case bytes per character */
+  UTF8_MAX_BYTES_PER_CHAR: number;
+} = {
+  DEFAULT_WRITER: 65536,
+  SINGLE_BYTE_VARINT_MAX: 128,
+  UTF8_MAX_BYTES_PER_CHAR: 3,
+};
+
 export class BufferUnderflowError extends Error {
   constructor(message: string) {
     super(message);
@@ -27,9 +75,9 @@ export type TypedArrayConstructor<T extends TypedArray> = {
 export function varIntSize(value: number | bigint): number {
   let v = BigInt(value);
   let size = 1;
-  while (v >= 0x80n) {
+  while (v >= VarInt.CONTINUATION_THRESHOLD) {
     size++;
-    v >>= 7n;
+    v >>= VarInt.BITS_PER_BYTE;
   }
   return size;
 }
@@ -41,9 +89,9 @@ export function writeVarInt(
 ): number {
   let v = BigInt(value);
   let pos = offset;
-  while (v >= 0x80n) {
-    buffer[pos++] = Number((v & 0x7fn) | 0x80n);
-    v >>= 7n;
+  while (v >= VarInt.CONTINUATION_THRESHOLD) {
+    buffer[pos++] = Number((v & VarInt.DATA_MASK) | VarInt.CONTINUATION_BIT);
+    v >>= VarInt.BITS_PER_BYTE;
   }
   buffer[pos++] = Number(v);
   return pos - offset;
@@ -59,9 +107,9 @@ export function readVarInt(
     if (cursor.offset >= buffer.length)
       throw new BufferUnderflowError("Buffer underflow reading varint");
     const byte = buffer[cursor.offset++];
-    result |= (byte & 0x7f) << shift;
-    if ((byte & 0x80) === 0) break;
-    shift += 7;
+    result |= (byte & VarInt.DATA_MASK_NUM) << shift;
+    if ((byte & VarInt.CONT_BIT) === 0) break;
+    shift += VarInt.BITS_PER_BYTE_NUM;
   }
   return result;
 }
@@ -76,9 +124,9 @@ export function readVarInt64(
     if (cursor.offset >= buffer.length)
       throw new BufferUnderflowError("Buffer underflow reading varint64");
     const byte = BigInt(buffer[cursor.offset++]);
-    result |= (byte & 0x7fn) << shift;
-    if ((byte & 0x80n) === 0n) break;
-    shift += 7n;
+    result |= (byte & VarInt.DATA_MASK) << shift;
+    if ((byte & VarInt.CONTINUATION_BIT) === 0n) break;
+    shift += VarInt.BITS_PER_BYTE;
   }
   return result;
 }
@@ -88,8 +136,7 @@ export class BufferWriter {
   private offset = 0;
   private view: DataView;
 
-  constructor(initialSize = 65536) {
-    // 64KB default
+  constructor(initialSize = BufferSize.DEFAULT_WRITER) {
     this.buffer = new Uint8Array(initialSize);
     this.view = new DataView(this.buffer.buffer);
   }
@@ -134,22 +181,22 @@ export class BufferWriter {
   }
 
   writeVarint(value: number | bigint) {
-    this.ensure(10);
+    this.ensure(VarInt.MAX_BYTES_64);
     this.offset += writeVarInt(this.buffer, this.offset, value);
   }
 
   writeString(val: string) {
-    // Worst case: 3 bytes per char (UTF-8) + 5 bytes for length varint
-    const maxLen = val.length * 3;
-    this.ensure(maxLen + 5);
+    // Worst case: UTF-8 max bytes per char + varint length prefix
+    const maxLen = val.length * BufferSize.UTF8_MAX_BYTES_PER_CHAR;
+    this.ensure(maxLen + VarInt.MAX_BYTES_64);
 
-    // Reserved space for 1-byte varint (common case)
+    // Reserve 1 byte for length (common case: strings < 128 bytes)
     const { written } = TEXT_ENCODER.encodeInto(
       val,
       this.buffer.subarray(this.offset + 1, this.offset + 1 + maxLen),
     );
 
-    if (written < 128) {
+    if (written < BufferSize.SINGLE_BYTE_VARINT_MAX) {
       this.buffer[this.offset] = written;
       this.offset += 1 + written;
     } else {

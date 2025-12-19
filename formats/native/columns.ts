@@ -1,8 +1,7 @@
 import { type TypedArray } from "../shared.ts";
-export type DiscriminatorArray = Uint8Array | Uint16Array | Uint32Array;
+import { Variant } from "./constants.ts";
 
-// Variant uses 0xFF (255) as the null discriminator
-export const VARIANT_NULL_DISCRIMINATOR = 0xff;
+export type DiscriminatorArray = Uint8Array | Uint16Array | Uint32Array;
 
 const MAX_SAFE_INDEX_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
@@ -194,7 +193,7 @@ export class VariantColumn extends AbstractColumn {
     this.groups = groups;
     this.groupIndices =
       groupIndices ??
-      countAndIndexDiscriminators(discriminators, VARIANT_NULL_DISCRIMINATOR)
+      countAndIndexDiscriminators(discriminators, Variant.NULL_DISCRIMINATOR)
         .indices;
   }
 
@@ -204,7 +203,7 @@ export class VariantColumn extends AbstractColumn {
 
   get(index: number): [number, unknown] | null {
     const d = this.discriminators[index];
-    if (d === VARIANT_NULL_DISCRIMINATOR) return null;
+    if (d === Variant.NULL_DISCRIMINATOR) return null;
     return [d, this.groups.get(d)!.get(this.groupIndices[index])];
   }
 }

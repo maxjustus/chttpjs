@@ -28,6 +28,20 @@ import {
   inferType,
 } from "./shared.ts";
 
+/** Time conversion constants for Date/DateTime encoding */
+const Time = {
+  /** Milliseconds per day (24 * 60 * 60 * 1000) */
+  MS_PER_DAY: 86400000,
+  /** Milliseconds per second */
+  MS_PER_SECOND: 1000,
+} as const;
+
+/** Variant type constants */
+const VariantConst = {
+  /** Discriminator value indicating null/no value */
+  NULL_DISCRIMINATOR: 0xff,
+} as const;
+
 export {
   type ColumnDef,
   type DecodeResult,
@@ -439,11 +453,12 @@ const SCALAR_CODECS: Record<string, Codec> = {
     encode: (e, v) =>
       e.u16(
         Math.floor(
-          (v instanceof Date ? v : new Date(v as string)).getTime() / 86400000,
+          (v instanceof Date ? v : new Date(v as string)).getTime() /
+            Time.MS_PER_DAY,
         ),
       ),
     decode: (v, _, c) => {
-      const r = new Date(v.getUint16(c.offset, true) * 86400000);
+      const r = new Date(v.getUint16(c.offset, true) * Time.MS_PER_DAY);
       c.offset += 2;
       return r;
     },
@@ -452,11 +467,12 @@ const SCALAR_CODECS: Record<string, Codec> = {
     encode: (e, v) =>
       e.u32(
         Math.floor(
-          (v instanceof Date ? v : new Date(v as string)).getTime() / 1000,
+          (v instanceof Date ? v : new Date(v as string)).getTime() /
+            Time.MS_PER_SECOND,
         ),
       ),
     decode: (v, _, c) => {
-      const r = new Date(v.getUint32(c.offset, true) * 1000);
+      const r = new Date(v.getUint32(c.offset, true) * Time.MS_PER_SECOND);
       c.offset += 4;
       return r;
     },
@@ -801,14 +817,15 @@ class Date32Codec implements Codec {
   encode(e: RowBinaryEncoder, v: unknown) {
     e.i32(
       Math.floor(
-        (v instanceof Date ? v : new Date(v as string)).getTime() / 86400000,
+        (v instanceof Date ? v : new Date(v as string)).getTime() /
+          Time.MS_PER_DAY,
       ),
     );
   }
   decode(v: DataView, _: Uint8Array, c: Cursor) {
     const days = v.getInt32(c.offset, true);
     c.offset += 4;
-    return new Date(days * 86400000);
+    return new Date(days * Time.MS_PER_DAY);
   }
 }
 
@@ -883,7 +900,7 @@ class VariantCodec implements Codec {
 
   encode(e: RowBinaryEncoder, v: unknown) {
     if (v === null) {
-      e.u8(0xff);
+      e.u8(VariantConst.NULL_DISCRIMINATOR);
       return;
     }
     const val = v as { type: number; value: unknown };
@@ -893,7 +910,7 @@ class VariantCodec implements Codec {
 
   decode(v: DataView, b: Uint8Array, c: Cursor) {
     const idx = v.getUint8(c.offset++);
-    if (idx === 0xff) return null;
+    if (idx === VariantConst.NULL_DISCRIMINATOR) return null;
     const val = this.types[idx].decode(v, b, c);
     return { type: idx, value: val };
   }

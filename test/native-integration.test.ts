@@ -4,24 +4,14 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { init, insert, query, collectBytes } from "../client.ts";
-import { encodeNative, decodeNative, toArrayRows, TableBuilder, type ColumnDef } from "../formats/native/index.ts";
+import { decodeNative, toArrayRows, type ColumnDef } from "../formats/native/index.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-
-// Helper to encode rows via TableBuilder
-function encodeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
-  const builder = new TableBuilder(columns);
-  for (const row of rows) builder.appendRow(row);
-  return encodeNative(builder.finish());
-}
+import { consume, encodeNativeRows } from "./test_utils.ts";
 
 describe("Native format integration", { timeout: 120000 }, () => {
   let baseUrl: string;
   let auth: { username: string; password: string };
   const sessionId = "native_int_" + Date.now();
-
-  const consume = async (s: AsyncIterable<Uint8Array>) => {
-    for await (const _ of s) {}
-  };
 
   before(async () => {
     await init();
@@ -59,7 +49,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
       [-1, -100n, -1.5, "world", 0],
     ];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY i32 FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -91,7 +81,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
     ];
     const rows = [[1, 100], [2, null], [3, 300]];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -122,7 +112,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
     ];
     const rows = [[1, [1, 2, 3]], [2, []], [3, [42]]];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -153,7 +143,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
     ];
     const rows = [[1, { a: 1, b: 2 }], [2, {}]];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -184,7 +174,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
     ];
     const rows = [[1, [100, "a"]], [2, [200, "b"]]];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -215,7 +205,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
     const date = new Date("2024-01-15T10:30:00.123Z");
     const rows = [[1, date]];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -243,7 +233,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
     const uuid = "550e8400-e29b-41d4-a716-446655440000";
     const rows = [[uuid]];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -280,7 +270,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
       [5, "active", null],
     ];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -320,7 +310,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
       rows.push([i, `name_${i}`, i * 1.5]);
     }
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -350,7 +340,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
     ];
     const rows = [[1, [1.5, 2.5]], [2, [-10.0, 20.0]], [3, [0.0, 0.0]]];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -383,7 +373,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
     const triangle = [[0, 0], [2, 0], [1, 1], [0, 0]];
     const rows = [[1, square], [2, triangle]];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -415,7 +405,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
     const hole = [[2, 2], [8, 2], [8, 8], [2, 8], [2, 2]];
     const rows = [[1, [outerRing, hole]], [2, [outerRing]]];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -450,7 +440,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
       [4, [0, "world"]],   // String
     ];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
@@ -487,7 +477,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
       [4, "world"],
     ];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     // Use V3 format setting for Dynamic type (requires ClickHouse 25.6+)
@@ -523,7 +513,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
       [2, { user: "bob", scores: [30] }],
     ];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native SETTINGS output_format_native_use_flattened_dynamic_and_json_serialization=1`, sessionId, { baseUrl, auth }));
@@ -566,7 +556,7 @@ describe("Native format integration", { timeout: 120000 }, () => {
       [3, { name: "charlie" }],  // missing age
     ];
 
-    const encoded = encodeRows(columns, rows);
+    const encoded = encodeNativeRows(columns, rows);
     await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
     // Use V3 format setting for JSON type (requires ClickHouse 25.6+)
