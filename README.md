@@ -136,21 +136,22 @@ const data = JSON.parse(json);
 
 ## Native Format
 
-ClickHouse's internal wire format. Returns columnar data (virtual columns) rather than materializing all rows upfront.
+ClickHouse's internal wire format. Returns columnar data (RecordBatch) rather than materializing all rows upfront.
 
-### Table Construction
+### RecordBatch Construction
 
 ```ts
 import {
   insert,
   query,
-  collectBytes,
   encodeNative,
-  decodeNative,
-  tableFromArrays,
-  tableFromRows,
-  tableFromCols,
-  tableBuilder,
+  streamDecodeNative,
+  rows,
+  collectRows,
+  batchFromArrays,
+  batchFromRows,
+  batchFromCols,
+  batchBuilder,
   makeBuilder,
 } from "@maxjustus/chttp";
 
@@ -160,47 +161,53 @@ const schema = [
 ];
 
 // From columnar data (named columns)
-const table = tableFromArrays(schema, {
+const batch = batchFromArrays(schema, {
   id: new Uint32Array([1, 2, 3]),
   name: ["alice", "bob", "charlie"],
 });
 
 // From row arrays
-const table2 = tableFromRows(schema, [
+const batch2 = batchFromRows(schema, [
   [1, "alice"],
   [2, "bob"],
   [3, "charlie"],
 ]);
 
 // Row-by-row builder
-const builder = tableBuilder(schema);
+const builder = batchBuilder(schema);
 builder.appendRow([1, "alice"]);
 builder.appendRow([2, "bob"]);
 builder.appendRow([3, "charlie"]);
-const table3 = builder.finish();
+const batch3 = builder.finish();
 
 // Encode and insert
 await insert(
   "INSERT INTO t FORMAT Native",
-  encodeNative(table),
+  encodeNative(batch),
   "session",
   config,
 );
 
-// Query returns columnar data wrapped in a Table
-const bytes = await collectBytes(
-  query("SELECT * FROM t FORMAT Native", "session", config),
-);
-const result = await decodeNative(bytes);
-
-for (const row of result) {
+// Query returns columnar data as RecordBatch - stream and iterate
+for await (const row of rows(
+  streamDecodeNative(query("SELECT * FROM t FORMAT Native", "session", config)),
+)) {
   console.log(row.id, row.name);
 }
 
-// Access columns directly
-const ids = result.getColumn("id")!;
-for (let i = 0; i < ids.length; i++) {
-  console.log(ids.get(i));
+// Or collect all rows at once
+const allRows = await collectRows(
+  streamDecodeNative(query("SELECT * FROM t FORMAT Native", "session", config)),
+);
+
+// Work with batches directly for columnar access
+for await (const batch of streamDecodeNative(
+  query("SELECT * FROM t FORMAT Native", "session", config),
+)) {
+  const ids = batch.getColumn("id")!;
+  for (let i = 0; i < ids.length; i++) {
+    console.log(ids.get(i));
+  }
 }
 ```
 
@@ -217,20 +224,20 @@ const nameCol = makeBuilder("String")
   .finish();
 
 // Columns carry their type - schema is derived automatically
-const table = tableFromCols({ id: idCol, name: nameCol });
-// table.schema = [{ name: "id", type: "UInt32" }, { name: "name", type: "String" }]
+const batch = batchFromCols({ id: idCol, name: nameCol });
+// batch.schema = [{ name: "id", type: "UInt32" }, { name: "name", type: "String" }]
 ```
 
 ### Complex Types
 
 ```ts
 // Array(Int32)
-tableFromArrays([{ name: "tags", type: "Array(Int32)" }], {
+batchFromArrays([{ name: "tags", type: "Array(Int32)" }], {
   tags: [[1, 2], [3, 4, 5], [6]],
 });
 
 // Tuple(Float64, Float64) - positional
-tableFromArrays([{ name: "point", type: "Tuple(Float64, Float64)" }], {
+batchFromArrays([{ name: "point", type: "Tuple(Float64, Float64)" }], {
   point: [
     [1.0, 2.0],
     [3.0, 4.0],
@@ -238,7 +245,7 @@ tableFromArrays([{ name: "point", type: "Tuple(Float64, Float64)" }], {
 });
 
 // Tuple(x Float64, y Float64) - named tuples use objects
-tableFromArrays([{ name: "point", type: "Tuple(x Float64, y Float64)" }], {
+batchFromArrays([{ name: "point", type: "Tuple(x Float64, y Float64)" }], {
   point: [
     { x: 1.0, y: 2.0 },
     { x: 3.0, y: 4.0 },
@@ -246,33 +253,33 @@ tableFromArrays([{ name: "point", type: "Tuple(x Float64, y Float64)" }], {
 });
 
 // Map(String, Int32)
-tableFromArrays([{ name: "meta", type: "Map(String, Int32)" }], {
+batchFromArrays([{ name: "meta", type: "Map(String, Int32)" }], {
   meta: [{ a: 1, b: 2 }, new Map([["c", 3]])],
 });
 
 // Nullable(String)
-tableFromArrays([{ name: "note", type: "Nullable(String)" }], {
+batchFromArrays([{ name: "note", type: "Nullable(String)" }], {
   note: ["hello", null, "world"],
 });
 
 // Variant(String, Int64, Bool) - type inferred from values
-tableFromArrays([{ name: "val", type: "Variant(String, Int64, Bool)" }], {
+batchFromArrays([{ name: "val", type: "Variant(String, Int64, Bool)" }], {
   val: ["hello", 42n, true, null],
 });
 
 // Variant with explicit discriminators (for ambiguous cases)
-tableFromArrays(
+batchFromArrays(
   [{ name: "val", type: "Variant(String, Int64, Bool)" }],
   { val: [[0, "hello"], [1, 42n], [2, true], null] }, // [discriminator, value]
 );
 
 // Dynamic - types inferred automatically
-tableFromArrays([{ name: "dyn", type: "Dynamic" }], {
+batchFromArrays([{ name: "dyn", type: "Dynamic" }], {
   dyn: ["hello", 42, true, [1, 2, 3], null],
 });
 
 // JSON - plain objects
-tableFromArrays([{ name: "data", type: "JSON" }], {
+batchFromArrays([{ name: "data", type: "JSON" }], {
   data: [
     { a: 1, b: "x" },
     { a: 2, c: true },
@@ -292,49 +299,48 @@ const pointCol = makeBuilder("Tuple(Float64, Float64)")
 import {
   streamEncodeNative,
   streamDecodeNative,
-  streamNativeRows,
-  tableFromArrays,
-  asRows,
+  rows,
+  batchFromArrays,
 } from "@maxjustus/chttp";
 
 // Streaming decode - rows as objects (lazy)
-for await (const row of streamNativeRows(
+for await (const row of rows(
   streamDecodeNative(query("SELECT * FROM t FORMAT Native", "session", config)),
 )) {
   console.log(row.id, row.name);
 }
 
-// Or work with Table blocks directly
-for await (const table of streamDecodeNative(
+// Or work with RecordBatch blocks directly
+for await (const batch of streamDecodeNative(
   query("SELECT * FROM t FORMAT Native", "session", config),
 )) {
-  // Iterate rows from a Table block
-  for (const row of asRows(table)) {
+  // Iterate rows from a RecordBatch
+  for (const row of batch) {
     console.log(row.id, row.name);
   }
 }
 
-// Streaming insert - generate Tables
-async function* generateTables() {
+// Streaming insert - generate RecordBatches
+async function* generateBatches() {
   const schema = [
     { name: "id", type: "UInt32" },
     { name: "value", type: "Float64" },
   ];
   const batchSize = 10000;
-  for (let batch = 0; batch < 100; batch++) {
+  for (let i = 0; i < 100; i++) {
     const ids = new Uint32Array(batchSize);
     const values = new Float64Array(batchSize);
-    for (let i = 0; i < batchSize; i++) {
-      ids[i] = batch * batchSize + i;
-      values[i] = Math.random();
+    for (let j = 0; j < batchSize; j++) {
+      ids[j] = i * batchSize + j;
+      values[j] = Math.random();
     }
-    yield tableFromArrays(schema, { id: ids, value: values });
+    yield batchFromArrays(schema, { id: ids, value: values });
   }
 }
 
 await insert(
   "INSERT INTO t FORMAT Native",
-  streamEncodeNative(generateTables()),
+  streamEncodeNative(generateBatches()),
   "session",
   config,
 );
@@ -365,7 +371,7 @@ await client.connect();
 // Query - streams packets as they arrive
 for await (const packet of client.query("SELECT * FROM table")) {
   if (packet.type === "Data") {
-    for (const row of packet.table) {
+    for (const row of packet.batch) {
       console.log(row.id, row.name);
     }
   }
@@ -375,7 +381,7 @@ for await (const packet of client.query("SELECT * FROM table")) {
 await client.execute("CREATE TABLE ...");
 
 // Insert
-await client.insert("INSERT INTO table VALUES", table);
+await client.insert("INSERT INTO table VALUES", batch);
 
 client.close();
 ```
@@ -404,7 +410,7 @@ Query yields packets - handle by type:
 for await (const packet of client.query(sql, { send_logs_level: "trace" })) {
   switch (packet.type) {
     case "Data":
-      console.log(`${packet.table.rowCount} rows`);
+      console.log(`${packet.batch.rowCount} rows`);
       break;
     case "Progress":
       console.log(`${packet.progress.readRows} rows read`);
@@ -428,19 +434,18 @@ for await (const packet of client.query(sql, { send_logs_level: "trace" })) {
 Use separate connections for read and write when streaming:
 
 ```ts
+import { TcpClient, recordBatches } from "@maxjustus/chttp/tcp";
+
 const readClient = new TcpClient(options);
 const writeClient = new TcpClient(options);
 await readClient.connect();
 await writeClient.connect();
 
-// Stream from one table to another
-const tables = (async function* () {
-  for await (const packet of readClient.query("SELECT * FROM src")) {
-    if (packet.type === "Data") yield packet.table;
-  }
-})();
-
-await writeClient.insert("INSERT INTO dst VALUES", tables);
+// Stream from one table to another using recordBatches helper
+await writeClient.insert(
+  "INSERT INTO dst VALUES",
+  recordBatches(readClient.query("SELECT * FROM src")),
+);
 ```
 
 ### Cancellation
