@@ -7,23 +7,16 @@ import {
 } from "./compression.ts";
 
 export {
-  encodeRowBinary,
-  decodeRowBinary,
-  streamEncodeRowBinary,
-  streamDecodeRowBinary,
-  type ColumnDef,
-  type DecodeResult,
-  type StreamDecodeResult,
-  ClickHouseDateTime64,
-} from "./formats/rowbinary.ts";
-
-export {
   encodeNative,
-  decodeNative,
   streamEncodeNative,
   streamDecodeNative,
-  Table,
-} from "./formats/native/index.ts";
+  rows,
+  collectRows,
+  RecordBatch,
+  type ColumnDef,
+  type DecodeResult,
+  ClickHouseDateTime64,
+} from "./native/index.ts";
 
 export type Compression = "lz4" | "zstd" | "none";
 
@@ -306,90 +299,6 @@ function streamJsonEachRow(
   })();
 }
 
-/**
- * Convert objects to JSONCompactEachRowWithNames format.
- * First yields column names header, then each row as a JSON array.
- *
- * @param data - Iterable of objects to encode
- * @param columns - Column names (if omitted, extracted from first object's keys)
- *
- * @example
- * const rows = [{ id: 1, name: "foo" }, { id: 2, name: "bar" }];
- * await insert(
- *   "INSERT INTO t FORMAT JSONCompactEachRowWithNames",
- *   streamJsonCompactEachRowWithNames(rows),
- *   sessionId
- * );
- */
-function streamJsonCompactEachRowWithNames(
-  data: Iterable<Record<string, unknown>>,
-  columns?: string[],
-): Generator<Uint8Array>;
-function streamJsonCompactEachRowWithNames(
-  data: AsyncIterable<Record<string, unknown>>,
-  columns?: string[],
-): AsyncGenerator<Uint8Array>;
-function streamJsonCompactEachRowWithNames(
-  data:
-    | Iterable<Record<string, unknown>>
-    | AsyncIterable<Record<string, unknown>>,
-  columns?: string[],
-): Generator<Uint8Array> | AsyncGenerator<Uint8Array> {
-  if (Symbol.asyncIterator in data) {
-    return (async function* () {
-      let cols = columns;
-      for await (const row of data) {
-        if (!cols) {
-          cols = Object.keys(row);
-          yield encoder.encode(JSON.stringify(cols) + "\n");
-        } else if (cols === columns) {
-          yield encoder.encode(JSON.stringify(cols) + "\n");
-        }
-        yield encoder.encode(JSON.stringify(cols.map((k) => row[k])) + "\n");
-      }
-    })();
-  }
-  return (function* () {
-    let cols = columns;
-    for (const row of data as Iterable<Record<string, unknown>>) {
-      if (!cols) {
-        cols = Object.keys(row);
-        yield encoder.encode(JSON.stringify(cols) + "\n");
-      } else if (cols === columns) {
-        yield encoder.encode(JSON.stringify(cols) + "\n");
-      }
-      yield encoder.encode(JSON.stringify(cols.map((k) => row[k])) + "\n");
-    }
-  })();
-}
-
-/**
- * Parse JSONCompactEachRowWithNames format into objects.
- * First line is column names, subsequent lines are value arrays.
- *
- * @example
- * for await (const row of parseJsonCompactEachRowWithNames(query("SELECT * FROM t FORMAT JSONCompactEachRowWithNames", session, config))) {
- *   console.log(row.id, row.name);
- * }
- */
-async function* parseJsonCompactEachRowWithNames<T = Record<string, unknown>>(
-  chunks: AsyncIterable<Uint8Array>,
-): AsyncGenerator<T> {
-  let columns: string[] | null = null;
-  for await (const line of streamLines(chunks)) {
-    const parsed = JSON.parse(line) as unknown[];
-    if (!columns) {
-      columns = parsed as string[];
-      continue;
-    }
-    const obj: Record<string, unknown> = {};
-    for (let i = 0; i < columns.length; i++) {
-      obj[columns[i]] = parsed[i];
-    }
-    yield obj as T;
-  }
-}
-
 interface QueryOptions {
   baseUrl?: string;
   auth?: AuthConfig;
@@ -589,8 +498,8 @@ async function* streamText(
  * Collect all chunks into a single Uint8Array.
  *
  * @example
- * const data = await collectBytes(query("SELECT * FROM t FORMAT RowBinaryWithNamesAndTypes", session, config));
- * const result = decodeRowBinary(data);
+ * const data = await collectBytes(query("SELECT * FROM t FORMAT Native", session, config));
+ * const result = await decodeNative(data);
  */
 async function collectBytes(
   chunks: AsyncIterable<Uint8Array>,
@@ -631,8 +540,6 @@ export {
   query,
   buildReqUrl,
   streamJsonEachRow,
-  streamJsonCompactEachRowWithNames,
-  parseJsonCompactEachRowWithNames,
   streamText,
   streamLines,
   streamJsonLines,

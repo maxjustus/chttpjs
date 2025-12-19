@@ -7,11 +7,12 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { encodeNative, decodeNative, streamDecodeNative, toArrayRows, TableBuilder, type ColumnDef } from "../formats/native/index.ts";
+import { encodeNative, streamDecodeNative, RecordBatchBuilder, type ColumnDef } from "../../native/index.ts";
+import { decodeBatch, toArrayRows } from "../test_utils.ts";
 
-// Helper to encode rows via TableBuilder
+// Helper to encode rows via RecordBatchBuilder
 function encodeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
-  const builder = new TableBuilder(columns);
+  const builder = new RecordBatchBuilder(columns);
   for (const row of rows) builder.appendRow(row);
   return encodeNative(builder.finish());
 }
@@ -155,7 +156,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 
       const { columns, rows, types } = generateRows(selectedTypes, rowCount);
       const encoded = encodeRows(columns, rows);
-      const decoded = await decodeNative(encoded);
+      const decoded = await decodeBatch(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
       compareRows(rows, toArrayRows(decoded), types);
@@ -168,7 +169,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(1, 100);
       const { columns, rows, types } = generateRows(dateTypes, rowCount);
       const encoded = encodeRows(columns, rows);
-      const decoded = await decodeNative(encoded);
+      const decoded = await decodeBatch(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
       compareRows(rows, toArrayRows(decoded), types);
@@ -181,7 +182,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(1, 100);
       const { columns, rows, types } = generateRows(ipTypes, rowCount);
       const encoded = encodeRows(columns, rows);
-      const decoded = await decodeNative(encoded);
+      const decoded = await decodeBatch(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
       compareRows(rows, toArrayRows(decoded), types);
@@ -206,7 +207,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(1, 100);
       const { columns, rows, types } = generateRows([nullableType], rowCount);
       const encoded = encodeRows(columns, rows);
-      const decoded = await decodeNative(encoded);
+      const decoded = await decodeBatch(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
       compareRows(rows, toArrayRows(decoded), types);
@@ -238,7 +239,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(1, 50);
       const { columns, rows, types } = generateRows([arrayType], rowCount);
       const encoded = encodeRows(columns, rows);
-      const decoded = await decodeNative(encoded);
+      const decoded = await decodeBatch(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
       compareRows(rows, toArrayRows(decoded), types);
@@ -270,7 +271,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(1, 50);
       const { columns, rows, types } = generateRows([tupleType], rowCount);
       const encoded = encodeRows(columns, rows);
-      const decoded = await decodeNative(encoded);
+      const decoded = await decodeBatch(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
       compareRows(rows, toArrayRows(decoded), types);
@@ -326,7 +327,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(1, 30);
       const { columns, rows, types } = generateRows([mapType], rowCount);
       const encoded = encodeRows(columns, rows);
-      const decoded = await decodeNative(encoded);
+      const decoded = await decodeBatch(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
       compareRows(rows, toArrayRows(decoded), types);
@@ -344,7 +345,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 
       const { columns, rows, types } = generateRows(selectedTypes, rowCount);
       const encoded = encodeRows(columns, rows);
-      const decoded = await decodeNative(encoded);
+      const decoded = await decodeBatch(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
       compareRows(rows, toArrayRows(decoded), types);
@@ -398,7 +399,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const rowCount = randomInt(10, 200);
       const { columns, rows, types } = generateRows([lcType], rowCount);
       const encoded = encodeRows(columns, rows);
-      const decoded = await decodeNative(encoded);
+      const decoded = await decodeBatch(encoded);
 
       assert.deepStrictEqual(decoded.columns, columns);
       compareRows(rows, toArrayRows(decoded), types);
@@ -415,7 +416,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       {
         const { columns } = generateRows(selectedTypes, 0);
         const encoded = encodeRows(columns, []);
-        const decoded = await decodeNative(encoded);
+        const decoded = await decodeBatch(encoded);
         assert.deepStrictEqual(decoded.columns, columns);
         assert.strictEqual(decoded.rowCount, 0);
       }
@@ -424,7 +425,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       {
         const { columns, rows, types } = generateRows(selectedTypes, 1);
         const encoded = encodeRows(columns, rows);
-        const decoded = await decodeNative(encoded);
+        const decoded = await decodeBatch(encoded);
         assert.deepStrictEqual(decoded.columns, columns);
         compareRows(rows, toArrayRows(decoded), types);
       }
@@ -436,8 +437,8 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 // Integration Fuzz Tests (requires ClickHouse)
 // ============================================================================
 
-import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { init, insert, query, collectText } from "../client.ts";
+import { startClickHouse, stopClickHouse } from "../setup.ts";
+import { init, insert, query, collectText } from "../../client.ts";
 
 describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
   it("round-trips random data N times", async () => {

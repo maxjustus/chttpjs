@@ -7,7 +7,7 @@ import {
   TEXT_DECODER,
   type DecodeOptions,
   type TypedArray,
-} from "../shared.ts";
+} from "./types.ts";
 
 /**
  * VarInt (LEB128) encoding constants.

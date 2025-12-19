@@ -2,8 +2,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert";
 import { TcpClient } from "../client.ts";
-import { asRows } from "../../formats/native/index.ts";
-import { tableFromRows } from "../../formats/native/table.ts";
+import { batchFromRows } from "../../native/table.ts";
 
 describe("TCP Client Multi-block Integration", () => {
   const options = {
@@ -33,7 +32,7 @@ describe("TCP Client Multi-block Integration", () => {
       for await (const packet of stream) {
         if (packet.type === "Data") {
           blockCount++;
-          totalRows += packet.table.rowCount;
+          totalRows += packet.batch.rowCount;
         }
       }
       
@@ -64,7 +63,7 @@ describe("TCP Client Multi-block Integration", () => {
             const id = BigInt(i * rowsPerBlock + j);
             rows.push([id, `name_${id}`]);
           }
-          yield tableFromRows([
+          yield batchFromRows([
             { name: "id", type: "UInt64" },
             { name: "name", type: "String" }
           ], rows);
@@ -79,7 +78,7 @@ describe("TCP Client Multi-block Integration", () => {
       let totalCount = 0n;
       for await (const packet of stream) {
         if (packet.type === "Data") {
-          for (const row of asRows(packet.table)) {
+          for (const row of packet.batch.rows()) {
             totalCount = row["count()"] as bigint;
           }
         }

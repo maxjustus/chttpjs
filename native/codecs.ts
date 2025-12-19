@@ -19,7 +19,7 @@ import {
   extractDecimalScale,
   formatScaledBigInt,
   parseDecimalToScaledBigInt,
-} from "../shared.ts";
+} from "./types.ts";
 
 import {
   BufferWriter,

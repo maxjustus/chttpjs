@@ -9,9 +9,9 @@ import {
   CLIENT_VERSION,
   DBMS_PARALLEL_REPLICAS_PROTOCOL_VERSION,
 } from "./types.ts";
-import { BlockInfoField } from "../formats/native/constants.ts";
+import { BlockInfoField } from "../native/constants.ts";
 import { encodeBlock, Method, type MethodCode } from "../compression.ts";
-import { BufferWriter } from "../formats/native/io.ts";
+import { BufferWriter } from "../native/io.ts";
 
 /**
  * Handles encoding and writing ClickHouse protocol packets.

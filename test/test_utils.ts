@@ -1,5 +1,12 @@
 import assert from "node:assert";
-import { TableBuilder, encodeNative, type ColumnDef } from "../formats/native/index.ts";
+import {
+  RecordBatchBuilder,
+  RecordBatch,
+  encodeNative,
+  streamDecodeNative,
+  type ColumnDef,
+  type DecodeOptions,
+} from "../native/index.ts";
 
 // Async iterable helpers
 export async function consume(s: AsyncIterable<unknown>): Promise<void> {
@@ -38,9 +45,43 @@ export function assertArrayEqual(
 
 // Encoding helpers
 export function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
-  const builder = new TableBuilder(columns);
+  const builder = new RecordBatchBuilder(columns);
   for (const row of rows) builder.appendRow(row);
   return encodeNative(builder.finish());
+}
+
+/**
+ * Convert a batch to array-of-arrays format (for test assertions).
+ */
+export function toArrayRows(batch: RecordBatch): unknown[][] {
+  const { columnData, rowCount } = batch;
+  const numCols = columnData.length;
+  const rows: unknown[][] = new Array(rowCount);
+  for (let i = 0; i < rowCount; i++) {
+    const row = new Array(numCols);
+    for (let j = 0; j < numCols; j++) {
+      row[j] = columnData[j].get(i);
+    }
+    rows[i] = row;
+  }
+  return rows;
+}
+
+/**
+ * Decode a single Native block from bytes. Convenience for tests.
+ */
+export async function decodeBatch(data: Uint8Array, options?: DecodeOptions): Promise<RecordBatch> {
+  const batches: RecordBatch[] = [];
+  for await (const batch of streamDecodeNative(toAsync([data]), options)) {
+    batches.push(batch);
+  }
+  if (batches.length === 0) {
+    return RecordBatch.from({ columns: [], columnData: [], rowCount: 0 });
+  }
+  if (batches.length === 1) {
+    return batches[0];
+  }
+  throw new Error("decodeBatch: expected single batch, got multiple");
 }
 
 export function generateSessionId(prefix: string): string {

@@ -1,24 +1,30 @@
-// Benchmark: Native vs RowBinary vs JSONEachRow
+// Benchmark: Native vs JSONEachRow
 //
-// Tests encoding/decoding performance for all formats with various data types.
+// Tests encoding/decoding performance for both formats with various data types.
 
 import { init, encodeBlock, Method } from "../compression.ts";
 import {
-  encodeRowBinary,
-  decodeRowBinary,
-  streamDecodeRowBinary,
-  streamEncodeRowBinary,
-  type ColumnDef,
-} from "../formats/rowbinary.ts";
-import {
   encodeNative,
-  decodeNative,
-  tableFromRows,
-  Table,
-} from "../formats/native/index.ts";
+  streamEncodeNative,
+  streamDecodeNative,
+  batchFromRows,
+  RecordBatch,
+  type ColumnDef,
+} from "../native/index.ts";
 
 function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
-  return encodeNative(tableFromRows(columns, rows));
+  return encodeNative(batchFromRows(columns, rows));
+}
+
+async function* toAsync(data: Uint8Array[]): AsyncIterable<Uint8Array> {
+  for (const chunk of data) yield chunk;
+}
+
+async function decodeBatch(data: Uint8Array): Promise<RecordBatch> {
+  for await (const batch of streamDecodeNative(toAsync([data]))) {
+    return batch;
+  }
+  return RecordBatch.from({ columns: [], columnData: [], rowCount: 0 });
 }
 
 // --- Benchmark infrastructure ---
@@ -100,16 +106,21 @@ async function collectChunks(
   return result;
 }
 
-async function collectRowBinary(
+async function collectNative(
   chunks: AsyncIterable<Uint8Array>,
-): Promise<{ columns: ColumnDef[]; rows: unknown[][] }> {
-  let columns: ColumnDef[] = [];
-  const rows: unknown[][] = [];
-  for await (const batch of streamDecodeRowBinary(chunks)) {
-    columns = batch.columns;
-    rows.push(...batch.rows);
+): Promise<RecordBatch> {
+  const blocks: RecordBatch[] = [];
+  for await (const block of streamDecodeNative(chunks)) {
+    blocks.push(block);
   }
-  return { columns, rows };
+  if (blocks.length === 0) {
+    return RecordBatch.from({ columns: [], columnData: [], rowCount: 0 });
+  }
+  if (blocks.length === 1) {
+    return blocks[0];
+  }
+  // Return first block for benchmark
+  return blocks[0];
 }
 
 // --- Scenario types ---
@@ -124,10 +135,10 @@ interface Scenario {
 
 interface ScenarioResult {
   name: string;
-  encode: { json: number; rb: number; native: number };
-  decode: { json: number; rb: number; native: number };
-  size: { json: number; rb: number; native: number };
-  compressed: { json: number; rb: number; native: number };
+  encode: { json: number; native: number };
+  decode: { json: number; native: number };
+  size: { json: number; native: number };
+  compressed: { json: number; native: number };
 }
 
 async function runScenario(
@@ -139,12 +150,11 @@ async function runScenario(
 
   // Pre-encode
   const jsonEncoded = encodeJsonEachRow(scenario.jsonData);
-  const rbEncoded = encodeRowBinary(scenario.columns, scenario.rowsArray);
   const nativeEncoded = encodeNativeRows(scenario.columns, scenario.rowsArray);
 
   const pct = (val: number, base: number) => ((val / base) * 100).toFixed(1);
   console.log(
-    `  Encoded sizes: JSON=${jsonEncoded.length}, RowBinary=${rbEncoded.length} (${pct(rbEncoded.length, jsonEncoded.length)}%), Native=${nativeEncoded.length} (${pct(nativeEncoded.length, jsonEncoded.length)}%)\n`,
+    `  Encoded sizes: JSON=${jsonEncoded.length}, Native=${nativeEncoded.length} (${pct(nativeEncoded.length, jsonEncoded.length)}%)\n`,
   );
 
   // Encoding
@@ -156,13 +166,6 @@ async function runScenario(
     iterations,
   );
   console.log(formatResult(jsonEnc, rows));
-  const rbEnc = bench(
-    "RowBinary encode",
-    () => encodeRowBinary(scenario.columns, scenario.rowsArray),
-    50,
-    iterations,
-  );
-  console.log(formatResult(rbEnc, rows));
   const nativeEnc = bench(
     "Native encode",
     () => encodeNativeRows(scenario.columns, scenario.rowsArray),
@@ -180,17 +183,10 @@ async function runScenario(
     iterations,
   );
   console.log(formatResult(jsonDec, rows));
-  const rbDec = bench(
-    "RowBinary decode",
-    () => decodeRowBinary(rbEncoded),
-    50,
-    iterations,
-  );
-  console.log(formatResult(rbDec, rows));
   const nativeDec = await benchAsync(
     "Native decode",
     async () => {
-      await decodeNative(nativeEncoded);
+      await decodeBatch(nativeEncoded);
     },
     50,
     iterations,
@@ -199,10 +195,9 @@ async function runScenario(
 
   // Compression
   const jsonComp = encodeBlock(jsonEncoded, Method.LZ4);
-  const rbComp = encodeBlock(rbEncoded, Method.LZ4);
   const nativeComp = encodeBlock(nativeEncoded, Method.LZ4);
   console.log(
-    `\nCompressed sizes: JSON+LZ4=${jsonComp.length}, RowBinary+LZ4=${rbComp.length} (${pct(rbComp.length, jsonComp.length)}%), Native+LZ4=${nativeComp.length} (${pct(nativeComp.length, jsonComp.length)}%)`,
+    `\nCompressed sizes: JSON+LZ4=${jsonComp.length}, Native+LZ4=${nativeComp.length} (${pct(nativeComp.length, jsonComp.length)}%)`,
   );
 
   // Full path
@@ -214,17 +209,6 @@ async function runScenario(
     iterations,
   );
   console.log(formatResult(jsonFull, rows));
-  const rbFull = bench(
-    "RowBinary + LZ4",
-    () =>
-      encodeBlock(
-        encodeRowBinary(scenario.columns, scenario.rowsArray),
-        Method.LZ4,
-      ),
-    50,
-    iterations,
-  );
-  console.log(formatResult(rbFull, rows));
   const nativeFull = bench(
     "Native + LZ4",
     () =>
@@ -241,16 +225,14 @@ async function runScenario(
 
   return {
     name: scenario.name,
-    encode: { json: jsonEnc.ms, rb: rbEnc.ms, native: nativeEnc.ms },
-    decode: { json: jsonDec.ms, rb: rbDec.ms, native: nativeDec.ms },
+    encode: { json: jsonEnc.ms, native: nativeEnc.ms },
+    decode: { json: jsonDec.ms, native: nativeDec.ms },
     size: {
       json: jsonEncoded.length,
-      rb: rbEncoded.length,
       native: nativeEncoded.length,
     },
     compressed: {
       json: jsonComp.length,
-      rb: rbComp.length,
       native: nativeComp.length,
     },
   };
@@ -558,34 +540,30 @@ async function main() {
 
   // Summary
   console.log("=== Summary (speedup vs JSON) ===\n");
-  const fmtSpeed = (json: number, rb: number, native: number) =>
-    `RB ${(json / rb).toFixed(2)}x, Native ${(json / native).toFixed(2)}x`;
-  const fmtSize = (json: number, rb: number, native: number) =>
-    `RB ${(json / rb).toFixed(2)}x, Native ${(json / native).toFixed(2)}x smaller`;
+  const fmtSpeed = (json: number, native: number) =>
+    `Native ${(json / native).toFixed(2)}x`;
+  const fmtSize = (json: number, native: number) =>
+    `Native ${(json / native).toFixed(2)}x smaller`;
 
   for (const r of results) {
     console.log(`${r.name}:`);
-    console.log(
-      `  Encode: ${fmtSpeed(r.encode.json, r.encode.rb, r.encode.native)}`,
-    );
-    console.log(
-      `  Decode: ${fmtSpeed(r.decode.json, r.decode.rb, r.decode.native)}`,
-    );
-    console.log(`  Size:   ${fmtSize(r.size.json, r.size.rb, r.size.native)}`);
-    console.log(
-      `  +LZ4:   ${fmtSize(r.compressed.json, r.compressed.rb, r.compressed.native)}`,
-    );
+    console.log(`  Encode: ${fmtSpeed(r.encode.json, r.encode.native)}`);
+    console.log(`  Decode: ${fmtSpeed(r.decode.json, r.decode.native)}`);
+    console.log(`  Size:   ${fmtSize(r.size.json, r.size.native)}`);
+    console.log(`  +LZ4:   ${fmtSize(r.compressed.json, r.compressed.native)}`);
     console.log("");
   }
 
-  // Streaming benchmarks (only for simple data)
-  console.log("=== Streaming vs Sync (Simple Data) ===\n");
-  const simpleRbEncoded = encodeRowBinary(simple.columns, simple.rows);
+  // Streaming benchmarks for Native
+  console.log("=== Native Streaming vs Sync (Simple Data) ===\n");
+  const simpleNativeEncoded = encodeNativeRows(simple.columns, simple.rows);
 
   console.log("Decoding (sync vs streaming):");
-  const syncDec = bench(
+  const syncDec = await benchAsync(
     "Sync decode",
-    () => decodeRowBinary(simpleRbEncoded),
+    async () => {
+      await decodeBatch(simpleNativeEncoded);
+    },
     50,
     ITERATIONS,
   );
@@ -594,8 +572,8 @@ async function main() {
   const stream1 = await benchAsync(
     "Stream decode (1 chunk)",
     async () => {
-      await collectRowBinary(
-        chunkedStream(simpleRbEncoded, simpleRbEncoded.length),
+      await collectNative(
+        chunkedStream(simpleNativeEncoded, simpleNativeEncoded.length),
       );
     },
     50,
@@ -606,7 +584,7 @@ async function main() {
   const stream64k = await benchAsync(
     "Stream decode (64KB chunks)",
     async () => {
-      await collectRowBinary(chunkedStream(simpleRbEncoded, 64 * 1024));
+      await collectNative(chunkedStream(simpleNativeEncoded, 64 * 1024));
     },
     50,
     ITERATIONS,
@@ -616,7 +594,7 @@ async function main() {
   const stream4k = await benchAsync(
     "Stream decode (4KB chunks)",
     async () => {
-      await collectRowBinary(chunkedStream(simpleRbEncoded, 4 * 1024));
+      await collectNative(chunkedStream(simpleNativeEncoded, 4 * 1024));
     },
     50,
     ITERATIONS,
@@ -626,16 +604,20 @@ async function main() {
   console.log("\nEncoding (sync vs streaming):");
   const syncEnc = bench(
     "Sync encode",
-    () => encodeRowBinary(simple.columns, simple.rows),
+    () => encodeNativeRows(simple.columns, simple.rows),
     50,
     ITERATIONS,
   );
   console.log(formatResult(syncEnc, ROWS));
 
+  async function* batchGenerator() {
+    yield batchFromRows(simple.columns, simple.rows);
+  }
+
   const streamEnc = await benchAsync(
     "Stream encode",
     async () => {
-      await collectChunks(streamEncodeRowBinary(simple.columns, simple.rows));
+      await collectChunks(streamEncodeNative(batchGenerator()));
     },
     50,
     ITERATIONS,
@@ -670,7 +652,7 @@ async function main() {
   console.log(formatResult(nativeRowEnc, ROWS));
   const nativeColEnc = bench(
     "Native (TypedArray columnar)",
-    () => encodeNative(Table.fromColumnar(columnar.columns, columnar.columnar)),
+    () => encodeNative(RecordBatch.fromColumnar(columnar.columns, columnar.columnar)),
     50,
     ITERATIONS,
   );

@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 /**
- * Profiling tool for Native/RowBinary/JSON formats.
+ * Profiling tool for Native/JSON formats.
  *
  * Usage: scripts/profile.ts [options]
  * Run with -h for help.
  */
 
 import { parseArgs } from "node:util";
-import { encodeRowBinary, decodeRowBinary, type ColumnDef } from "../formats/rowbinary.ts";
-import { encodeNative, decodeNative, tableFromRows, Table } from "../formats/native/index.ts";
+import { encodeNative, streamDecodeNative, batchFromRows, RecordBatch, collectRows, type ColumnDef } from "../native/index.ts";
 
 function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
-  return encodeNative(tableFromRows(columns, rows));
+  return encodeNative(batchFromRows(columns, rows));
+}
+
+async function* toAsync<T>(iter: Iterable<T>): AsyncIterable<T> {
+  for (const item of iter) yield item;
 }
 
 const DATA_TYPES = ["mixed", "numeric", "strings", "complex", "full", "bench-complex", "variant", "dynamic", "json"] as const;
@@ -36,7 +39,7 @@ Profile format encode/decode performance.
 Usage: scripts/profile.ts [options]
 
 Options:
-  -f, --format <fmt>      Format: native, rowbinary, json (default: native)
+  -f, --format <fmt>      Format: native, json (default: native)
   -o, --operation <op>    Operation: encode, decode (default: decode)
   -d, --data <type>       Data type (default: mixed)
   -r, --rows <n>          Row count (default: 10000)
@@ -69,7 +72,7 @@ const rowCount = parseInt(values.rows!, 10);
 const iterations = parseInt(values.iterations!, 10);
 const columnar = values.columnar!;
 
-if (!["native", "rowbinary", "json"].includes(format)) {
+if (!["native", "json"].includes(format)) {
   console.error(`Unknown format: ${format}`); process.exit(1);
 }
 if (!["encode", "decode"].includes(operation)) {
@@ -319,18 +322,14 @@ async function main() {
 
   // Pre-encode for decode
   const encNative = encodeNativeRows(columns, rows);
-  const encRowBin = encodeRowBinary(columns, rows);
   const encJson = encodeJson(objects);
 
   const run = async () => {
     if (format === "native") {
       if (operation === "encode") {
-        if (columnar) encodeNative(Table.fromColumnar(columns, columnarData));
+        if (columnar) encodeNative(RecordBatch.fromColumnar(columns, columnarData));
         else encodeNativeRows(columns, rows);
-      } else await decodeNative(encNative);
-    } else if (format === "rowbinary") {
-      if (operation === "encode") encodeRowBinary(columns, rows);
-      else decodeRowBinary(encRowBin);
+      } else await collectRows(streamDecodeNative(toAsync([encNative])));
     } else {
       if (operation === "encode") encodeJson(objects);
       else decodeJson(encJson);

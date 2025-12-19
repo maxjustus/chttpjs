@@ -1,5 +1,5 @@
 /**
- * Shared utilities for Native and RowBinary format codecs.
+ * Shared utilities for Native format codec.
  */
 
 export type TypedArray =

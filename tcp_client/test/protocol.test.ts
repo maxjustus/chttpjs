@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert";
 import { TcpClient } from "../client.ts";
-import { Table } from "../../formats/native/index.ts";
+import { RecordBatch } from "../../native/table.ts";
 
 describe("TCP Client Protocol Features", () => {
   const options = {
@@ -20,7 +20,7 @@ describe("TCP Client Protocol Features", () => {
       for await (const packet of client.query(
         "SELECT count() as cnt FROM numbers(100) GROUP BY number % 10 WITH TOTALS"
       )) {
-        if (packet.type === "Data") dataRows += packet.table.rowCount;
+        if (packet.type === "Data") dataRows += packet.batch.rowCount;
         if (packet.type === "Totals") gotTotals = true;
       }
       assert.ok(gotTotals, "Should receive Totals packet");
@@ -53,7 +53,7 @@ describe("TCP Client Protocol Features", () => {
     try {
       let rows = 0;
       for await (const packet of client.query("SELECT * FROM numbers(1000)")) {
-        if (packet.type === "Data") rows += packet.table.rowCount;
+        if (packet.type === "Data") rows += packet.batch.rowCount;
       }
       assert.strictEqual(rows, 1000, "Should receive all rows with ZSTD compression");
     } finally {
@@ -67,7 +67,7 @@ describe("TCP Client Protocol Features", () => {
     try {
       let rows = 0;
       for await (const packet of client.query("SELECT * FROM numbers(1000)")) {
-        if (packet.type === "Data") rows += packet.table.rowCount;
+        if (packet.type === "Data") rows += packet.batch.rowCount;
       }
       assert.strictEqual(rows, 1000, "Should receive all rows with LZ4 compression");
     } finally {
@@ -82,7 +82,7 @@ describe("TCP Client Protocol Features", () => {
       const tableName = `test_insert_lz4_${Date.now()}`;
       await client.execute(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
 
-      const table = Table.fromColumnar(
+      const table = RecordBatch.fromColumnar(
         [{ name: "id", type: "UInt32" }, { name: "val", type: "String" }],
         [new Uint32Array([1, 2, 3]), ["a", "b", "c"]]
       );
@@ -90,7 +90,7 @@ describe("TCP Client Protocol Features", () => {
 
       let rows = 0;
       for await (const packet of client.query(`SELECT * FROM ${tableName} ORDER BY id`)) {
-        if (packet.type === "Data") rows += packet.table.rowCount;
+        if (packet.type === "Data") rows += packet.batch.rowCount;
       }
       assert.strictEqual(rows, 3, "Should have inserted 3 rows with LZ4 compression");
 
@@ -107,7 +107,7 @@ describe("TCP Client Protocol Features", () => {
       const tableName = `test_insert_zstd_${Date.now()}`;
       await client.execute(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
 
-      const table = Table.fromColumnar(
+      const table = RecordBatch.fromColumnar(
         [{ name: "id", type: "UInt32" }, { name: "val", type: "String" }],
         [new Uint32Array([1, 2, 3]), ["a", "b", "c"]]
       );
@@ -115,7 +115,7 @@ describe("TCP Client Protocol Features", () => {
 
       let rows = 0;
       for await (const packet of client.query(`SELECT * FROM ${tableName} ORDER BY id`)) {
-        if (packet.type === "Data") rows += packet.table.rowCount;
+        if (packet.type === "Data") rows += packet.batch.rowCount;
       }
       assert.strictEqual(rows, 3, "Should have inserted 3 rows with ZSTD compression");
 
@@ -135,7 +135,7 @@ describe("TCP Client Protocol Features", () => {
         "SELECT * FROM numbers(10)",
         { max_threads: 2, log_queries: false }
       )) {
-        if (packet.type === "Data") rows += packet.table.rowCount;
+        if (packet.type === "Data") rows += packet.batch.rowCount;
       }
       assert.strictEqual(rows, 10, "Should work with typed settings");
     } finally {
@@ -217,7 +217,7 @@ describe("TCP Client Protocol Features", () => {
       // Connection should work with TCP keep-alive enabled
       let rows = 0;
       for await (const packet of client.query("SELECT 1")) {
-        if (packet.type === "Data") rows += packet.table.rowCount;
+        if (packet.type === "Data") rows += packet.batch.rowCount;
       }
       assert.strictEqual(rows, 1);
     } finally {
@@ -235,7 +235,7 @@ describe("TCP Client Protocol Features", () => {
       await client.connect();
       let rows = 0;
       for await (const packet of client.query("SELECT 1")) {
-        if (packet.type === "Data") rows += packet.table.rowCount;
+        if (packet.type === "Data") rows += packet.batch.rowCount;
       }
       assert.strictEqual(rows, 1);
     } catch (err: any) {
@@ -260,8 +260,8 @@ describe("TCP Client Protocol Features", () => {
         {},
         { params: { value: 42 } }
       )) {
-        if (packet.type === "Data" && packet.table.rowCount > 0) {
-          result = packet.table.getColumn("v")?.get(0) as bigint;
+        if (packet.type === "Data" && packet.batch.rowCount > 0) {
+          result = packet.batch.getColumn("v")?.get(0) as bigint;
         }
       }
       assert.strictEqual(result, 42n);
@@ -280,8 +280,8 @@ describe("TCP Client Protocol Features", () => {
         {},
         { params: { name: "hello world" } }
       )) {
-        if (packet.type === "Data" && packet.table.rowCount > 0) {
-          result = packet.table.getColumn("s")?.get(0) as string;
+        if (packet.type === "Data" && packet.batch.rowCount > 0) {
+          result = packet.batch.getColumn("s")?.get(0) as string;
         }
       }
       assert.strictEqual(result, "hello world");
@@ -298,7 +298,7 @@ describe("TCP Client Protocol Features", () => {
       // Verify connection works
       let rows = 0;
       for await (const packet of client.query("SELECT 1")) {
-        if (packet.type === "Data") rows += packet.table.rowCount;
+        if (packet.type === "Data") rows += packet.batch.rowCount;
       }
       assert.strictEqual(rows, 1);
     }

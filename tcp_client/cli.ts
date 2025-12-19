@@ -15,7 +15,6 @@
 
 import * as readline from "node:readline";
 import { TcpClient } from "./client.ts";
-import { asRows } from "../formats/native/index.ts";
 import type { Packet } from "./types.ts";
 
 const options = {
@@ -46,10 +45,10 @@ function formatPacket(packet: Packet): Record<string, unknown> {
     case "Data":
     case "Totals":
     case "Extremes": {
-      const rows = [...asRows(packet.table)];
+      const rows = [...packet.batch.rows()].map(r => r.toObject());
       return {
         type: packet.type,
-        columns: packet.table.columns,
+        columns: packet.batch.columns,
         rows: rows,
       };
     }

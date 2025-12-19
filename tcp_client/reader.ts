@@ -1,9 +1,9 @@
 
-import { TEXT_DECODER } from "../formats/shared.ts";
+import { TEXT_DECODER } from "../native/types.ts";
 import { decodeBlock } from "../compression.ts";
 import { ClickHouseException } from "./types.ts";
-import { readVarInt64, BufferUnderflowError } from "../formats/native/io.ts";
-import { Compression } from "../formats/native/constants.ts";
+import { readVarInt64, BufferUnderflowError } from "../native/io.ts";
+import { Compression } from "../native/constants.ts";
 
 /**
  * A streaming byte reader that handles async buffering and optional ClickHouse compression.

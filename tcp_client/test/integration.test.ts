@@ -2,8 +2,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert";
 import { TcpClient } from "../client.ts";
-import { tableFromRows } from "../../formats/native/table.ts";
-import { asRows } from "../../formats/native/index.ts";
+import { batchFromRows } from "../../native/table.ts";
 
 describe("TCP Client Integration", () => {
   const options = {
@@ -21,7 +20,7 @@ describe("TCP Client Integration", () => {
       let rowsFound = 0;
       for await (const packet of stream) {
         if (packet.type === "Data") {
-          rowsFound += packet.table.rowCount;
+          rowsFound += packet.batch.rowCount;
         }
       }
       assert.strictEqual(rowsFound, 1);
@@ -37,7 +36,7 @@ describe("TCP Client Integration", () => {
       const tableName = `test_tcp_insert_${Date.now()}`;
       await client.execute(`CREATE TABLE ${tableName} (id UInt64, name String) ENGINE = Memory`);
       
-      const table = tableFromRows([
+      const batch = batchFromRows([
         { name: "id", type: "UInt64" },
         { name: "name", type: "String" }
       ], [
@@ -45,15 +44,15 @@ describe("TCP Client Integration", () => {
         [2n, "Bob"]
       ]);
 
-      await client.insert(`INSERT INTO ${tableName} VALUES`, table);
-      
+      await client.insert(`INSERT INTO ${tableName} VALUES`, batch);
+
       // Verify
       const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`);
       const allRows: any[] = [];
       for await (const packet of stream) {
         if (packet.type === "Data") {
-          for (const row of asRows(packet.table)) {
-            allRows.push(row);
+          for (const row of packet.batch.rows()) {
+            allRows.push(row.toObject());
           }
         }
       }
@@ -75,7 +74,7 @@ describe("TCP Client Integration", () => {
       const stream = client.query("SELECT * FROM system.numbers LIMIT 100");
       let count = 0;
       for await (const packet of stream) {
-        if (packet.type === "Data") count += packet.table.rowCount;
+        if (packet.type === "Data") count += packet.batch.rowCount;
       }
       assert.strictEqual(count, 100);
     } finally {

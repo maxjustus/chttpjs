@@ -132,152 +132,6 @@ const json = await collectText(
   query("SELECT * FROM t FORMAT JSON", session, config),
 );
 const data = JSON.parse(json);
-
-// Binary formats (RowBinary, etc.)
-const bytes = await collectBytes(
-  query("SELECT * FROM t FORMAT RowBinaryWithNamesAndTypes", session, config),
-);
-```
-
-## RowBinary Format
-
-Binary format that's ~7x faster to encode than JSON for simple data, with ~3x smaller payloads. Uses `RowBinaryWithNamesAndTypes` format (self-describing with column names and types in header).
-
-```ts
-import { insert, encodeRowBinary, type ColumnDef } from "@maxjustus/chttp";
-
-const columns: ColumnDef[] = [
-  { name: "id", type: "UInt32" },
-  { name: "name", type: "String" },
-  { name: "value", type: "Float64" },
-];
-
-const rows = [
-  [1, "alice", 1.5],
-  [2, "bob", 2.5],
-];
-
-const data = encodeRowBinary(columns, rows);
-
-await insert(
-  "INSERT INTO table FORMAT RowBinaryWithNamesAndTypes",
-  data,
-  "session123",
-  config,
-);
-```
-
-Supported types:
-
-- Integers: `Int8`-`Int64`, `UInt8`-`UInt64`, `Int128`, `UInt128`, `Int256`, `UInt256`
-- Floats: `Float32`, `Float64`
-- Decimals: `Decimal32(P,S)`, `Decimal64(P,S)`, `Decimal128(P,S)`, `Decimal256(P,S)`
-- Strings: `String`, `FixedString(N)`
-- Date/Time: `Date`, `Date32`, `DateTime`, `DateTime64(precision)`
-- Other: `Bool`, `UUID`, `IPv4`, `IPv6`, `Enum8(...)`, `Enum16(...)`
-- Geo: `Point`, `Ring`, `Polygon`, `MultiPolygon`
-- Containers: `Nullable(T)`, `Array(T)`, `Tuple(T1, T2, ...)`, `Map(K, V)`, `Variant(T1, T2, ...)`
-- Self-describing: `Dynamic`, `JSON`, `Object('json')`
-
-Types can be arbitrarily nested: `Tuple(String, Array(Int32), Map(String, Float64))`.
-
-Typed arrays (`Int32Array`, `Float64Array`, etc.) are supported for array columns. Maps accept JS objects or `Map` instances. BigInt values are used for `Int128`/`UInt128`/`Int256`/`UInt256`. Decimal types return strings for precision preservation.
-
-Named tuples (`Tuple(a Int32, b String)`) encode from and decode to JS objects with matching field names.
-
-### Dynamic Type
-
-The `Dynamic` type carries its own type information. You can pass plain JS values (type is inferred) or explicit `{type, value}` objects:
-
-```ts
-// Inferred types
-const rows = [
-  [42], // -> Int64
-  [3.14], // -> Float64
-  ["hello"], // -> String
-  [true], // -> Bool
-  [new Date()], // -> DateTime64(3)
-  [[1, 2, 3]], // -> Array(Int64)
-];
-
-// Explicit types (for anything not auto-inferred)
-const rows = [
-  [{ type: "UInt8", value: 255 }],
-  [{ type: "Decimal64(18, 4)", value: "123.4567" }],
-];
-```
-
-### Streaming Insert
-
-For large inserts, use `streamEncodeRowBinary` to generate chunks on demand:
-
-```ts
-import {
-  insert,
-  streamEncodeRowBinary,
-  type ColumnDef,
-} from "@maxjustus/chttp";
-
-const columns: ColumnDef[] = [
-  { name: "id", type: "UInt32" },
-  { name: "value", type: "Float64" },
-];
-
-async function* generateRows() {
-  for (let i = 0; i < 1000000; i++) {
-    yield [i, Math.random()];
-  }
-}
-
-await insert(
-  "INSERT INTO table FORMAT RowBinaryWithNamesAndTypes",
-  streamEncodeRowBinary(columns, generateRows()),
-  "session123",
-  config,
-);
-```
-
-Options:
-
-- `chunkSize`: Target bytes per yielded chunk (default 64KB). Larger = fewer chunks, smaller = lower memory.
-- `includeHeader`: Emit column names/types in first chunk (default true). Set false if appending to existing stream.
-
-### Streaming Select
-
-Use `streamDecodeRowBinary` to decode rows as they arrive (yields batches per chunk):
-
-```ts
-import { query, streamDecodeRowBinary } from "@maxjustus/chttp";
-
-const stream = query(
-  "SELECT * FROM table FORMAT RowBinaryWithNamesAndTypes",
-  "session123",
-  config,
-);
-
-for await (const { columns, rows } of streamDecodeRowBinary(stream)) {
-  for (const row of rows) {
-    console.log(row);
-  }
-}
-```
-
-### Buffered Decode
-
-For smaller results, buffer the entire response:
-
-```ts
-import { query, collectBytes, decodeRowBinary } from "@maxjustus/chttp";
-
-const data = await collectBytes(
-  query(
-    "SELECT * FROM table FORMAT RowBinaryWithNamesAndTypes",
-    "session123",
-    config,
-  ),
-);
-
-const { columns, rows } = decodeRowBinary(data);
 ```
 
 ## Native Format
@@ -486,7 +340,7 @@ await insert(
 );
 ```
 
-Supports the same types as RowBinary.
+Supports all ClickHouse types including integers (Int8-Int256, UInt8-UInt256), floats, decimals, strings, date/time, containers (Array, Tuple, Map, Nullable), Variant, Dynamic, JSON, and geo types.
 
 **Limitation**: `Dynamic` and `JSON` types require V3 flattened format. On ClickHouse 25.6+, set `output_format_native_use_flattened_dynamic_and_json_serialization=1`.
 
@@ -608,45 +462,6 @@ for await (const p of client.query(sql, {}, { signal: controller.signal })) {
 await using client = await TcpClient.connect(options);
 // automatically closed when scope exits
 ```
-
-## JSONCompactEachRowWithNames Format
-
-Compact JSON format where the first row contains column names and subsequent rows are value arrays:
-
-```ts
-import {
-  insert,
-  query,
-  streamJsonCompactEachRowWithNames,
-  parseJsonCompactEachRowWithNames,
-} from "@maxjustus/chttp";
-
-// Insert - objects are automatically converted to compact arrays
-const rows = [
-  { id: 1, name: "alice", value: 1.5 },
-  { id: 2, name: "bob", value: 2.5 },
-];
-
-await insert(
-  "INSERT INTO table FORMAT JSONCompactEachRowWithNames",
-  streamJsonCompactEachRowWithNames(rows), // columns extracted from first object
-  "session123",
-  config,
-);
-
-// Query - parse compact format back to objects
-for await (const row of parseJsonCompactEachRowWithNames(
-  query(
-    "SELECT * FROM table FORMAT JSONCompactEachRowWithNames",
-    "session123",
-    config,
-  ),
-)) {
-  console.log(row.id, row.name);
-}
-```
-
-Optionally specify column order: `streamJsonCompactEachRowWithNames(rows, ["name", "id"])`.
 
 ## Timeout and Cancellation
 

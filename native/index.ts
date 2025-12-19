@@ -1,8 +1,8 @@
 /**
  * Native format encoder/decoder for ClickHouse.
  *
- * Native is ClickHouse's columnar format - more efficient than RowBinary
- * because data doesn't need row-to-column conversion on the server.
+ * Native is ClickHouse's columnar wire format - data doesn't need row-to-column
+ * conversion on the server.
  *
  * Note: Only Dynamic/JSON V3 format is supported at present. For ClickHouse 25.6+, enable
  * `output_format_native_use_flattened_dynamic_and_json_serialization` setting.
@@ -15,20 +15,20 @@ import {
   ClickHouseDateTime64,
   parseTypeList,
   parseTupleElements,
-} from "../shared.ts";
+} from "./types.ts";
 
 import { BufferWriter, BufferReader } from "./io.ts";
 import { getCodec } from "./codecs.ts";
 import { type Column, DataColumn } from "./columns.ts";
 import { BlockInfoField } from "./constants.ts";
 import {
-  Table,
-  TableBuilder,
+  RecordBatch,
+  RecordBatchBuilder,
   type Row,
-  tableFromArrays,
-  tableFromRows,
-  tableFromCols,
-  tableBuilder,
+  batchFromArrays,
+  batchFromRows,
+  batchFromCols,
+  batchBuilder,
 } from "./table.ts";
 
 // Re-export types for public API
@@ -38,8 +38,8 @@ export {
   type DecodeOptions,
   ClickHouseDateTime64,
 };
-export { type Column, Table, TableBuilder, type Row };
-export { tableFromArrays, tableFromRows, tableFromCols, tableBuilder };
+export { type Column, RecordBatch, RecordBatchBuilder, type Row };
+export { batchFromArrays, batchFromRows, batchFromCols, batchBuilder };
 export {
   DataColumn,
   TupleColumn,
@@ -279,10 +279,10 @@ export function decodeNativeBlock(
 }
 
 /**
- * Encode a Table to Native format.
+ * Encode a RecordBatch to Native format.
  */
-export function encodeNative(table: Table): Uint8Array {
-  const { columns, columnData, rowCount } = table;
+export function encodeNative(batch: RecordBatch): Uint8Array {
+  const { columns, columnData, rowCount } = batch;
 
   // Estimate total size for pre-allocation
   let totalEstimate = 10; // header varints
@@ -311,89 +311,14 @@ export function encodeNative(table: Table): Uint8Array {
 }
 
 /**
- * Decode Native format data into a Table.
- *
- * This function is async because:
- * - Internally reuses streamDecodeNative for code simplicity
- * - Maintains consistent API for future streaming optimizations
- * - Handles multi-block data uniformly with streaming decode
- */
-export async function decodeNative(
-  data: Uint8Array,
-  options?: DecodeOptions,
-): Promise<Table> {
-  const blocks: Table[] = [];
-
-  async function* singleChunk() {
-    yield data;
-  }
-
-  for await (const block of streamDecodeNative(singleChunk(), options)) {
-    blocks.push(block);
-  }
-
-  // Fast path: single block
-  if (blocks.length === 0) {
-    return new Table({ columns: [], columnData: [], rowCount: 0 });
-  }
-  if (blocks.length === 1) {
-    return blocks[0];
-  }
-
-  return mergeBlocks(blocks);
-}
-
-/**
- * Merge multiple blocks into a single Table.
- * Note: This materializes all column data - use streaming for large datasets.
- */
-export function mergeBlocks(blocks: (Block | Table)[]): Table {
-  if (blocks.length === 0) {
-    return new Table({ columns: [], columnData: [], rowCount: 0 });
-  }
-  if (blocks.length === 1) {
-    const first = blocks[0];
-    return first instanceof Table ? first : Table.from(first);
-  }
-
-  const first = blocks[0];
-  const columns = first.columns;
-  const numCols = columns.length;
-  const merged: unknown[][] = [];
-  for (let i = 0; i < numCols; i++) {
-    merged.push([]);
-  }
-
-  let totalRows = 0;
-  for (const block of blocks) {
-    for (let i = 0; i < numCols; i++) {
-      const col = block.columnData[i];
-      const len = col.length;
-      for (let j = 0; j < len; j++) {
-        merged[i].push(col.get(j));
-      }
-    }
-    totalRows += block.rowCount;
-  }
-
-  return new Table({
-    columns,
-    columnData: merged.map((arr, i) =>
-      getCodec(columns[i].type).fromValues(arr),
-    ),
-    rowCount: totalRows,
-  });
-}
-
-/**
- * Stream encode Tables to Native format.
- * Each yielded Table produces one Native block.
+ * Stream encode RecordBatches to Native format.
+ * Each yielded RecordBatch produces one Native block.
  */
 export async function* streamEncodeNative(
-  tables: AsyncIterable<Table>,
+  batches: AsyncIterable<RecordBatch>,
 ): AsyncGenerator<Uint8Array> {
-  for await (const table of tables) {
-    yield encodeNative(table);
+  for await (const batch of batches) {
+    yield encodeNative(batch);
   }
 }
 
@@ -491,48 +416,10 @@ function decodeFromStream(
   return null;
 }
 
-/**
- * Lazily iterate rows as objects with column names as keys.
- * Allocates one object per row on demand.
- */
-export function* asRows(
-  result: Block | Table,
-): Generator<Record<string, unknown>> {
-  const { columns, columnData, rowCount } = result;
-  const numCols = columns.length;
-
-  for (let i = 0; i < rowCount; i++) {
-    const row: Record<string, unknown> = {};
-    for (let j = 0; j < numCols; j++) {
-      row[columns[j].name] = columnData[j].get(i);
-    }
-    yield row;
-  }
-}
-
-/**
- * Convert columnar result to array rows.
- * Useful for re-encoding or comparison with original row arrays.
- */
-export function toArrayRows(result: Block | Table): unknown[][] {
-  const { columnData, rowCount } = result;
-  const numCols = columnData.length;
-
-  const rows: unknown[][] = new Array(rowCount);
-  for (let i = 0; i < rowCount; i++) {
-    const row = new Array(numCols);
-    for (let j = 0; j < numCols; j++) {
-      row[j] = columnData[j].get(i);
-    }
-    rows[i] = row;
-  }
-  return rows;
-}
-
 export async function* streamDecodeNative(
   chunks: AsyncIterable<Uint8Array>,
   options?: DecodeOptions & { debug?: boolean; minBufferSize?: number },
-): AsyncGenerator<Table> {
+): AsyncGenerator<RecordBatch> {
   const minBuffer = options?.minBufferSize ?? 2 * 1024 * 1024;
   const streamBuffer = new StreamBuffer(minBuffer);
   let columns: ColumnDef[] = [];
@@ -551,7 +438,7 @@ export async function* streamDecodeNative(
 
       if (columns.length === 0) columns = block.columns;
       blocksDecoded++;
-      yield Table.from({
+      yield RecordBatch.from({
         columns,
         columnData: block.columnData,
         rowCount: block.rowCount,
@@ -571,7 +458,7 @@ export async function* streamDecodeNative(
       if (block.isEndMarker) continue;
       if (columns.length === 0) columns = block.columns;
       blocksDecoded++;
-      yield Table.from({
+      yield RecordBatch.from({
         columns,
         columnData: block.columnData,
         rowCount: block.rowCount,
@@ -589,17 +476,33 @@ export async function* streamDecodeNative(
 }
 
 /**
- * Stream rows as objects from decoded Native blocks.
+ * Iterate rows from RecordBatches.
  *
  * @example
- * for await (const row of streamNativeRows(streamDecodeNative(query(...)))) {
+ * for await (const row of rows(streamDecodeNative(query(...)))) {
  *   console.log(row.id, row.name);
  * }
  */
-export async function* streamNativeRows(
-  blocks: AsyncIterable<Table>,
+export async function* rows(
+  batches: AsyncIterable<RecordBatch>,
 ): AsyncGenerator<Record<string, unknown>> {
-  for await (const block of blocks) {
-    yield* asRows(block);
+  for await (const batch of batches) {
+    yield* batch.rows();
   }
+}
+
+/**
+ * Collect all rows from RecordBatches into an array.
+ *
+ * @example
+ * const allRows = await collectRows(streamDecodeNative(query(...)));
+ */
+export async function collectRows(
+  batches: AsyncIterable<RecordBatch>,
+): Promise<Record<string, unknown>[]> {
+  const result: Record<string, unknown>[] = [];
+  for await (const row of rows(batches)) {
+    result.push(row);
+  }
+  return result;
 }

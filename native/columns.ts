@@ -1,4 +1,4 @@
-import { type TypedArray } from "../shared.ts";
+import { type TypedArray } from "./types.ts";
 import { Variant } from "./constants.ts";
 
 export type DiscriminatorArray = Uint8Array | Uint16Array | Uint32Array;

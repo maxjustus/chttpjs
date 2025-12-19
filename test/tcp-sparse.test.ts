@@ -5,7 +5,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { TcpClient } from "../tcp_client/client.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { toArrayRows } from "../formats/native/index.ts";
+import { toArrayRows } from "./test_utils.ts";
 
 describe("TCP sparse deserialization", { timeout: 120000 }, () => {
   let chConfig: { host: string; tcpPort: number; username: string; password: string };
@@ -73,9 +73,9 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
       let totalRows = 0;
       for await (const packet of packets) {
         if (packet.type === "Data") {
-          const tableResult = packet.table;
-          const decodedRows = toArrayRows(tableResult);
-          totalRows += tableResult.rowCount;
+          const batch = packet.batch;
+          const decodedRows = toArrayRows(batch);
+          totalRows += batch.rowCount;
 
           // Check specific values if we have enough rows
           if (decodedRows.length > 10) {

@@ -1,4 +1,4 @@
-import { type ColumnDef, type TypedArray } from "../shared.ts";
+import { type ColumnDef, type TypedArray } from "./types.ts";
 import { type Column, DataColumn } from "./columns.ts";
 import { type Block } from "./index.ts";
 import { getCodec, makeBuilder, type ColumnBuilder } from "./codecs.ts";
@@ -14,10 +14,10 @@ export type Row = Record<string, unknown> & {
 };
 
 /**
- * Table provides an ergonomic, virtual view over columnar ClickHouse data.
- * Inspired by Apache Arrow and dataframe libraries.
+ * RecordBatch provides an ergonomic, virtual view over columnar ClickHouse data.
+ * Matches Apache Arrow terminology - a single batch of records with shared schema.
  */
-export class Table implements Iterable<Row> {
+export class RecordBatch implements Iterable<Row> {
   readonly columns: ColumnDef[];
   readonly columnData: Column[];
   readonly rowCount: number;
@@ -33,18 +33,18 @@ export class Table implements Iterable<Row> {
     this.nameToIndex = new Map(this.columns.map((c, i) => [c.name, i]));
   }
 
-  static from(block: Block): Table {
-    return new Table(block);
+  static from(block: Block): RecordBatch {
+    return new RecordBatch(block);
   }
 
   /**
-   * Create a Table from columnar data.
+   * Create a RecordBatch from columnar data.
    * Accepts TypedArrays, plain arrays, or Column objects.
    */
   static fromColumnar(
     columns: ColumnDef[],
     columnData: (unknown[] | TypedArray | Column)[],
-  ): Table {
+  ): RecordBatch {
     const rowCount = columnData[0]?.length ?? 0;
     const cols: Column[] = columnData.map((data, i) => {
       // Already a Column - use as-is
@@ -56,7 +56,7 @@ export class Table implements Iterable<Row> {
       // Array - use codec.fromValues
       return getCodec(columns[i].type).fromValues(data as unknown[]);
     });
-    return new Table({ columns, columnData: cols, rowCount });
+    return new RecordBatch({ columns, columnData: cols, rowCount });
   }
 
   get length(): number {
@@ -174,30 +174,30 @@ export class Table implements Iterable<Row> {
 /**
  * internal helper to create a lazy row proxy.
  */
-function createRowProxy(table: Table, rowIndex: number): Row {
-  const names = table.columnNames;
+function createRowProxy(batch: RecordBatch, rowIndex: number): Row {
+  const names = batch.columnNames;
   return new Proxy({} as Row, {
     get(_, prop) {
       if (prop === "toObject") {
         return () => {
           const obj: Record<string, unknown> = {};
-          for (let j = 0; j < table.numCols; j++) {
-            obj[names[j]] = table.columnData[j].get(rowIndex);
+          for (let j = 0; j < batch.numCols; j++) {
+            obj[names[j]] = batch.columnData[j].get(rowIndex);
           }
           return obj;
         };
       }
       if (prop === "toArray") {
         return () => {
-          const arr = new Array(table.numCols);
-          for (let j = 0; j < table.numCols; j++) {
-            arr[j] = table.columnData[j].get(rowIndex);
+          const arr = new Array(batch.numCols);
+          for (let j = 0; j < batch.numCols; j++) {
+            arr[j] = batch.columnData[j].get(rowIndex);
           }
           return arr;
         };
       }
       if (typeof prop === "string") {
-        const col = table.getColumn(prop);
+        const col = batch.getColumn(prop);
         if (col) return col.get(rowIndex);
       }
       return undefined;
@@ -218,10 +218,10 @@ function createRowProxy(table: Table, rowIndex: number): Row {
 }
 
 /**
- * Builder for constructing Tables row-by-row.
+ * Builder for constructing RecordBatches row-by-row.
  * Grows dynamically - no upfront capacity required.
  */
-export class TableBuilder {
+export class RecordBatchBuilder {
   private schema: ColumnDef[];
   private builders: ColumnBuilder[];
   private _rowCount: number = 0;
@@ -247,11 +247,11 @@ export class TableBuilder {
     return this;
   }
 
-  /** Finalize and return an immutable Table. */
-  finish(): Table {
+  /** Finalize and return an immutable RecordBatch. */
+  finish(): RecordBatch {
     if (this.finished) throw new Error("Builder already finished");
     this.finished = true;
-    return new Table({
+    return new RecordBatch({
       columns: this.schema,
       columnData: this.builders.map((b) => b.finish()),
       rowCount: this._rowCount,
@@ -260,38 +260,38 @@ export class TableBuilder {
 }
 
 /**
- * Create a Table from columnar data keyed by column name.
+ * Create a RecordBatch from columnar data keyed by column name.
  *
  * @param schema - Column definitions (name and type)
  * @param data - Object with column names as keys, arrays/TypedArrays as values
  *
  * @example
- * const table = tableFromArrays(
+ * const batch = batchFromArrays(
  *   [{ name: 'id', type: 'UInt32' }, { name: 'name', type: 'String' }],
  *   { id: new Uint32Array([1, 2, 3]), name: ['alice', 'bob', 'charlie'] }
  * );
  */
-export function tableFromArrays(
+export function batchFromArrays(
   schema: ColumnDef[],
   data: Record<string, unknown[] | TypedArray | Column>,
-): Table {
+): RecordBatch {
   const columnData = schema.map((col) => data[col.name]);
-  return Table.fromColumnar(schema, columnData);
+  return RecordBatch.fromColumnar(schema, columnData);
 }
 
 /**
- * Create a Table from row arrays.
+ * Create a RecordBatch from row arrays.
  *
  * @param schema - Column definitions (name and type)
  * @param rows - Array of rows, each row is an array of values in schema order
  *
  * @example
- * const table = tableFromRows(
+ * const batch = batchFromRows(
  *   [{ name: 'id', type: 'UInt32' }, { name: 'name', type: 'String' }],
  *   [[1, 'alice'], [2, 'bob'], [3, 'charlie']]
  * );
  */
-export function tableFromRows(schema: ColumnDef[], rows: unknown[][]): Table {
+export function batchFromRows(schema: ColumnDef[], rows: unknown[][]): RecordBatch {
   // Transpose rows to columns
   const numCols = schema.length;
   const columns: unknown[][] = schema.map(() => new Array(rows.length));
@@ -305,11 +305,11 @@ export function tableFromRows(schema: ColumnDef[], rows: unknown[][]): Table {
   const columnData = columns.map((arr, i) =>
     getCodec(schema[i].type).fromValues(arr),
   );
-  return new Table({ columns: schema, columnData, rowCount: rows.length });
+  return new RecordBatch({ columns: schema, columnData, rowCount: rows.length });
 }
 
 /**
- * Create a Table from pre-built Column objects.
+ * Create a RecordBatch from pre-built Column objects.
  * Schema is derived from the columns themselves (each Column has a type property).
  *
  * @param columns - Object with column names as keys, Column objects as values
@@ -317,26 +317,26 @@ export function tableFromRows(schema: ColumnDef[], rows: unknown[][]): Table {
  * @example
  * const idCol = makeBuilder('UInt32').append(1).append(2).finish();
  * const nameCol = makeBuilder('String').append('alice').append('bob').finish();
- * const table = tableFromCols({ id: idCol, name: nameCol });
+ * const batch = batchFromCols({ id: idCol, name: nameCol });
  */
-export function tableFromCols(columns: Record<string, Column>): Table {
+export function batchFromCols(columns: Record<string, Column>): RecordBatch {
   const names = Object.keys(columns);
   const schema = names.map((name) => ({ name, type: columns[name].type }));
   const columnData = names.map((name) => columns[name]);
   const rowCount = columnData[0]?.length ?? 0;
-  return new Table({ columns: schema, columnData, rowCount });
+  return new RecordBatch({ columns: schema, columnData, rowCount });
 }
 
 /**
- * Create a TableBuilder for incremental row construction.
+ * Create a RecordBatchBuilder for incremental row construction.
  *
  * @param schema - Column definitions (name and type)
  *
  * @example
- * const builder = tableBuilder([{ name: 'id', type: 'UInt32' }]);
+ * const builder = batchBuilder([{ name: 'id', type: 'UInt32' }]);
  * builder.appendRow([1]).appendRow([2]);
- * const table = builder.finish();
+ * const batch = builder.finish();
  */
-export function tableBuilder(schema: ColumnDef[]): TableBuilder {
-  return new TableBuilder(schema);
+export function batchBuilder(schema: ColumnDef[]): RecordBatchBuilder {
+  return new RecordBatchBuilder(schema);
 }

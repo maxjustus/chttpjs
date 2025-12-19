@@ -1,7 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert";
 import { TcpClient } from "../client.ts";
-import { asRows } from "../../formats/native/index.ts";
 
 // Settings for complex/experimental types
 const QUERY_SETTINGS = {
@@ -66,11 +65,11 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
     const verbose = !!process.env.VERBOSE;
     for await (const p of client.query(sql, settings)) {
       if (p.type === "Data") {
-        totalRows += p.table.rowCount;
+        totalRows += p.batch.rowCount;
         blocks++;
         if (verbose) {
-          const ms = p.table.decodeTimeMs?.toFixed(2) ?? "?";
-          console.log(`    block ${blocks}: ${p.table.rowCount} rows (${ms}ms decode)`);
+          const ms = p.batch.decodeTimeMs?.toFixed(2) ?? "?";
+          console.log(`    block ${blocks}: ${p.batch.rowCount} rows (${ms}ms decode)`);
         }
       }
     }
@@ -88,8 +87,8 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
     const stream = (async function* () {
       for await (const p of readClient.query(`SELECT * FROM ${srcTable}`, settings)) {
         if (p.type === "Data") {
-          rowsRead += p.table.rowCount;
-          yield p.table;
+          rowsRead += p.batch.rowCount;
+          yield p.batch;
         }
       }
     })();
@@ -108,10 +107,10 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
   ): Promise<void> {
     let srcCount = 0n, dstCount = 0n;
     for await (const p of client.query(`SELECT count() as c FROM ${srcTable}`, settings ?? QUERY_SETTINGS)) {
-      if (p.type === "Data" && p.table.rowCount > 0) srcCount = (asRows(p.table).next().value as any).c;
+      if (p.type === "Data" && p.batch.rowCount > 0) srcCount = (p.batch.rows().next().value as any).c;
     }
     for await (const p of client.query(`SELECT count() as c FROM ${dstTable}`, settings ?? QUERY_SETTINGS)) {
-      if (p.type === "Data" && p.table.rowCount > 0) dstCount = (asRows(p.table).next().value as any).c;
+      if (p.type === "Data" && p.batch.rowCount > 0) dstCount = (p.batch.rows().next().value as any).c;
     }
     if (srcCount !== dstCount) {
       throw new Error(`Row count mismatch: src=${srcCount}, dst=${dstCount}`);
@@ -133,8 +132,8 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
       : `SELECT generateRandomStructure() AS s`;
     let result = "";
     for await (const p of client.query(query, settings)) {
-      if (p.type === "Data" && p.table.rowCount > 0 && !result) {
-        const row = asRows(p.table).next().value as any;
+      if (p.type === "Data" && p.batch.rowCount > 0 && !result) {
+        const row = p.batch.rows().next().value as any;
         if (row && row.s) result = row.s;
       }
     }
@@ -213,8 +212,8 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
           for await (const p of readClient.query(`SELECT * FROM ${srcTable}`)) {
             if (p.type === "Data") {
               blocksRead++;
-              rowsRead += p.table.rowCount;
-              yield p.table;
+              rowsRead += p.batch.rowCount;
+              yield p.batch;
             }
           }
         })();
@@ -335,7 +334,7 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
       QUERY_SETTINGS
     )) {
       if (p.type === "Data") {
-        for (const row of asRows(p.table)) {
+        for (const row of p.batch.rows()) {
           const val = (row as any).j?.big;
           assert.strictEqual(typeof val, "bigint", "Large UInt64 should be BigInt");
           assert.strictEqual(val, largeValue);

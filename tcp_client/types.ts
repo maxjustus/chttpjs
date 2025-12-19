@@ -1,4 +1,4 @@
-import { Table } from "../formats/native/table.ts";
+import { RecordBatch } from "../native/table.ts";
 
 // Modern revision. We disable sparse/custom serialization via settings
 // (allow_special_serialization_kinds_in_output_formats=0) to keep the protocol simple.
@@ -109,13 +109,13 @@ export interface LogEntry {
 }
 
 export type Packet =
-  | { type: "Data", table: Table }
-  | { type: "Totals", table: Table }
-  | { type: "Extremes", table: Table }
+  | { type: "Data", batch: RecordBatch }
+  | { type: "Totals", batch: RecordBatch }
+  | { type: "Extremes", batch: RecordBatch }
   | { type: "Log", entries: LogEntry[] }
   | { type: "Progress", progress: Progress }
   | { type: "ProfileInfo", info: ProfileInfo }
-  | { type: "ProfileEvents", table: Table, accumulated: Map<string, bigint> }
+  | { type: "ProfileEvents", batch: RecordBatch, accumulated: Map<string, bigint> }
   | { type: "EndOfStream" };
 
 export const REVISIONS = {

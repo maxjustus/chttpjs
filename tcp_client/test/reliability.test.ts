@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert";
 import { TcpClient } from "../client.ts";
 import { ClickHouseException } from "../types.ts";
-import { Table } from "../../formats/native/table.ts";
+import { RecordBatch } from "../../native/table.ts";
 
 describe("TCP Client Reliability", () => {
   const options = {
@@ -116,7 +116,7 @@ describe("TCP Client Reliability", () => {
       // Create an async generator that yields tables slowly
       async function* slowTables() {
         for (let i = 0; i < 100; i++) {
-          yield Table.fromColumnar(
+          yield RecordBatch.fromColumnar(
             [{ name: "x", type: "UInt64" }],
             [BigInt64Array.from([BigInt(i)])]
           );
@@ -153,7 +153,7 @@ describe("TCP Client Reliability", () => {
     controller.abort();
 
     try {
-      const table = Table.fromColumnar(
+      const table = RecordBatch.fromColumnar(
         [{ name: "x", type: "UInt64" }],
         [BigInt64Array.from([1n, 2n, 3n])]
       );

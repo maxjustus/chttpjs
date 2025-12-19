@@ -14,9 +14,9 @@ import {
   Table,
   tableFromRows,
   encodeNative,
-} from "../formats/native/index.ts";
-import type { ColumnDef } from "../formats/shared.ts";
-import { DataColumn } from "../formats/native/columns.ts";
+  type ColumnDef,
+} from "../native/index.ts";
+import { DataColumn } from "../native/columns.ts";
 
 function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
   return encodeNative(tableFromRows(columns, rows));

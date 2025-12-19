@@ -14,10 +14,10 @@ import {
   REVISIONS,
   ProfileEventType,
 } from "./types.ts";
-import { getCodec } from "../formats/native/codecs.ts";
-import { BufferWriter, BufferUnderflowError } from "../formats/native/io.ts";
-import { Table } from "../formats/native/table.ts";
-import { asRows, decodeNativeBlock } from "../formats/native/index.ts";
+import { getCodec } from "../native/codecs.ts";
+import { BufferWriter, BufferUnderflowError } from "../native/io.ts";
+import { RecordBatch } from "../native/table.ts";
+import { decodeNativeBlock } from "../native/index.ts";
 import { init as initCompression, Method } from "../compression.ts";
 
 export interface TcpClientOptions {
@@ -253,7 +253,7 @@ export class TcpClient {
 
   async insert(
     sql: string,
-    data: Table | AsyncIterable<Table> | Iterable<Table>,
+    data: RecordBatch | AsyncIterable<RecordBatch> | Iterable<RecordBatch>,
     options: { signal?: AbortSignal } = {}
   ) {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
@@ -307,18 +307,18 @@ export class TcpClient {
         }
       }
 
-      const blocks = (data instanceof Table)
+      const blocks = (data instanceof RecordBatch)
         ? [data]
-        : (data as AsyncIterable<Table> | Iterable<Table>);
+        : (data as AsyncIterable<RecordBatch> | Iterable<RecordBatch>);
 
       let totalInserted = 0;
-      for await (const table of blocks) {
+      for await (const batch of blocks) {
         if (cancelled) throw new Error("Insert cancelled");
 
         const encodedColumns = [];
-        for (let i = 0; i < table.columns.length; i++) {
-          const colDef = table.columns[i];
-          const colData = table.columnData[i];
+        for (let i = 0; i < batch.columns.length; i++) {
+          const colDef = batch.columns[i];
+          const colData = batch.columnData[i];
           const codec = getCodec(colDef.type);
 
           const writer = new BufferWriter();
@@ -333,9 +333,9 @@ export class TcpClient {
           });
         }
 
-        const dataPacket = this.writer.encodeData("", table.rowCount, encodedColumns, this.serverHello.revision, useCompression, compressionMethod);
+        const dataPacket = this.writer.encodeData("", batch.rowCount, encodedColumns, this.serverHello.revision, useCompression, compressionMethod);
         await this.writeWithBackpressure(dataPacket);
-        totalInserted += table.rowCount;
+        totalInserted += batch.rowCount;
       }
 
       const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
@@ -406,9 +406,9 @@ export class TcpClient {
     return info;
   }
 
-  private parseLogBlock(table: Table): LogEntry[] {
+  private parseLogBlock(batch: RecordBatch): LogEntry[] {
     const entries: LogEntry[] = [];
-    for (const row of asRows(table)) {
+    for (const row of batch.rows()) {
       entries.push({
         time: row.event_time as string,
         timeMicroseconds: row.event_time_microseconds as number,
@@ -423,8 +423,8 @@ export class TcpClient {
     return entries;
   }
 
-  private async readBlock(compressed: boolean = false): Promise<Table> {
-    // Table name is always uncompressed, even when block data is compressed
+  private async readBlock(compressed: boolean = false): Promise<RecordBatch> {
+    // Block name is always uncompressed, even when block data is compressed
     await this.reader!.readString();
 
     const options = { clientVersion: Number(this.serverHello!.revision) };
@@ -434,7 +434,7 @@ export class TcpClient {
       const start = performance.now();
       const result = decodeNativeBlock(decompressed, 0, options);
       result.decodeTimeMs = performance.now() - start;
-      return Table.from(result);
+      return RecordBatch.from(result);
     }
 
     // For uncompressed, we need to handle streaming reads which might span multiple chunks.
@@ -445,7 +445,7 @@ export class TcpClient {
         const result = decodeNativeBlock(currentBuffer, 0, options);
         result.decodeTimeMs = performance.now() - start;
         this.reader!.consume(result.bytesConsumed);
-        return Table.from(result);
+        return RecordBatch.from(result);
       } catch (err) {
         if (err instanceof BufferUnderflowError) {
           const more = await this.reader!.nextChunk();
@@ -553,12 +553,12 @@ export class TcpClient {
             case ServerPacketId.Data: {
               // With compression=1, ALL Data blocks from server are compressed
               this.log(`[query] reading Data block (compressed=${useCompression})...`);
-              const table = await this.readBlock(useCompression);
-              this.log(`[query] got Data block with ${table.rowCount} rows`);
+              const batch = await this.readBlock(useCompression);
+              this.log(`[query] got Data block with ${batch.rowCount} rows`);
               if (this.currentSchema === null) {
-                this.currentSchema = table.columns.map(c => ({ name: c.name, type: c.type }));
+                this.currentSchema = batch.columns.map(c => ({ name: c.name, type: c.type }));
               }
-              if (table.rowCount > 0) yield { type: "Data", table };
+              if (batch.rowCount > 0) yield { type: "Data", batch };
               break;
             }
             case ServerPacketId.Progress:
@@ -570,12 +570,12 @@ export class TcpClient {
             case ServerPacketId.ProfileEvents: {
               // ProfileEvents blocks are always uncompressed (diagnostic metadata)
               // They send deltas, so we accumulate values across packets
-              const table = await this.readBlock(false);
-              const nameCol = table.getColumn("name");
-              const valueCol = table.getColumn("value");
-              const typeCol = table.getColumn("type");
+              const batch = await this.readBlock(false);
+              const nameCol = batch.getColumn("name");
+              const valueCol = batch.getColumn("value");
+              const typeCol = batch.getColumn("type");
               if (nameCol && valueCol && typeCol) {
-                for (let i = 0; i < table.rowCount; i++) {
+                for (let i = 0; i < batch.rowCount; i++) {
                   const name = nameCol.get(i) as string;
                   const value = valueCol.get(i) as bigint;
                   const eventType = typeCol.get(i) as number;
@@ -587,20 +587,20 @@ export class TcpClient {
                   }
                 }
               }
-              yield { type: "ProfileEvents", table, accumulated: profileEventsAccumulated };
+              yield { type: "ProfileEvents", batch, accumulated: profileEventsAccumulated };
               break;
             }
             case ServerPacketId.Totals:
-              yield { type: "Totals", table: await this.readBlock(useCompression) };
+              yield { type: "Totals", batch: await this.readBlock(useCompression) };
               break;
             case ServerPacketId.Extremes:
-              yield { type: "Extremes", table: await this.readBlock(useCompression) };
+              yield { type: "Extremes", batch: await this.readBlock(useCompression) };
               break;
             case ServerPacketId.Log: {
               // Log blocks are always uncompressed (diagnostic metadata)
-              const table = await this.readBlock(false);
-              if (table.rowCount > 0) {
-                yield { type: "Log", entries: this.parseLogBlock(table) };
+              const batch = await this.readBlock(false);
+              if (batch.rowCount > 0) {
+                yield { type: "Log", entries: this.parseLogBlock(batch) };
               }
               break;
             }
