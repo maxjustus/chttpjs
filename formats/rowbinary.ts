@@ -903,9 +903,19 @@ class VariantCodec implements Codec {
       e.u8(VariantConst.NULL_DISCRIMINATOR);
       return;
     }
-    const val = v as { type: number; value: unknown };
-    e.u8(val.type);
-    this.types[val.type].encode(e, val.value);
+    // Accept both { type, value } objects and [disc, value] tuples
+    let disc: number;
+    let value: unknown;
+    if (Array.isArray(v) && v.length === 2 && typeof v[0] === "number") {
+      disc = v[0];
+      value = v[1];
+    } else {
+      const obj = v as { type: number; value: unknown };
+      disc = obj.type;
+      value = obj.value;
+    }
+    e.u8(disc);
+    this.types[disc].encode(e, value);
   }
 
   decode(v: DataView, b: Uint8Array, c: Cursor) {

@@ -373,6 +373,81 @@ function generateComplexTypedData(count: number): {
   return { json, rows, columns };
 }
 
+function generateVariantData(count: number): {
+  json: Record<string, unknown>[];
+  rows: unknown[][];
+  columns: ColumnDef[];
+} {
+  const columns: ColumnDef[] = [
+    { name: "id", type: "UInt32" },
+    { name: "v", type: "Variant(String, Int64, Float64)" },
+  ];
+  const json: Record<string, unknown>[] = [];
+  const rows: unknown[][] = [];
+  for (let i = 0; i < count; i++) {
+    // Rotate through the variant types
+    const variant =
+      i % 3 === 0 ? [0, `str_${i}`] :
+        i % 3 === 1 ? [1, BigInt(i * 100)] :
+          [2, Math.random() * 100];
+    // JSON representation uses the raw value
+    const jsonVal = i % 3 === 0 ? `str_${i}` : i % 3 === 1 ? i * 100 : Math.random() * 100;
+    json.push({ id: i, v: jsonVal });
+    rows.push([i, variant]);
+  }
+  return { json, rows, columns };
+}
+
+function generateDynamicData(count: number): {
+  json: Record<string, unknown>[];
+  rows: unknown[][];
+  columns: ColumnDef[];
+} {
+  const columns: ColumnDef[] = [
+    { name: "id", type: "UInt32" },
+    { name: "d", type: "Dynamic" },
+  ];
+  const json: Record<string, unknown>[] = [];
+  const rows: unknown[][] = [];
+  for (let i = 0; i < count; i++) {
+    // Mix of types: string, bigint, float, bool
+    const val =
+      i % 4 === 0 ? `str_${i}` :
+        i % 4 === 1 ? BigInt(i) :
+          i % 4 === 2 ? Math.random() * 100 :
+            i % 2 === 0;
+    // JSON representation
+    const jsonVal = typeof val === "bigint" ? Number(val) : val;
+    json.push({ id: i, d: jsonVal });
+    rows.push([i, val]);
+  }
+  return { json, rows, columns };
+}
+
+function generateJsonColumnData(count: number): {
+  json: Record<string, unknown>[];
+  rows: unknown[][];
+  columns: ColumnDef[];
+} {
+  const columns: ColumnDef[] = [
+    { name: "id", type: "UInt32" },
+    { name: "data", type: "JSON" },
+  ];
+  const json: Record<string, unknown>[] = [];
+  const rows: unknown[][] = [];
+  for (let i = 0; i < count; i++) {
+    const obj = {
+      name: `user_${i}`,
+      score: Math.random() * 100,
+      active: i % 2 === 0,
+      ...(i % 3 === 0 ? { tags: [`tag_${i % 5}`, `cat_${i % 3}`] } : {}),
+    };
+    json.push({ id: i, data: obj });
+    rows.push([i, obj]);
+  }
+  return { json, rows, columns };
+}
+
 function generateColumnarNumericData(count: number) {
   const columns: ColumnDef[] = [
     { name: "id", type: "UInt32" },
@@ -420,6 +495,9 @@ async function main() {
   const escape = generateEscapeData(ROWS);
   const complex = generateComplexData(ROWS);
   const complexTyped = generateComplexTypedData(ROWS);
+  const variant = generateVariantData(ROWS);
+  const dynamic = generateDynamicData(ROWS);
+  const jsonCol = generateJsonColumnData(ROWS);
 
   const scenarios: Scenario[] = [
     {
@@ -449,6 +527,27 @@ async function main() {
       columns: complexTyped.columns,
       jsonData: complexTyped.json,
       rowsArray: complexTyped.rows,
+    },
+    {
+      name: "Variant",
+      description: "Variant(String, Int64, Float64)",
+      columns: variant.columns,
+      jsonData: variant.json,
+      rowsArray: variant.rows,
+    },
+    {
+      name: "Dynamic",
+      description: "Dynamic with mixed types",
+      columns: dynamic.columns,
+      jsonData: dynamic.json,
+      rowsArray: dynamic.rows,
+    },
+    {
+      name: "JSON Column",
+      description: "JSON objects with varying keys",
+      columns: jsonCol.columns,
+      jsonData: jsonCol.json,
+      rowsArray: jsonCol.rows,
     },
   ];
 
