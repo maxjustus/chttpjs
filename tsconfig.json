@@ -26,6 +26,6 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["*.ts", "test/**/*.ts", "tcp_client/**/*.ts", "types.d.ts"],
+  "include": ["*.ts", "test/**/*.ts", "tcp_client/**/*.ts", "types.d.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules"]
 }

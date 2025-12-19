@@ -293,8 +293,8 @@ function readSparse(
 
 class NumericCodec<T extends TypedArray> extends BaseCodec {
   readonly type: string;
-  private Ctor: TypedArrayConstructor<T>;
-  private converter?: (v: unknown) => number | bigint;
+  readonly Ctor: TypedArrayConstructor<T>;
+  readonly converter?: (v: unknown) => number | bigint;
   constructor(
     type: string,
     Ctor: TypedArrayConstructor<T>,
@@ -1008,6 +1008,39 @@ class ArrayCodec extends BaseCodec {
 
   fromValues(values: unknown[]): ArrayColumn {
     const offsets = new BigUint64Array(values.length);
+
+    // Fast path for numeric inner types: build TypedArray directly
+    // Casting to NumericCodec to check for Ctor property (only NumericCodec has it)
+    const inner = this.inner as NumericCodec<TypedArray>;
+    if (inner.Ctor) {
+      let totalCount = 0;
+      for (let i = 0; i < values.length; i++) {
+        totalCount += (values[i] as ArrayLike<unknown>).length;
+      }
+      const allInner = new inner.Ctor(totalCount);
+      const convert = inner.converter;
+      let offset = 0n;
+      let idx = 0;
+      // `as never` needed: TS can't unify number|bigint with generic TypedArray element types
+      if (convert) {
+        for (let i = 0; i < values.length; i++) {
+          const arr = values[i] as ArrayLike<unknown>;
+          for (let j = 0; j < arr.length; j++) allInner[idx++] = convert(arr[j]) as never;
+          offset += BigInt(arr.length);
+          offsets[i] = offset;
+        }
+      } else {
+        for (let i = 0; i < values.length; i++) {
+          const arr = values[i] as ArrayLike<number | bigint>;
+          for (let j = 0; j < arr.length; j++) allInner[idx++] = arr[j] as never;
+          offset += BigInt(arr.length);
+          offsets[i] = offset;
+        }
+      }
+      return new ArrayColumn(this.type, offsets, new DataColumn(this.inner.type, allInner));
+    }
+
+    // Generic path for non-numeric types
     const allInner: unknown[] = [];
     let offset = 0n;
     for (let i = 0; i < values.length; i++) {

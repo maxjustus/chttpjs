@@ -14,7 +14,7 @@ function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
   return encodeNative(tableFromRows(columns, rows));
 }
 
-const DATA_TYPES = ["mixed", "numeric", "strings", "complex", "full"] as const;
+const DATA_TYPES = ["mixed", "numeric", "strings", "complex", "full", "bench-complex", "variant", "dynamic", "json"] as const;
 
 const { values } = parseArgs({
   options: {
@@ -45,11 +45,15 @@ Options:
   -h, --help              Show this help
 
 Data types:
-  mixed     UInt32, String×2, Bool, Float64, DateTime
-  numeric   UInt8/16/32, Int32, Float32/64
-  strings   UInt32, String×3 (varying lengths)
-  complex   Array, Nullable, Tuple, Map
-  full      All codecs: numeric, string, date/time, UUID, IP, LowCardinality, etc.
+  mixed         UInt32, String×2, Bool, Float64, DateTime
+  numeric       UInt8/16/32, Int32, Float32/64
+  strings       UInt32, String×3 (varying lengths)
+  complex       Array, Nullable, Tuple, Map
+  full          All codecs: numeric, string, date/time, UUID, IP, LowCardinality, etc.
+  bench-complex Matches bench/formats.ts "Complex Data" (50-element float arrays)
+  variant       Variant(String, Int64, Float64)
+  dynamic       Dynamic with mixed types
+  json          JSON objects with varying keys
 
 Examples:
   scripts/profile.ts -f native -o encode -d complex
@@ -206,6 +210,65 @@ const SCHEMAS: Record<typeof DATA_TYPES[number], Schema> = {
         new Map([["key", i]]),
       ];
     },
+  },
+
+  // Matches bench/formats.ts generateComplexData exactly
+  "bench-complex": {
+    columns: [
+      { name: "id", type: "UInt32" },
+      { name: "tags", type: "Array(String)" },
+      { name: "scores", type: "Array(Float64)" },
+      { name: "metadata", type: "Nullable(String)" },
+    ],
+    generate: (i) => [
+      i,
+      [`tag_${i % 5}`, `cat_${i % 3}`, `type_${i % 7}`],
+      Array.from({ length: 50 }, () => Math.random() * 100),
+      i % 3 === 0 ? null : `meta_${i}`,
+    ],
+  },
+
+  variant: {
+    columns: [
+      { name: "id", type: "UInt32" },
+      { name: "v", type: "Variant(String, Int64, Float64)" },
+    ],
+    generate: (i) => [
+      i,
+      i % 3 === 0 ? [0, `str_${i}`] :      // String
+      i % 3 === 1 ? [1, BigInt(i * 100)] : // Int64
+                   [2, Math.random()],     // Float64
+    ],
+  },
+
+  dynamic: {
+    columns: [
+      { name: "id", type: "UInt32" },
+      { name: "d", type: "Dynamic" },
+    ],
+    generate: (i) => [
+      i,
+      i % 4 === 0 ? `str_${i}` :
+      i % 4 === 1 ? BigInt(i) :
+      i % 4 === 2 ? Math.random() * 100 :
+                   i % 2 === 0,
+    ],
+  },
+
+  json: {
+    columns: [
+      { name: "id", type: "UInt32" },
+      { name: "data", type: "JSON" },
+    ],
+    generate: (i) => [
+      i,
+      {
+        name: `user_${i}`,
+        score: Math.random() * 100,
+        active: i % 2 === 0,
+        ...(i % 3 === 0 ? { tags: [`tag_${i % 5}`] } : {}),
+      },
+    ],
   },
 };
 

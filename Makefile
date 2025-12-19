@@ -1,4 +1,4 @@
-.PHONY: build build-full build-lz4 test test-tcp fuzz fuzz-tcp bench bench-formats bench-profile publish
+.PHONY: build build-full build-lz4 test test-tcp fuzz fuzz-tcp bench bench-formats bench-profile profile-complex profile-variant profile-dynamic profile-json publish
 
 build: build-full build-lz4
 
@@ -36,6 +36,18 @@ bench-profile:
 	@node --experimental-strip-types --cpu-prof --cpu-prof-name=bench.cpuprofile scripts/profile.ts $(ARGS)
 	@node --experimental-strip-types scripts/profile-hotspots.ts bench.cpuprofile
 	@rm -f bench.cpuprofile
+
+profile-complex:
+	$(MAKE) bench-profile ARGS="-f native -o encode -d bench-complex"
+
+profile-variant:
+	$(MAKE) bench-profile ARGS="-f native -o encode -d variant"
+
+profile-dynamic:
+	$(MAKE) bench-profile ARGS="-f native -o encode -d dynamic"
+
+profile-json:
+	$(MAKE) bench-profile ARGS="-f native -o encode -d json"
 
 publish:
 	npm publish --access=public
