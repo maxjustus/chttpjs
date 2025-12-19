@@ -89,12 +89,13 @@ describe("TCP Client Fuzz Tests", { timeout: 600000 }, () => {
   });
 
   // Full round-trip fuzz: SELECT -> INSERT -> verify hash
-  // Note: Some random structures can't be inserted (e.g., certain Decimal scales)
-  // These will fail with ClickHouse errors - that's expected, not a client bug
+  // Uses two connections: one for reading, one for writing (required for streaming)
   // Skip with: SKIP_ROUNDTRIP=1 make fuzz-tcp
   test("round-trip random structures", { skip: !!process.env.SKIP_ROUNDTRIP }, async () => {
-    let client = new TcpClient(options);
-    await client.connect();
+    let readClient = new TcpClient(options);
+    let writeClient = new TcpClient(options);
+    await readClient.connect();
+    await writeClient.connect();
 
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "5", 10);
     // Use 80k+ rows to ensure multi-block (ClickHouse default block size ~65k)
@@ -110,7 +111,7 @@ describe("TCP Client Fuzz Tests", { timeout: 600000 }, () => {
 
       try {
         // Get random structure
-        for await (const p of client.query("SELECT generateRandomStructure()")) {
+        for await (const p of writeClient.query("SELECT generateRandomStructure()")) {
           if (p.type === "Data") {
             structure = (asRows(p.table).next().value as any)["generateRandomStructure()"];
           }
@@ -120,16 +121,16 @@ describe("TCP Client Fuzz Tests", { timeout: 600000 }, () => {
 
         // Create source table with random data
         const escaped = structure.replace(/'/g, "''");
-        await client.execute(`CREATE TABLE ${srcTable} ENGINE = MergeTree ORDER BY tuple() AS SELECT * FROM generateRandom('${escaped}') LIMIT ${rowCount}`);
-        await client.execute(`CREATE TABLE ${dstTable} EMPTY AS ${srcTable}`);
+        await writeClient.execute(`CREATE TABLE ${srcTable} ENGINE = MergeTree ORDER BY tuple() AS SELECT * FROM generateRandom('${escaped}') LIMIT ${rowCount}`);
+        await writeClient.execute(`CREATE TABLE ${dstTable} EMPTY AS ${srcTable}`);
 
-        // Stream from SRC to DST
+        // Stream from SRC (readClient) to DST (writeClient)
         const startTime = Date.now();
         let blocksRead = 0;
         let rowsRead = 0;
 
         const queryStream = (async function* () {
-          for await (const packet of client.query(`SELECT * FROM ${srcTable}`)) {
+          for await (const packet of readClient.query(`SELECT * FROM ${srcTable}`)) {
             if (packet.type === "Data") {
               blocksRead++;
               rowsRead += packet.table.rowCount;
@@ -138,24 +139,24 @@ describe("TCP Client Fuzz Tests", { timeout: 600000 }, () => {
           }
         })();
 
-        await client.insert(`INSERT INTO ${dstTable} VALUES`, queryStream);
+        await writeClient.insert(`INSERT INTO ${dstTable} VALUES`, queryStream);
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
         console.log(`  transferred ${rowsRead} rows, ${blocksRead} blocks (${elapsed}s)`);
 
         // Verify using cityHash64 (handles NaN correctly)
         let srcHash = 0n, dstHash = 0n;
-        for await (const p of client.query(`SELECT sum(cityHash64(*)) as h FROM ${srcTable}`)) {
+        for await (const p of writeClient.query(`SELECT sum(cityHash64(*)) as h FROM ${srcTable}`)) {
           if (p.type === "Data") srcHash = (asRows(p.table).next().value as any).h;
         }
-        for await (const p of client.query(`SELECT sum(cityHash64(*)) as h FROM ${dstTable}`)) {
+        for await (const p of writeClient.query(`SELECT sum(cityHash64(*)) as h FROM ${dstTable}`)) {
           if (p.type === "Data") dstHash = (asRows(p.table).next().value as any).h;
         }
 
         assert.strictEqual(dstHash, srcHash, "Hash mismatch - data corruption detected");
         console.log(`  hash verified OK`);
 
-        await client.execute(`DROP TABLE IF EXISTS ${srcTable}`);
-        await client.execute(`DROP TABLE IF EXISTS ${dstTable}`);
+        await writeClient.execute(`DROP TABLE IF EXISTS ${srcTable}`);
+        await writeClient.execute(`DROP TABLE IF EXISTS ${dstTable}`);
 
       } catch (err) {
         const elapsed = ((Date.now() - iterStartTime) / 1000).toFixed(2);
@@ -169,27 +170,32 @@ describe("TCP Client Fuzz Tests", { timeout: 600000 }, () => {
 
         // Cleanup tables on failure
         try {
-          await client.execute(`DROP TABLE IF EXISTS ${srcTable}`);
-          await client.execute(`DROP TABLE IF EXISTS ${dstTable}`);
+          await writeClient.execute(`DROP TABLE IF EXISTS ${srcTable}`);
+          await writeClient.execute(`DROP TABLE IF EXISTS ${dstTable}`);
         } catch {
           // Ignore cleanup errors - connection may be broken
         }
 
         failures++;
         if (failures >= maxFailures) {
-          client.close();
+          readClient.close();
+          writeClient.close();
           throw new Error(`Too many failures (${failures}), last error: ${error.message}`);
         }
 
         // Reconnect and continue
         console.error(`  Reconnecting... (failure ${failures}/${maxFailures})`);
-        client.close();
-        client = new TcpClient(options);
-        await client.connect();
+        readClient.close();
+        writeClient.close();
+        readClient = new TcpClient(options);
+        writeClient = new TcpClient(options);
+        await readClient.connect();
+        await writeClient.connect();
       }
     }
 
-    client.close();
+    readClient.close();
+    writeClient.close();
     if (failures > 0) {
       console.log(`\nCompleted with ${failures} transient failure(s)`);
     }

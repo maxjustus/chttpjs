@@ -53,6 +53,7 @@ export class TcpClient {
   private _serverHello: ServerHello | null = null;
   private currentSchema: ColumnSchema[] | null = null;
   private sessionTimezone: string | null = null;
+  private busy: boolean = false;
 
   private log(...args: any[]) {
     if (this.options.debug) {
@@ -238,6 +239,8 @@ export class TcpClient {
     options: { signal?: AbortSignal } = {}
   ) {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
+    if (this.busy) throw new Error("Connection busy - cannot run concurrent operations on the same TcpClient");
+    this.busy = true;
 
     const signal = options.signal;
     if (signal?.aborted) throw new Error("Insert aborted before start");
@@ -340,6 +343,7 @@ export class TcpClient {
       }
       this.log(`Successfully inserted ${totalInserted} rows.`);
     } finally {
+      this.busy = false;
       signal?.removeEventListener("abort", abortHandler);
     }
   }
@@ -517,6 +521,8 @@ export class TcpClient {
     options: { signal?: AbortSignal; params?: Record<string, string | number | boolean> } = {}
   ): AsyncGenerator<Packet> {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
+    if (this.busy) throw new Error("Connection busy - cannot run concurrent operations on the same TcpClient");
+    this.busy = true;
 
     const signal = options?.signal;
     if (signal?.aborted) throw new Error("Query aborted before start");
@@ -676,6 +682,7 @@ export class TcpClient {
         throw err;
       }
     } finally {
+      this.busy = false;
       clearQueryTimeout();
       signal?.removeEventListener("abort", abortHandler);
     }
