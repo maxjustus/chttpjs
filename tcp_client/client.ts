@@ -10,13 +10,13 @@ import {
   type ProfileInfo,
   type Packet,
   type LogEntry,
-  DBMS_TCP_PROTOCOL_VERSION
+  DBMS_TCP_PROTOCOL_VERSION,
+  REVISIONS
 } from "./types.ts";
-import { readBlockInfo } from "./protocol_data.ts";
 import { getCodec } from "../formats/native/codecs.ts";
-import { BufferReader, BufferWriter, BufferUnderflowError } from "../formats/native/io.ts";
+import { BufferWriter, BufferUnderflowError } from "../formats/native/io.ts";
 import { Table } from "../formats/native/table.ts";
-import { asRows, type DeserializerState, type SerializationNode, DENSE_LEAF } from "../formats/native/index.ts";
+import { asRows, decodeNativeBlock } from "../formats/native/index.ts";
 import { init as initCompression, Method } from "../compression.ts";
 
 export interface TcpClientOptions {
@@ -185,20 +185,26 @@ export class TcpClient {
     const minor = await this.reader.readVarInt();
     const revision = await this.reader.readVarInt();
 
+    // Use minimum of our supported version and server version
     const effectiveRevision = revision < DBMS_TCP_PROTOCOL_VERSION ? revision : DBMS_TCP_PROTOCOL_VERSION;
 
-    if (effectiveRevision >= 54471n) await this.reader.readVarInt();
+    if (effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_VERSIONED_PARALLEL_REPLICAS_PROTOCOL) {
+      // Server-side parallel replicas protocol version
+      await this.reader.readVarInt();
+    }
 
-    const timezone = effectiveRevision >= 54058n ? await this.reader.readString() : "";
-    const displayName = effectiveRevision >= 54372n ? await this.reader.readString() : "";
-    const patch = effectiveRevision >= 54401n ? await this.reader.readVarInt() : effectiveRevision;
+    const timezone = effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_SERVER_TIMEZONE ? await this.reader.readString() : "";
+    const displayName = effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_SERVER_DISPLAY_NAME ? await this.reader.readString() : "";
+    const patch = effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_VERSION_PATCH ? await this.reader.readVarInt() : effectiveRevision;
 
-    if (effectiveRevision >= 54470n) {
+    if (effectiveRevision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_CHUNKED_PACKETS) {
+      // Chunked packets support flags (server-to-client and client-to-server)
       await this.reader.readString();
       await this.reader.readString();
     }
 
-    if (effectiveRevision >= 54461n) {
+    if (effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_EXOTIC_STUFF) {
+      // Read rules for parameters or similar exotic metadata
       const rulesSize = Number(await this.reader.readVarInt());
       for (let i = 0; i < rulesSize; i++) {
         await this.reader.readString();
@@ -206,23 +212,34 @@ export class TcpClient {
       }
     }
 
-    if (effectiveRevision >= 54462n) await this.reader.readU64LE();
+    if (effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_EXTRA_U64) {
+      // Extra metadata field (currently unused in most drivers)
+      await this.reader.readU64LE();
+    }
 
-    if (effectiveRevision >= 54474n) {
+    if (effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_PASSWORD_PARAMS_IN_HELLO) {
+      // Server might send parameters for password verification (e.g. Salt)
       while (true) {
         const name = await this.reader.readString();
         if (name === "") break;
-        await this.reader.readVarInt();
-        await this.reader.readString();
+        await this.reader.readVarInt(); // value type
+        await this.reader.readString(); // value
       }
     }
 
-    if (effectiveRevision >= 54477n) await this.reader.readVarInt();
-    if (effectiveRevision >= 54479n) await this.reader.readVarInt();
+    if (effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_TCP_PROTOCOL_VERSION) {
+      // Server reports its native TCP protocol version
+      await this.reader.readVarInt();
+    }
+    if (effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_PARALLEL_REPLICAS_CUSTOM_KEY) {
+      // Additional parallel replicas metadata
+      await this.reader.readVarInt();
+    }
 
     this._serverHello = { serverName, major, minor, revision: effectiveRevision, timezone, displayName, patch };
 
-    if (effectiveRevision >= 54458n) {
+    if (effectiveRevision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_QUOTA_KEY) {
+      // Send addendum (quota key, etc)
       const addendum = this.writer.encodeAddendum(effectiveRevision);
       this.socket.write(addendum);
     }
@@ -400,119 +417,32 @@ export class TcpClient {
 
   private async readBlock(compressed: boolean = false): Promise<Table> {
     // Table name is always uncompressed, even when block data is compressed
-    await this.reader!.readString(); // tableName - required by protocol but unused
+    await this.reader!.readString(); 
 
-    // For compressed blocks, decompress first then parse from buffer
+    const options = { clientVersion: Number(this.serverHello!.revision) };
+
     if (compressed) {
       const decompressed = await this.reader!.readCompressedBlock();
-      return this.parseCompressedBlockFromBuffer(new BufferReader(decompressed));
+      const result = decodeNativeBlock(decompressed, 0, options);
+      return Table.from(result);
     }
 
-    // For uncompressed, stream data and parse incrementally
-    await readBlockInfo(this.reader!);
-    const columnsCount = Number(await this.reader!.readVarInt());
-    const rowsCount = Number(await this.reader!.readVarInt());
-
-    const columns: ColumnSchema[] = [];
-    const columnData = [];
-
-    for (let i = 0; i < columnsCount; i++) {
-      const colName = await this.reader!.readString();
-      const colType = await this.reader!.readString();
-      columns.push({ name: colName, type: colType });
-
-      const codec = getCodec(colType);
-
-      // Use BufferUnderflowError retry pattern for streaming reads
-      while (true) {
-        const currentBuffer = this.reader!.peekAll();
-        const tempReader = new BufferReader(currentBuffer);
-        try {
-          // Read serialization kind tree if supported
-          let serNode: SerializationNode = DENSE_LEAF;
-          if (this.serverHello!.revision >= 54454n) {
-            const hasCustom = tempReader.readU8() !== 0;
-            if (hasCustom) {
-              serNode = codec.readKinds(tempReader);
-            }
-          }
-
-          const state: DeserializerState = { serNode, sparseRuntime: new Map() };
-
-          if (rowsCount === 0) {
-            this.reader!.consume(tempReader.offset);
-            columnData.push(codec.decode(new BufferReader(new Uint8Array(0)), 0, state));
-            break;
-          }
-
-          codec.readPrefix?.(tempReader);
-          const data = codec.decode(tempReader, rowsCount, state);
-          this.reader!.consume(tempReader.offset);
-          columnData.push(data);
-          break;
-        } catch (err) {
-          if (err instanceof BufferUnderflowError) {
-            const more = await this.reader!.nextChunk();
-            if (!more) throw new Error(`EOF while decoding block column ${colName} (${colType})`);
-            continue;
-          }
-          throw err;
-        }
-      }
-    }
-
-    return new Table({
-      columns: columns.map(c => ({ name: c.name, type: c.type })),
-      columnData,
-      rowCount: rowsCount
-    });
-  }
-
-  /**
-   * Parse a decompressed block from a BufferReader.
-   * Note: Table name is read before decompression, not included in the compressed data.
-   */
-  private parseCompressedBlockFromBuffer(reader: BufferReader): Table {
-    // Block info (table name was already read before decompression)
+    // For uncompressed, we need to handle streaming reads which might span multiple chunks.
     while (true) {
-      const fieldNum = reader.readVarint();
-      if (fieldNum === 0) break;
-      if (fieldNum === 1) reader.offset += 1;
-      else if (fieldNum === 2) reader.offset += 4;
-    }
-
-    const columnsCount = reader.readVarint();
-    const rowsCount = reader.readVarint();
-
-    const columns: ColumnSchema[] = [];
-    const columnData = [];
-
-    for (let i = 0; i < columnsCount; i++) {
-      const colName = reader.readString();
-      const colType = reader.readString();
-      columns.push({ name: colName, type: colType });
-
-      const codec = getCodec(colType);
-
-      let serNode: SerializationNode = DENSE_LEAF;
-      if (this.serverHello!.revision >= 54454n) {
-        const hasCustom = reader.readU8() !== 0;
-        if (hasCustom) {
-          serNode = codec.readKinds(reader);
+      const currentBuffer = this.reader!.peekAll();
+      try {
+        const result = decodeNativeBlock(currentBuffer, 0, options);
+        this.reader!.consume(result.bytesConsumed);
+        return Table.from(result);
+      } catch (err) {
+        if (err instanceof BufferUnderflowError) {
+          const more = await this.reader!.nextChunk();
+          if (!more) throw new Error("EOF while decoding block");
+          continue;
         }
+        throw err;
       }
-
-      const state: DeserializerState = { serNode, sparseRuntime: new Map() };
-
-      codec.readPrefix?.(reader);
-      columnData.push(codec.decode(reader, rowsCount, state));
     }
-
-    return new Table({
-      columns: columns.map(c => ({ name: c.name, type: c.type })),
-      columnData,
-      rowCount: rowsCount
-    });
   }
 
   async *query(

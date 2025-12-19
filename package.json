@@ -7,7 +7,8 @@
   "exports": {
     ".": "./dist/chttp.js",
     "./lz4": "./dist/chttp-lz4.js",
-    "./source": "./index.ts"
+    "./source": "./index.ts",
+    "./tcp": "./tcp_client/client.ts"
   },
   "files": [
     "dist",

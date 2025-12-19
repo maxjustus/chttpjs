@@ -13,6 +13,8 @@ import {
   type DecodeResult,
   type DecodeOptions,
   ClickHouseDateTime64,
+  parseTypeList,
+  parseTupleElements,
 } from "../shared.ts";
 
 import { BufferWriter, BufferReader } from "./io.ts";
@@ -29,7 +31,12 @@ import {
 } from "./table.ts";
 
 // Re-export types for public API
-export { type ColumnDef, type DecodeResult, type DecodeOptions, ClickHouseDateTime64 };
+export {
+  type ColumnDef,
+  type DecodeResult,
+  type DecodeOptions,
+  ClickHouseDateTime64,
+};
 export { type Column, Table, TableBuilder, type Row };
 export { tableFromArrays, tableFromRows, tableFromCols, tableBuilder };
 export {
@@ -46,7 +53,7 @@ export { makeBuilder, type ColumnBuilder } from "./codecs.ts";
 
 export interface Block {
   columns: ColumnDef[];
-  columnData: Column[];  // columnData[colIndex]
+  columnData: Column[]; // columnData[colIndex]
   rowCount: number;
 }
 
@@ -55,7 +62,7 @@ export interface Block {
  * in the type tree. Children correspond to nested types (Array element, Map key/value, etc.)
  */
 export interface SerializationNode {
-  kind: number;  // 0 = Dense, 1 = Sparse
+  kind: number; // 0 = Dense, 1 = Sparse
   children: SerializationNode[];
 }
 
@@ -84,7 +91,7 @@ interface BlockResult {
 
 interface BlockEstimate {
   estimatedSize: number;
-  headerSize: number;  // bytes consumed reading header (numCols, numRows, names, types)
+  headerSize: number; // bytes consumed reading header (numCols, numRows, names, types)
 }
 
 /**
@@ -105,7 +112,8 @@ function estimateBlockSize(
       while (true) {
         const fieldId = reader.readVarint();
         if (fieldId === 0) break;
-        if (fieldId === 1) reader.offset += 1; // is_overflows
+        if (fieldId === 1)
+          reader.offset += 1; // is_overflows
         else if (fieldId === 2) reader.offset += 4; // bucket_num
       }
     }
@@ -115,7 +123,10 @@ function estimateBlockSize(
 
     // End marker - tiny block
     if (numCols === 0 && numRows === 0) {
-      return { estimatedSize: reader.offset - startOffset, headerSize: reader.offset - startOffset };
+      return {
+        estimatedSize: reader.offset - startOffset,
+        headerSize: reader.offset - startOffset,
+      };
     }
 
     // Read column names and types to estimate data size
@@ -124,9 +135,9 @@ function estimateBlockSize(
     for (let i = 0; i < numCols; i++) {
       reader.readString(); // name
       const typeStr = reader.readString();
-      
+
       if (clientVersion >= 54454) {
-        const hasCustom = reader.buffer[reader.offset++] !== 0;
+        const hasCustom = reader.readU8() !== 0;
         if (hasCustom) {
           skipSerializationTree(reader, typeStr);
         }
@@ -137,36 +148,50 @@ function estimateBlockSize(
 
     const headerSize = reader.offset - startOffset;
     // Add 20% buffer for prefix data, LowCardinality dictionaries, etc.
-    return { estimatedSize: headerSize + Math.ceil(dataEstimate * 1.2), headerSize };
+    return {
+      estimatedSize: headerSize + Math.ceil(dataEstimate * 1.2),
+      headerSize,
+    };
   } catch {
     // Not enough data even for header
     return null;
   }
 }
 
-import { parseTypeList, parseTupleElements } from "../shared.ts";
-
 /**
  * Skip serialization tree bytes without building the tree.
  * Used when we only need to advance past the kind metadata.
  */
-export function skipSerializationTree(reader: BufferReader, typeStr: string): void {
-  reader.offset++; // skip kind byte
+export function skipSerializationTree(
+  reader: BufferReader,
+  typeStr: string,
+): void {
+  reader.readU8(); // kind byte
 
   if (typeStr.startsWith("Tuple")) {
-    const elements = parseTupleElements(typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")));
+    const elements = parseTupleElements(
+      typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")),
+    );
     for (const el of elements) {
       skipSerializationTree(reader, el.type);
     }
   } else if (typeStr.startsWith("Array")) {
-    const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
+    const innerType = typeStr.substring(
+      typeStr.indexOf("(") + 1,
+      typeStr.lastIndexOf(")"),
+    );
     skipSerializationTree(reader, innerType);
   } else if (typeStr.startsWith("Map")) {
-    const args = parseTypeList(typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")));
+    const args = parseTypeList(
+      typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")),
+    );
     skipSerializationTree(reader, args[0]);
     skipSerializationTree(reader, args[1]);
   } else if (typeStr.startsWith("Nullable")) {
-    const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
+    const innerType = typeStr.substring(
+      typeStr.indexOf("(") + 1,
+      typeStr.lastIndexOf(")"),
+    );
     skipSerializationTree(reader, innerType);
   }
 }
@@ -176,7 +201,7 @@ export function skipSerializationTree(reader: BufferReader, typeStr: string): vo
  * Returns the decoded data and the number of bytes consumed.
  * Use this for streaming scenarios where you need to track buffer position.
  */
-function decodeNativeBlock(
+export function decodeNativeBlock(
   data: Uint8Array,
   offset: number,
   options?: DecodeOptions,
@@ -189,7 +214,8 @@ function decodeNativeBlock(
     while (true) {
       const fieldId = reader.readVarint();
       if (fieldId === 0) break;
-      if (fieldId === 1) reader.offset += 1; // is_overflows
+      if (fieldId === 1)
+        reader.offset += 1; // is_overflows
       else if (fieldId === 2) reader.offset += 4; // bucket_num
     }
   }
@@ -221,7 +247,7 @@ function decodeNativeBlock(
 
     let serNode: SerializationNode = DENSE_LEAF;
     if (clientVersion >= 54454) {
-      const hasCustomSerialization = reader.buffer[reader.offset++] !== 0;
+      const hasCustomSerialization = reader.readU8() !== 0;
       if (hasCustomSerialization) {
         serNode = codec.readKinds(reader);
       }
@@ -341,7 +367,9 @@ export function mergeBlocks(blocks: (Block | Table)[]): Table {
 
   return new Table({
     columns,
-    columnData: merged.map((arr, i) => getCodec(columns[i].type).fromValues(arr)),
+    columnData: merged.map((arr, i) =>
+      getCodec(columns[i].type).fromValues(arr),
+    ),
     rowCount: totalRows,
   });
 }
@@ -423,17 +451,20 @@ class StreamBuffer {
 /**
  * Helper to decode a block from a StreamBuffer with a stable slice.
  */
-function decodeFromStream(streamBuffer: StreamBuffer, options?: DecodeOptions): BlockResult | null {
+function decodeFromStream(
+  streamBuffer: StreamBuffer,
+  options?: DecodeOptions,
+): BlockResult | null {
   const buffer = streamBuffer.getReadView();
   if (buffer.length === 0) return null;
 
   const estimate = estimateBlockSize(buffer, 0, options);
   if (estimate === null) return null;
 
-  // We try to decode if we have enough data according to the estimate.
-  // We use a stable copy to ensure virtual columns don't break on compaction.
+  // Only attempt decode once we likely have enough bytes for the block.
+  // Use a stable copy so zero-copy typed arrays survive StreamBuffer compaction.
   if (buffer.length >= estimate.estimatedSize) {
-    const stableSlice = buffer.slice(0, estimate.estimatedSize);
+    const stableSlice = buffer.slice();
     try {
       const block = decodeNativeBlock(stableSlice, 0, options);
       streamBuffer.consume(block.bytesConsumed);
@@ -453,7 +484,9 @@ function decodeFromStream(streamBuffer: StreamBuffer, options?: DecodeOptions): 
  * Lazily iterate rows as objects with column names as keys.
  * Allocates one object per row on demand.
  */
-export function* asRows(result: Block | Table): Generator<Record<string, unknown>> {
+export function* asRows(
+  result: Block | Table,
+): Generator<Record<string, unknown>> {
   const { columns, columnData, rowCount } = result;
   const numCols = columns.length;
 
@@ -507,7 +540,11 @@ export async function* streamDecodeNative(
 
       if (columns.length === 0) columns = block.columns;
       blocksDecoded++;
-      yield Table.from({ columns, columnData: block.columnData, rowCount: block.rowCount });
+      yield Table.from({
+        columns,
+        columnData: block.columnData,
+        rowCount: block.rowCount,
+      });
     }
   }
 
@@ -523,14 +560,20 @@ export async function* streamDecodeNative(
       if (block.isEndMarker) continue;
       if (columns.length === 0) columns = block.columns;
       blocksDecoded++;
-      yield Table.from({ columns, columnData: block.columnData, rowCount: block.rowCount });
+      yield Table.from({
+        columns,
+        columnData: block.columnData,
+        rowCount: block.rowCount,
+      });
     } catch {
       break;
     }
   }
 
   if (options?.debug) {
-    console.log(`[streamDecodeNative] ${blocksDecoded} blocks, ${totalBytesReceived} bytes`);
+    console.log(
+      `[streamDecodeNative] ${blocksDecoded} blocks, ${totalBytesReceived} bytes`,
+    );
   }
 }
 
@@ -549,4 +592,3 @@ export async function* streamNativeRows(
     yield* asRows(block);
   }
 }
-

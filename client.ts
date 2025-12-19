@@ -53,7 +53,10 @@ function compressionToMethod(compression: Compression): MethodCode {
   }
 }
 
-function* chunkUint8Array(data: Uint8Array, chunkSize: number): Generator<Uint8Array> {
+function* chunkUint8Array(
+  data: Uint8Array,
+  chunkSize: number,
+): Generator<Uint8Array> {
   let offset = 0;
   while (offset < data.length) {
     const end = Math.min(offset + chunkSize, data.length);
@@ -165,7 +168,7 @@ async function insert(
   } else if (Array.isArray(data)) {
     // Array of Uint8Arrays - yield chunks from each
     const chunks = data as Uint8Array[];
-    inputData = (function*() {
+    inputData = (function* () {
       for (const chunk of chunks) {
         yield* chunkUint8Array(chunk, threshold);
       }
@@ -261,7 +264,10 @@ async function insert(
 
   const response = await fetch(url.toString(), {
     method: "POST",
-    headers: { "Content-Type": "application/octet-stream", "Connection": "close" },
+    headers: {
+      "Content-Type": "application/octet-stream",
+      Connection: "close",
+    },
     body: stream,
     duplex: "half",
     signal: createSignal(options.signal, options.timeout),
@@ -287,13 +293,13 @@ function streamJsonEachRow(
   data: Iterable<unknown> | AsyncIterable<unknown>,
 ): Generator<Uint8Array> | AsyncGenerator<Uint8Array> {
   if (Symbol.asyncIterator in data) {
-    return (async function*() {
+    return (async function* () {
       for await (const row of data) {
         yield encoder.encode(JSON.stringify(row) + "\n");
       }
     })();
   }
-  return (function*() {
+  return (function* () {
     for (const row of data as Iterable<unknown>) {
       yield encoder.encode(JSON.stringify(row) + "\n");
     }
@@ -330,7 +336,7 @@ function streamJsonCompactEachRowWithNames(
   columns?: string[],
 ): Generator<Uint8Array> | AsyncGenerator<Uint8Array> {
   if (Symbol.asyncIterator in data) {
-    return (async function*() {
+    return (async function* () {
       let cols = columns;
       for await (const row of data) {
         if (!cols) {
@@ -343,7 +349,7 @@ function streamJsonCompactEachRowWithNames(
       }
     })();
   }
-  return (function*() {
+  return (function* () {
     let cols = columns;
     for (const row of data as Iterable<Record<string, unknown>>) {
       if (!cols) {
@@ -420,7 +426,14 @@ async function* query(
   }
 
   // Include any other settings/params passed in options
-  const reserved = ["baseUrl", "auth", "compression", "signal", "timeout", "clientVersion"];
+  const reserved = [
+    "baseUrl",
+    "auth",
+    "compression",
+    "signal",
+    "timeout",
+    "clientVersion",
+  ];
   for (const [key, value] of Object.entries(options)) {
     if (!reserved.includes(key) && value !== undefined) {
       params[key] = String(value);
@@ -430,7 +443,7 @@ async function* query(
   const url = buildReqUrl(baseUrl, params, options.auth);
 
   const headers: Record<string, string> = {
-    "Connection": "close",
+    Connection: "close",
     "User-Agent": `chttp/${options.clientVersion || "1.0"}`,
   };
 

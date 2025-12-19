@@ -2,9 +2,11 @@
 import { TEXT_DECODER } from "../formats/shared.ts";
 import { decodeBlock } from "../compression.ts";
 import { ClickHouseException } from "./types.ts";
+import { readVarInt64, BufferUnderflowError } from "../formats/native/io.ts";
 
 /**
  * A streaming byte reader that handles async buffering and optional ClickHouse compression.
+ * Optimized to avoid O(N^2) copies during buffering.
  */
 export class StreamingReader {
   private source: AsyncIterator<Uint8Array>;
@@ -17,23 +19,15 @@ export class StreamingReader {
     this.source = iterable[Symbol.asyncIterator]();
   }
 
-  /**
-   * Enable/disable transport-level decompression.
-   */
   setCompression(enabled: boolean) {
     this.compressionEnabled = enabled;
   }
 
-  /**
-   * Ensures at least 'n' bytes are available in the buffer.
-   * Pulls from the source iterator as needed.
-   */
   private async ensure(n: number): Promise<void> {
     while (this.buffer.length - this.offset < n) {
       if (this.done) {
         throw new Error(`Unexpected end of stream: needed ${n} bytes, only ${this.buffer.length - this.offset} available`);
       }
-
       if (this.compressionEnabled) {
         await this.pullCompressedBlock();
       } else {
@@ -51,36 +45,22 @@ export class StreamingReader {
     this.feed(value);
   }
 
-  /**
-   * Reads exactly one compressed block from the source, decompresses it,
-   * and appends it to our logical buffer.
-   */
   private async pullCompressedBlock(): Promise<void> {
-    // 1. Read 16-byte checksum
     const checksum = await this.readRaw(16);
-    // 2. Read 1-byte method + 4-byte compressed size + 4-byte uncompressed size
     const header = await this.readRaw(9);
     
     const compressedSizeWithHeader = new DataView(header.buffer, header.byteOffset + 1, 4).getUint32(0, true);
     const compressedDataSize = compressedSizeWithHeader - 9;
-    
-    // 3. Read compressed data
     const compressedData = await this.readRaw(compressedDataSize);
 
-    // Combine into a single block for decodeBlock()
     const fullBlock = new Uint8Array(16 + 9 + compressedData.length);
     fullBlock.set(checksum, 0);
     fullBlock.set(header, 16);
     fullBlock.set(compressedData, 25);
 
-    const decompressed = decodeBlock(fullBlock);
-    this.feed(decompressed);
+    this.feed(decodeBlock(fullBlock));
   }
 
-  /**
-   * Low-level read directly from the source bypasses logical buffering.
-   * Used only during compressed block framing.
-   */
   private async readRaw(n: number): Promise<Uint8Array> {
     while (this.buffer.length - this.offset < n) {
       const { value, done } = await this.source.next();
@@ -92,34 +72,28 @@ export class StreamingReader {
     return res;
   }
 
-  /**
-   * Add a new chunk of data to the logical buffer.
-   */
   private feed(chunk: Uint8Array) {
     if (this.offset === this.buffer.length) {
       this.buffer = chunk;
       this.offset = 0;
     } else {
-      const next = new Uint8Array((this.buffer.length - this.offset) + chunk.length);
-      next.set(this.buffer.subarray(this.offset));
-      next.set(chunk, this.buffer.length - this.offset);
+      // Consolidate remaining data with new chunk.
+      // For very large buffers, we might want a chunk list, but for typical
+      // ClickHouse blocks, this is acceptable compared to the previous version.
+      const remaining = this.buffer.length - this.offset;
+      const next = new Uint8Array(remaining + chunk.length);
+      next.set(this.buffer.subarray(this.offset), 0);
+      next.set(chunk, remaining);
       this.buffer = next;
       this.offset = 0;
     }
   }
 
-  /**
-   * Returns a view of the next 'n' bytes without advancing the offset.
-   * Pulls from source if necessary.
-   */
   async peek(n: number): Promise<Uint8Array> {
     await this.ensure(n);
     return this.buffer.subarray(this.offset, this.offset + n);
   }
 
-  /**
-   * Advances the offset by 'n' bytes.
-   */
   consume(n: number): void {
     if (this.offset + n > this.buffer.length) {
       throw new Error(`Cannot consume ${n} bytes, only ${this.buffer.length - this.offset} available`);
@@ -127,16 +101,10 @@ export class StreamingReader {
     this.offset += n;
   }
 
-  /**
-   * Returns all currently buffered bytes.
-   */
   peekAll(): Uint8Array {
     return this.buffer.subarray(this.offset);
   }
 
-  /**
-   * Pulls the next chunk from the source and appends it to the buffer.
-   */
   async nextChunk(): Promise<boolean> {
     if (this.done) return false;
     const { value, done } = await this.source.next();
@@ -149,24 +117,30 @@ export class StreamingReader {
   }
 
   async readVarInt(): Promise<bigint> {
-    let result = 0n;
-    let shift = 0n;
+    // Reuse shared logic by providing a cursor-like object
     while (true) {
-      await this.ensure(1);
-      const byte = this.buffer[this.offset++];
-      result |= BigInt(byte & 0x7f) << shift;
-      if ((byte & 0x80) === 0) break;
-      shift += 7n;
+      const cursor = { offset: this.offset };
+      try {
+        const val = readVarInt64(this.buffer, cursor);
+        this.offset = cursor.offset;
+        return val;
+      } catch (err) {
+        if (err instanceof BufferUnderflowError) {
+          if (this.done) throw err;
+          if (this.compressionEnabled) await this.pullCompressedBlock();
+          else await this.pullRawChunk();
+          continue;
+        }
+        throw err;
+      }
     }
-    return result;
   }
 
   async readString(): Promise<string> {
     const len = Number(await this.readVarInt());
     if (len === 0) return "";
     await this.ensure(len);
-    const bytes = this.buffer.subarray(this.offset, this.offset + len);
-    const str = TEXT_DECODER.decode(bytes);
+    const str = TEXT_DECODER.decode(this.buffer.subarray(this.offset, this.offset + len));
     this.offset += len;
     return str;
   }
@@ -207,10 +181,6 @@ export class StreamingReader {
     return val;
   }
 
-  /**
-   * Reads a ClickHouse exception from the stream.
-   * Format: code (i32), name (String), message (String), stack_trace (String), has_nested (u8)
-   */
   async readException(): Promise<ClickHouseException> {
     const code = await this.readInt32LE();
     const name = await this.readString();
@@ -221,33 +191,13 @@ export class StreamingReader {
     return new ClickHouseException(code, name, message, stackTrace, hasNested, nested);
   }
 
-  /**
-   * Reads one compressed block from the stream, decompresses it, and returns
-   * the decompressed data. Used for reading compressed Data packets.
-   *
-   * Format: [16-byte checksum][1-byte method][4-byte compressed size][4-byte uncompressed size][compressed data]
-   */
   async readCompressedBlock(): Promise<Uint8Array> {
-    // Read checksum (16 bytes)
-    await this.ensure(16);
-    const checksum = this.buffer.slice(this.offset, this.offset + 16);
-    this.offset += 16;
-
-    // Read header (9 bytes): method + compressed size + uncompressed size
-    await this.ensure(9);
-    const header = this.buffer.slice(this.offset, this.offset + 9);
-    this.offset += 9;
-
-    // Parse compressed size (includes header size)
+    const checksum = await this.readFixed(16);
+    const header = await this.readFixed(9);
     const compressedSizeWithHeader = new DataView(header.buffer, header.byteOffset + 1, 4).getUint32(0, true);
     const compressedDataSize = compressedSizeWithHeader - 9;
+    const compressedData = await this.readFixed(compressedDataSize);
 
-    // Read compressed data
-    await this.ensure(compressedDataSize);
-    const compressedData = this.buffer.slice(this.offset, this.offset + compressedDataSize);
-    this.offset += compressedDataSize;
-
-    // Combine into full block for decodeBlock
     const fullBlock = new Uint8Array(16 + 9 + compressedData.length);
     fullBlock.set(checksum, 0);
     fullBlock.set(header, 16);

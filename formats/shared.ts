@@ -45,12 +45,12 @@ export const INT128_MIN = -(1n << 127n);
 
 // Hex lookup tables for UUID encode/decode (~11x/~60x speedup vs parseInt/toString)
 export const HEX_LUT = new Uint8Array(256); // char code -> nibble value (255 = invalid)
-export const BYTE_TO_HEX: string[] = [];    // byte -> "00"-"ff"
+export const BYTE_TO_HEX: string[] = []; // byte -> "00"-"ff"
 for (let i = 0; i < 256; i++) {
   HEX_LUT[i] = 255;
   BYTE_TO_HEX[i] = i.toString(16).padStart(2, "0");
 }
-for (let i = 0; i < 10; i++) HEX_LUT[48 + i] = i;      // '0'-'9'
+for (let i = 0; i < 10; i++) HEX_LUT[48 + i] = i; // '0'-'9'
 for (let i = 0; i < 6; i++) {
   HEX_LUT[65 + i] = 10 + i; // 'A'-'F'
   HEX_LUT[97 + i] = 10 + i; // 'a'-'f'
@@ -60,7 +60,11 @@ for (let i = 0; i < 6; i++) {
 export const TYPED_ARRAYS: Record<
   string,
   {
-    new(buffer: ArrayBuffer, byteOffset: number, length: number): ArrayBufferView;
+    new (
+      buffer: ArrayBuffer,
+      byteOffset: number,
+      length: number,
+    ): ArrayBufferView;
     BYTES_PER_ELEMENT: number;
   }
 > = {
@@ -93,20 +97,40 @@ export const TYPED_ARRAYS: Record<
  */
 export class Float32NaN {
   readonly bytes: Uint8Array;
-  constructor(bytes: Uint8Array) { this.bytes = bytes; }
-  valueOf(): number { return NaN; }
-  toString(): string { return "NaN"; }
-  toJSON(): null { return null; }
-  [Symbol.toPrimitive](): number { return NaN; }
+  constructor(bytes: Uint8Array) {
+    this.bytes = bytes;
+  }
+  valueOf(): number {
+    return NaN;
+  }
+  toString(): string {
+    return "NaN";
+  }
+  toJSON(): null {
+    return null;
+  }
+  [Symbol.toPrimitive](): number {
+    return NaN;
+  }
 }
 
 export class Float64NaN {
   readonly bytes: Uint8Array;
-  constructor(bytes: Uint8Array) { this.bytes = bytes; }
-  valueOf(): number { return NaN; }
-  toString(): string { return "NaN"; }
-  toJSON(): null { return null; }
-  [Symbol.toPrimitive](): number { return NaN; }
+  constructor(bytes: Uint8Array) {
+    this.bytes = bytes;
+  }
+  valueOf(): number {
+    return NaN;
+  }
+  toString(): string {
+    return "NaN";
+  }
+  toJSON(): null {
+    return null;
+  }
+  [Symbol.toPrimitive](): number {
+    return NaN;
+  }
 }
 
 export class ClickHouseDateTime64 {
@@ -125,14 +149,19 @@ export class ClickHouseDateTime64 {
    * Throws if value overflows JS Date range or precision is lost (sub-millisecond components).
    */
   toDate(): Date {
-    const ms = this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow;
+    const ms =
+      this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow;
     // Check for overflow (JS Date range: ±8.64e15 ms)
     if (ms > 8640000000000000n || ms < -8640000000000000n) {
-      throw new RangeError(`DateTime64 value ${ms}ms overflows JS Date range (±8.64e15ms). Use toClosestDate() to clamp.`);
+      throw new RangeError(
+        `DateTime64 value ${ms}ms overflows JS Date range (±8.64e15ms). Use toClosestDate() to clamp.`,
+      );
     }
     // Check for precision loss
     if (this.precision > 3 && this.ticks % this.pow !== 0n) {
-      throw new Error(`Precision loss: DateTime64(${this.precision}) value ${this.ticks} cannot be represented as Date without losing precision. Use toClosestDate() or access .ticks directly.`);
+      throw new Error(
+        `Precision loss: DateTime64(${this.precision}) value ${this.ticks} cannot be represented as Date without losing precision. Use toClosestDate() or access .ticks directly.`,
+      );
     }
     return new Date(Number(ms));
   }
@@ -141,7 +170,8 @@ export class ClickHouseDateTime64 {
    * Convert to native Date object, truncating sub-millisecond precision and clamping to JS Date range.
    */
   toClosestDate(): Date {
-    let ms = this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow;
+    let ms =
+      this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow;
     // Clamp to JS Date range
     if (ms > 8640000000000000n) ms = 8640000000000000n;
     if (ms < -8640000000000000n) ms = -8640000000000000n;
@@ -157,35 +187,58 @@ export class ClickHouseDateTime64 {
   }
 }
 
-export function readVarint(data: Uint8Array, cursor: { offset: number }): number {
+export function readVarint(
+  data: Uint8Array,
+  cursor: { offset: number },
+): number {
   let value = 0;
-  let shift = 0;
+  let mul = 1;
   while (true) {
-    if (cursor.offset >= data.length) throw new RangeError('Buffer underflow');
+    if (cursor.offset >= data.length) throw new RangeError("Buffer underflow");
     const byte = data[cursor.offset++];
-    value |= (byte & 0x7f) << shift;
+    value += (byte & 0x7f) * mul;
+    if (!Number.isSafeInteger(value))
+      throw new RangeError("Varint exceeds JS safe integer range");
     if ((byte & 0x80) === 0) break;
-    shift += 7;
+    mul *= 0x80;
+    if (!Number.isSafeInteger(mul))
+      throw new RangeError("Varint exceeds JS safe integer range");
   }
   return value;
 }
 
 export function writeVarint(value: number): Uint8Array {
-  const arr: number[] = [];
-  while (value >= 0x80) {
-    arr.push((value & 0x7f) | 0x80);
-    value >>>= 7;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`Varint value out of range: ${value}`);
   }
-  arr.push(value);
+  const arr: number[] = [];
+  let v = value;
+  while (v >= 0x80) {
+    arr.push(v % 0x80 | 0x80);
+    v = Math.floor(v / 0x80);
+  }
+  arr.push(v);
   return new Uint8Array(arr);
 }
 
 export function leb128Size(value: number): number {
-  const bits = 32 - Math.clz32(value | 1);
-  return Math.ceil(bits / 7);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`leb128Size value out of range: ${value}`);
+  }
+  let v = value;
+  let size = 1;
+  while (v >= 0x80) {
+    size++;
+    v = Math.floor(v / 0x80);
+  }
+  return size;
 }
 
-export function utf8DecodeSmall(data: Uint8Array, start: number, end: number): string {
+export function utf8DecodeSmall(
+  data: Uint8Array,
+  start: number,
+  end: number,
+): string {
   let result = "";
   let i = start;
   while (i < end) {
@@ -213,22 +266,35 @@ export function utf8DecodeSmall(data: Uint8Array, start: number, end: number): s
   return result;
 }
 
-export function readString(data: Uint8Array, cursor: { offset: number }): string {
+export function readString(
+  data: Uint8Array,
+  cursor: { offset: number },
+): string {
   const len = readVarint(data, cursor);
   checkBounds(data, cursor, len);
   const end = cursor.offset + len;
-  const str = len < 12
-    ? utf8DecodeSmall(data, cursor.offset, end)
-    : TEXT_DECODER.decode(data.subarray(cursor.offset, end));
+  const str =
+    len < 12
+      ? utf8DecodeSmall(data, cursor.offset, end)
+      : TEXT_DECODER.decode(data.subarray(cursor.offset, end));
   cursor.offset = end;
   return str;
 }
 
-export function checkBounds(data: Uint8Array, cursor: { offset: number }, n: number): void {
-  if (cursor.offset + n > data.length) throw new RangeError('Buffer underflow');
+export function checkBounds(
+  data: Uint8Array,
+  cursor: { offset: number },
+  n: number,
+): void {
+  if (cursor.offset + n > data.length) throw new RangeError("Buffer underflow");
 }
 
-export function writeBigInt128(v: DataView, o: number, val: bigint, signed: boolean): void {
+export function writeBigInt128(
+  v: DataView,
+  o: number,
+  val: bigint,
+  signed: boolean,
+): void {
   const low = val & 0xffffffffffffffffn;
   const high = val >> 64n;
   v.setBigUint64(o, low, true);
@@ -238,11 +304,18 @@ export function writeBigInt128(v: DataView, o: number, val: bigint, signed: bool
 
 export function readBigInt128(v: DataView, o: number, signed: boolean): bigint {
   const low = v.getBigUint64(o, true);
-  const high = signed ? v.getBigInt64(o + 8, true) : v.getBigUint64(o + 8, true);
+  const high = signed
+    ? v.getBigInt64(o + 8, true)
+    : v.getBigUint64(o + 8, true);
   return (high << 64n) | low;
 }
 
-export function writeBigInt256(v: DataView, o: number, val: bigint, signed: boolean): void {
+export function writeBigInt256(
+  v: DataView,
+  o: number,
+  val: bigint,
+  signed: boolean,
+): void {
   for (let i = 0; i < 3; i++) {
     v.setBigUint64(o + i * 8, val & 0xffffffffffffffffn, true);
     val >>= 64n;
@@ -277,7 +350,9 @@ export function parseTypeList(inner: string): string[] {
   return types;
 }
 
-export function parseTupleElements(inner: string): { name: string | null; type: string }[] {
+export function parseTupleElements(
+  inner: string,
+): { name: string | null; type: string }[] {
   const parts = parseTypeList(inner);
   return parts.map((part) => {
     const match = part.match(/^([a-z_][a-z0-9_]*)\s+(.+)$/i);
@@ -285,10 +360,33 @@ export function parseTupleElements(inner: string): { name: string | null; type: 
       const name = match[1];
       const type = match[2];
       const typeKeywords = [
-        "Int", "UInt", "Float", "String", "Bool", "Date", "DateTime",
-        "Nullable", "Array", "Tuple", "Map", "Enum", "UUID", "IPv",
-        "Decimal", "FixedString", "Variant", "JSON", "Object", "LowCardinality",
-        "Nested", "Nothing", "Dynamic", "Point", "Ring", "Polygon", "MultiPolygon",
+        "Int",
+        "UInt",
+        "Float",
+        "String",
+        "Bool",
+        "Date",
+        "DateTime",
+        "Nullable",
+        "Array",
+        "Tuple",
+        "Map",
+        "Enum",
+        "UUID",
+        "IPv",
+        "Decimal",
+        "FixedString",
+        "Variant",
+        "JSON",
+        "Object",
+        "LowCardinality",
+        "Nested",
+        "Nothing",
+        "Dynamic",
+        "Point",
+        "Ring",
+        "Polygon",
+        "MultiPolygon",
       ];
       if (!typeKeywords.some((kw) => name.startsWith(kw))) {
         return { name, type };
@@ -365,24 +463,24 @@ export function expandIPv6(str: string): string[] {
 
 export function ipv6ToBytes(ip: string): Uint8Array {
   const bytes = new Uint8Array(16);
-  let parts = ip.split('::');
+  let parts = ip.split("::");
   let left: string[] = [];
   let right: string[] = [];
 
   if (parts.length === 2) {
-    left = parts[0] ? parts[0].split(':') : [];
-    right = parts[1] ? parts[1].split(':') : [];
+    left = parts[0] ? parts[0].split(":") : [];
+    right = parts[1] ? parts[1].split(":") : [];
     const missing = 8 - left.length - right.length;
-    const middle = new Array(missing).fill('0');
+    const middle = new Array(missing).fill("0");
     parts = [...left, ...middle, ...right];
   } else {
-    parts = ip.split(':');
+    parts = ip.split(":");
   }
 
   for (let i = 0; i < 8; i++) {
-    const val = parseInt(parts[i] || '0', 16);
-    bytes[i * 2] = (val >> 8) & 0xFF;
-    bytes[i * 2 + 1] = val & 0xFF;
+    const val = parseInt(parts[i] || "0", 16);
+    bytes[i * 2] = (val >> 8) & 0xff;
+    bytes[i * 2 + 1] = val & 0xff;
   }
   return bytes;
 }
@@ -393,7 +491,7 @@ export function bytesToIpv6(bytes: Uint8Array): string {
     const val = (bytes[i * 2] << 8) | bytes[i * 2 + 1];
     parts.push(val.toString(16));
   }
-  return parts.join(':');
+  return parts.join(":");
 }
 
 export function inferType(value: unknown): string {
@@ -409,7 +507,8 @@ export function inferType(value: unknown): string {
     return "Float64";
   }
   if (value instanceof Date) return "DateTime64(3)";
-  if (value instanceof ClickHouseDateTime64) return `DateTime64(${value.precision})`;
+  if (value instanceof ClickHouseDateTime64)
+    return `DateTime64(${value.precision})`;
   if (Array.isArray(value)) {
     if (value.length === 0) return "Array(Nothing)";
     return `Array(${inferType(value[0])})`;

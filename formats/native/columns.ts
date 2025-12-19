@@ -2,7 +2,23 @@ import { type TypedArray } from "../shared.ts";
 export type DiscriminatorArray = Uint8Array | Uint16Array | Uint32Array;
 
 // Variant uses 0xFF (255) as the null discriminator
-export const VARIANT_NULL_DISCRIMINATOR = 0xFF;
+export const VARIANT_NULL_DISCRIMINATOR = 0xff;
+
+const MAX_SAFE_INDEX_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
+function assertOffsetsFitInJsNumber(
+  offsets: BigUint64Array,
+  context: string,
+): void {
+  if (offsets.length === 0) return;
+  const last = offsets[offsets.length - 1];
+  if (last > MAX_SAFE_INDEX_BIGINT) {
+    throw new RangeError(
+      `${context}: offsets exceed JS safe integer range (last=${last}). ` +
+        `This dataset is too large to index safely in JS.`,
+    );
+  }
+}
 
 /**
  * Count discriminators and compute group indices in a single pass.
@@ -10,7 +26,7 @@ export const VARIANT_NULL_DISCRIMINATOR = 0xFF;
  */
 export function countAndIndexDiscriminators(
   discriminators: DiscriminatorArray,
-  nullValue: number
+  nullValue: number,
 ): { counts: Map<number, number>; indices: Uint32Array } {
   const counts = new Map<number, number>();
   const indices = new Uint32Array(discriminators.length);
@@ -51,7 +67,9 @@ abstract class AbstractColumn implements Column {
   }
 }
 
-export class DataColumn<T extends TypedArray | unknown[]> extends AbstractColumn {
+export class DataColumn<
+  T extends TypedArray | unknown[],
+> extends AbstractColumn {
   readonly type: string;
   readonly data: T;
 
@@ -61,7 +79,9 @@ export class DataColumn<T extends TypedArray | unknown[]> extends AbstractColumn
     this.data = data;
   }
 
-  get length() { return this.data.length; }
+  get length() {
+    return this.data.length;
+  }
 
   get(index: number): unknown {
     return this.data[index];
@@ -78,7 +98,7 @@ export class TupleColumn extends AbstractColumn {
     type: string,
     elements: { name: string | null }[],
     columns: Column[],
-    isNamed: boolean
+    isNamed: boolean,
   ) {
     super();
     this.type = type;
@@ -121,9 +141,10 @@ export class MapColumn extends AbstractColumn {
     offsets: BigUint64Array,
     keys: Column,
     values: Column,
-    mapAsArray = false
+    mapAsArray = false,
   ) {
     super();
+    assertOffsetsFitInJsNumber(offsets, "MapColumn");
     this.type = type;
     this.offsets = offsets;
     this.keys = keys;
@@ -165,13 +186,16 @@ export class VariantColumn extends AbstractColumn {
     type: string,
     discriminators: Uint8Array,
     groups: Map<number, Column>,
-    groupIndices?: Uint32Array
+    groupIndices?: Uint32Array,
   ) {
     super();
     this.type = type;
     this.discriminators = discriminators;
     this.groups = groups;
-    this.groupIndices = groupIndices ?? countAndIndexDiscriminators(discriminators, VARIANT_NULL_DISCRIMINATOR).indices;
+    this.groupIndices =
+      groupIndices ??
+      countAndIndexDiscriminators(discriminators, VARIANT_NULL_DISCRIMINATOR)
+        .indices;
   }
 
   get length(): number {
@@ -186,7 +210,7 @@ export class VariantColumn extends AbstractColumn {
 }
 
 export class DynamicColumn extends AbstractColumn {
-  readonly type: string = 'Dynamic';
+  readonly type: string = "Dynamic";
   readonly types: string[];
   readonly discriminators: DiscriminatorArray;
   readonly groups: Map<number, Column>;
@@ -197,14 +221,16 @@ export class DynamicColumn extends AbstractColumn {
     types: string[],
     discriminators: DiscriminatorArray,
     groups: Map<number, Column>,
-    groupIndices?: Uint32Array
+    groupIndices?: Uint32Array,
   ) {
     super();
     this.types = types;
     this.discriminators = discriminators;
     this.groups = groups;
     this.nullDisc = types.length;
-    this.groupIndices = groupIndices ?? countAndIndexDiscriminators(discriminators, this.nullDisc).indices;
+    this.groupIndices =
+      groupIndices ??
+      countAndIndexDiscriminators(discriminators, this.nullDisc).indices;
   }
 
   get length(): number {
@@ -219,7 +245,7 @@ export class DynamicColumn extends AbstractColumn {
 }
 
 export class JsonColumn extends AbstractColumn {
-  readonly type: string = 'JSON';
+  readonly type: string = "JSON";
   readonly paths: string[];
   readonly pathColumns: Map<string, DynamicColumn>;
   private _length: number;
@@ -227,7 +253,7 @@ export class JsonColumn extends AbstractColumn {
   constructor(
     paths: string[],
     pathColumns: Map<string, DynamicColumn>,
-    length: number
+    length: number,
   ) {
     super();
     this.paths = paths;
@@ -259,18 +285,16 @@ export class NullableColumn extends AbstractColumn {
   readonly nullFlags: Uint8Array;
   readonly inner: Column;
 
-  constructor(
-    type: string,
-    nullFlags: Uint8Array,
-    inner: Column
-  ) {
+  constructor(type: string, nullFlags: Uint8Array, inner: Column) {
     super();
     this.type = type;
     this.nullFlags = nullFlags;
     this.inner = inner;
   }
 
-  get length() { return this.nullFlags.length; }
+  get length() {
+    return this.nullFlags.length;
+  }
 
   get(index: number): unknown {
     return this.nullFlags[index] ? null : this.inner.get(index);
@@ -282,18 +306,17 @@ export class ArrayColumn extends AbstractColumn {
   readonly offsets: BigUint64Array;
   readonly inner: Column;
 
-  constructor(
-    type: string,
-    offsets: BigUint64Array,
-    inner: Column
-  ) {
+  constructor(type: string, offsets: BigUint64Array, inner: Column) {
     super();
+    assertOffsetsFitInJsNumber(offsets, "ArrayColumn");
     this.type = type;
     this.offsets = offsets;
     this.inner = inner;
   }
 
-  get length() { return this.offsets.length; }
+  get length() {
+    return this.offsets.length;
+  }
 
   get(index: number): unknown[] {
     const start = index === 0 ? 0 : Number(this.offsets[index - 1]);

@@ -144,11 +144,7 @@ const bytes = await collectBytes(
 Binary format that's ~7x faster to encode than JSON for simple data, with ~3x smaller payloads. Uses `RowBinaryWithNamesAndTypes` format (self-describing with column names and types in header).
 
 ```ts
-import {
-  insert,
-  encodeRowBinary,
-  type ColumnDef,
-} from "@maxjustus/chttp";
+import { insert, encodeRowBinary, type ColumnDef } from "@maxjustus/chttp";
 
 const columns: ColumnDef[] = [
   { name: "id", type: "UInt32" },
@@ -216,7 +212,11 @@ const rows = [
 For large inserts, use `streamEncodeRowBinary` to generate chunks on demand:
 
 ```ts
-import { insert, streamEncodeRowBinary, type ColumnDef } from "@maxjustus/chttp";
+import {
+  insert,
+  streamEncodeRowBinary,
+  type ColumnDef,
+} from "@maxjustus/chttp";
 
 const columns: ColumnDef[] = [
   { name: "id", type: "UInt32" },
@@ -238,6 +238,7 @@ await insert(
 ```
 
 Options:
+
 - `chunkSize`: Target bytes per yielded chunk (default 64KB). Larger = fewer chunks, smaller = lower memory.
 - `includeHeader`: Emit column names/types in first chunk (default true). Set false if appending to existing stream.
 
@@ -269,7 +270,11 @@ For smaller results, buffer the entire response:
 import { query, collectBytes, decodeRowBinary } from "@maxjustus/chttp";
 
 const data = await collectBytes(
-  query("SELECT * FROM table FORMAT RowBinaryWithNamesAndTypes", "session123", config),
+  query(
+    "SELECT * FROM table FORMAT RowBinaryWithNamesAndTypes",
+    "session123",
+    config,
+  ),
 );
 
 const { columns, rows } = decodeRowBinary(data);
@@ -321,7 +326,12 @@ builder.appendRow([3, "charlie"]);
 const table3 = builder.finish();
 
 // Encode and insert
-await insert("INSERT INTO t FORMAT Native", encodeNative(table), "session", config);
+await insert(
+  "INSERT INTO t FORMAT Native",
+  encodeNative(table),
+  "session",
+  config,
+);
 
 // Query returns columnar data wrapped in a Table
 const bytes = await collectBytes(
@@ -346,7 +356,11 @@ Build columns independently with `makeBuilder`:
 
 ```ts
 const idCol = makeBuilder("UInt32").append(1).append(2).append(3).finish();
-const nameCol = makeBuilder("String").append("alice").append("bob").append("charlie").finish();
+const nameCol = makeBuilder("String")
+  .append("alice")
+  .append("bob")
+  .append("charlie")
+  .finish();
 
 // Columns carry their type - schema is derived automatically
 const table = tableFromCols({ id: idCol, name: nameCol });
@@ -357,58 +371,59 @@ const table = tableFromCols({ id: idCol, name: nameCol });
 
 ```ts
 // Array(Int32)
-tableFromArrays(
-  [{ name: "tags", type: "Array(Int32)" }],
-  { tags: [[1, 2], [3, 4, 5], [6]] }
-);
+tableFromArrays([{ name: "tags", type: "Array(Int32)" }], {
+  tags: [[1, 2], [3, 4, 5], [6]],
+});
 
 // Tuple(Float64, Float64) - positional
-tableFromArrays(
-  [{ name: "point", type: "Tuple(Float64, Float64)" }],
-  { point: [[1.0, 2.0], [3.0, 4.0]] }
-);
+tableFromArrays([{ name: "point", type: "Tuple(Float64, Float64)" }], {
+  point: [
+    [1.0, 2.0],
+    [3.0, 4.0],
+  ],
+});
 
 // Tuple(x Float64, y Float64) - named tuples use objects
-tableFromArrays(
-  [{ name: "point", type: "Tuple(x Float64, y Float64)" }],
-  { point: [{ x: 1.0, y: 2.0 }, { x: 3.0, y: 4.0 }] }
-);
+tableFromArrays([{ name: "point", type: "Tuple(x Float64, y Float64)" }], {
+  point: [
+    { x: 1.0, y: 2.0 },
+    { x: 3.0, y: 4.0 },
+  ],
+});
 
 // Map(String, Int32)
-tableFromArrays(
-  [{ name: "meta", type: "Map(String, Int32)" }],
-  { meta: [{ a: 1, b: 2 }, new Map([["c", 3]])] }
-);
+tableFromArrays([{ name: "meta", type: "Map(String, Int32)" }], {
+  meta: [{ a: 1, b: 2 }, new Map([["c", 3]])],
+});
 
 // Nullable(String)
-tableFromArrays(
-  [{ name: "note", type: "Nullable(String)" }],
-  { note: ["hello", null, "world"] }
-);
+tableFromArrays([{ name: "note", type: "Nullable(String)" }], {
+  note: ["hello", null, "world"],
+});
 
 // Variant(String, Int64, Bool) - type inferred from values
-tableFromArrays(
-  [{ name: "val", type: "Variant(String, Int64, Bool)" }],
-  { val: ["hello", 42n, true, null] }
-);
+tableFromArrays([{ name: "val", type: "Variant(String, Int64, Bool)" }], {
+  val: ["hello", 42n, true, null],
+});
 
 // Variant with explicit discriminators (for ambiguous cases)
 tableFromArrays(
   [{ name: "val", type: "Variant(String, Int64, Bool)" }],
-  { val: [[0, "hello"], [1, 42n], [2, true], null] }  // [discriminator, value]
+  { val: [[0, "hello"], [1, 42n], [2, true], null] }, // [discriminator, value]
 );
 
 // Dynamic - types inferred automatically
-tableFromArrays(
-  [{ name: "dyn", type: "Dynamic" }],
-  { dyn: ["hello", 42, true, [1, 2, 3], null] }
-);
+tableFromArrays([{ name: "dyn", type: "Dynamic" }], {
+  dyn: ["hello", 42, true, [1, 2, 3], null],
+});
 
 // JSON - plain objects
-tableFromArrays(
-  [{ name: "data", type: "JSON" }],
-  { data: [{ a: 1, b: "x" }, { a: 2, c: true }] }
-);
+tableFromArrays([{ name: "data", type: "JSON" }], {
+  data: [
+    { a: 1, b: "x" },
+    { a: 2, c: true },
+  ],
+});
 
 // Building complex columns
 const pointCol = makeBuilder("Tuple(Float64, Float64)")
@@ -425,6 +440,7 @@ import {
   streamDecodeNative,
   streamNativeRows,
   tableFromArrays,
+  asRows,
 } from "@maxjustus/chttp";
 
 // Streaming decode - rows as objects (lazy)
@@ -438,7 +454,10 @@ for await (const row of streamNativeRows(
 for await (const table of streamDecodeNative(
   query("SELECT * FROM t FORMAT Native", "session", config),
 )) {
-  console.log(table.length, table.columnNames);
+  // Iterate rows from a Table block
+  for (const row of asRows(table)) {
+    console.log(row.id, row.name);
+  }
 }
 
 // Streaming insert - generate Tables
@@ -470,6 +489,125 @@ await insert(
 Supports the same types as RowBinary.
 
 **Limitation**: `Dynamic` and `JSON` types require V3 flattened format. On ClickHouse 25.6+, set `output_format_native_use_flattened_dynamic_and_json_serialization=1`.
+
+## TCP Client (Experimental)
+
+Direct TCP protocol for lower latency. Single connection per client - use separate clients for concurrent operations.
+
+### Basic Usage
+
+```ts
+import { TcpClient } from "@maxjustus/chttp/tcp";
+
+const client = new TcpClient({
+  host: "localhost",
+  port: 9000,
+  database: "default",
+  user: "default",
+  password: "",
+});
+await client.connect();
+
+// Query - streams packets as they arrive
+for await (const packet of client.query("SELECT * FROM table")) {
+  if (packet.type === "Data") {
+    for (const row of packet.table) {
+      console.log(row.id, row.name);
+    }
+  }
+}
+
+// Execute DDL
+await client.execute("CREATE TABLE ...");
+
+// Insert
+await client.insert("INSERT INTO table VALUES", table);
+
+client.close();
+```
+
+### Connection Options
+
+```ts
+const client = new TcpClient({
+  host: "localhost",
+  port: 9000,
+  database: "default",
+  user: "default",
+  password: "",
+  compression: "lz4", // 'lz4' | 'zstd' | false
+  connectTimeout: 10000, // ms
+  queryTimeout: 30000, // ms
+  tls: true, // or tls.ConnectionOptions
+});
+```
+
+### Streaming Results
+
+Query yields packets - handle by type:
+
+```ts
+for await (const packet of client.query(sql, { send_logs_level: "trace" })) {
+  switch (packet.type) {
+    case "Data":
+      console.log(`${packet.table.rowCount} rows`);
+      break;
+    case "Progress":
+      console.log(`${packet.progress.readRows} rows read`);
+      break;
+    case "Log":
+      for (const entry of packet.entries) {
+        console.log(`[${entry.source}] ${entry.text}`);
+      }
+      break;
+    case "ProfileInfo":
+      console.log(`${packet.info.rows} total rows`);
+      break;
+    case "EndOfStream":
+      break;
+  }
+}
+```
+
+### Streaming Insert
+
+Use separate connections for read and write when streaming:
+
+```ts
+const readClient = new TcpClient(options);
+const writeClient = new TcpClient(options);
+await readClient.connect();
+await writeClient.connect();
+
+// Stream from one table to another
+const tables = (async function* () {
+  for await (const packet of readClient.query("SELECT * FROM src")) {
+    if (packet.type === "Data") yield packet.table;
+  }
+})();
+
+await writeClient.insert("INSERT INTO dst VALUES", tables);
+```
+
+### Cancellation
+
+```ts
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 5000);
+
+await client.connect({ signal: controller.signal });
+
+for await (const p of client.query(sql, {}, { signal: controller.signal })) {
+  // ...
+}
+```
+
+### Auto-Close
+
+```ts
+await using client = await TcpClient.connect(options);
+// automatically closed when scope exits
+```
 
 ## JSONCompactEachRowWithNames Format
 
@@ -545,7 +683,9 @@ ZSTD uses native bindings in Node.js when available, falling back to WASM in bro
 ## Development
 
 ```bash
-npm test  # runs integration tests against ClickHouse via testcontainers
+npm test       # runs integration tests against ClickHouse via testcontainers
+make test-tcp  # TCP client tests (requires local ClickHouse on port 9000)
+make fuzz-tcp  # TCP fuzz tests (FUZZ_ITERATIONS=10 FUZZ_ROWS=20000)
 ```
 
 Requires Node.js 24+ (uses `--experimental-strip-types` for direct TS execution).

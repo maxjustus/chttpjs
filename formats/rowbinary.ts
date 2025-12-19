@@ -202,8 +202,8 @@ export class RowBinaryEncoder {
  */
 class StreamingReader {
   private buffer: Uint8Array;
-  private bufferLen = 0;  // valid bytes in buffer
-  private offset = 0;     // current read position
+  private bufferLen = 0; // valid bytes in buffer
+  private offset = 0; // current read position
   private source: AsyncIterator<Uint8Array>;
   private done = false;
   options?: DecodeOptions;
@@ -275,7 +275,6 @@ class StreamingReader {
     this.buffer.set(chunk, this.bufferLen);
     this.bufferLen += chunk.length;
   }
-
 }
 
 interface Codec {
@@ -296,11 +295,13 @@ export function createCodec(type: string): Codec {
 function createCodecImpl(type: string): Codec {
   if (SCALAR_CODECS[type]) return SCALAR_CODECS[type];
 
-  if (type.startsWith('Nullable(')) return new NullableCodec(type.slice(9, -1))
-  if (type.startsWith('LowCardinality(')) return createCodec(type.slice(15, -1))
-  if (type.startsWith('Array(')) return new ArrayCodec(type.slice(6, -1))
-  if (type.startsWith('Nested(')) return new ArrayCodec(`Tuple(${type.slice(7, -1)})`)
-  if (type.startsWith('Map(')) return new MapCodec(type.slice(4, -1))
+  if (type.startsWith("Nullable(")) return new NullableCodec(type.slice(9, -1));
+  if (type.startsWith("LowCardinality("))
+    return createCodec(type.slice(15, -1));
+  if (type.startsWith("Array(")) return new ArrayCodec(type.slice(6, -1));
+  if (type.startsWith("Nested("))
+    return new ArrayCodec(`Tuple(${type.slice(7, -1)})`);
+  if (type.startsWith("Map(")) return new MapCodec(type.slice(4, -1));
   if (type.startsWith("Tuple(")) return new TupleCodec(type.slice(6, -1));
   if (type.startsWith("FixedString("))
     return new FixedStringCodec(parseInt(type.slice(12, -1), 10));
@@ -435,12 +436,30 @@ const SCALAR_CODECS: Record<string, Codec> = {
     decode: (_, b, c) => readString(b, c),
   },
   Date: {
-    encode: (e, v) => e.u16(Math.floor((v instanceof Date ? v : new Date(v as string)).getTime() / 86400000)),
-    decode: (v, _, c) => { const r = new Date(v.getUint16(c.offset, true) * 86400000); c.offset += 2; return r }
+    encode: (e, v) =>
+      e.u16(
+        Math.floor(
+          (v instanceof Date ? v : new Date(v as string)).getTime() / 86400000,
+        ),
+      ),
+    decode: (v, _, c) => {
+      const r = new Date(v.getUint16(c.offset, true) * 86400000);
+      c.offset += 2;
+      return r;
+    },
   },
   DateTime: {
-    encode: (e, v) => e.u32(Math.floor((v instanceof Date ? v : new Date(v as string)).getTime() / 1000)),
-    decode: (v, _, c) => { const r = new Date(v.getUint32(c.offset, true) * 1000); c.offset += 4; return r }
+    encode: (e, v) =>
+      e.u32(
+        Math.floor(
+          (v instanceof Date ? v : new Date(v as string)).getTime() / 1000,
+        ),
+      ),
+    decode: (v, _, c) => {
+      const r = new Date(v.getUint32(c.offset, true) * 1000);
+      c.offset += 4;
+      return r;
+    },
   },
   // UUID: Uses HEX_LUT/BYTE_TO_HEX lookup tables for ~11x encode, ~60x decode speedup
   // vs parseInt/toString. ClickHouse stores UUID as two LE 64-bit halves, bytes reversed.
@@ -449,7 +468,9 @@ const SCALAR_CODECS: Record<string, Codec> = {
       e.ensure(16);
       const str = v as string;
       if (str.length !== 36) {
-        throw new Error(`Invalid UUID length ${str.length}, expected 36 (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)`);
+        throw new Error(
+          `Invalid UUID length ${str.length}, expected 36 (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)`,
+        );
       }
       const ptr = e.offset;
       // First 8 bytes (reversed) - hyphens at positions 8, 13
@@ -475,18 +496,44 @@ const SCALAR_CODECS: Record<string, Codec> = {
       checkBounds(b, c, 16);
       const o = c.offset;
       // Read bytes in reverse order for each half
-      const b0 = b[o + 7], b1 = b[o + 6], b2 = b[o + 5], b3 = b[o + 4];
-      const b4 = b[o + 3], b5 = b[o + 2], b6 = b[o + 1], b7 = b[o];
-      const b8 = b[o + 15], b9 = b[o + 14], b10 = b[o + 13], b11 = b[o + 12];
-      const b12 = b[o + 11], b13 = b[o + 10], b14 = b[o + 9], b15 = b[o + 8];
+      const b0 = b[o + 7],
+        b1 = b[o + 6],
+        b2 = b[o + 5],
+        b3 = b[o + 4];
+      const b4 = b[o + 3],
+        b5 = b[o + 2],
+        b6 = b[o + 1],
+        b7 = b[o];
+      const b8 = b[o + 15],
+        b9 = b[o + 14],
+        b10 = b[o + 13],
+        b11 = b[o + 12];
+      const b12 = b[o + 11],
+        b13 = b[o + 10],
+        b14 = b[o + 9],
+        b15 = b[o + 8];
       c.offset += 16;
       return (
-        BYTE_TO_HEX[b0] + BYTE_TO_HEX[b1] + BYTE_TO_HEX[b2] + BYTE_TO_HEX[b3] + "-" +
-        BYTE_TO_HEX[b4] + BYTE_TO_HEX[b5] + "-" +
-        BYTE_TO_HEX[b6] + BYTE_TO_HEX[b7] + "-" +
-        BYTE_TO_HEX[b8] + BYTE_TO_HEX[b9] + "-" +
-        BYTE_TO_HEX[b10] + BYTE_TO_HEX[b11] + BYTE_TO_HEX[b12] + BYTE_TO_HEX[b13] +
-        BYTE_TO_HEX[b14] + BYTE_TO_HEX[b15]
+        BYTE_TO_HEX[b0] +
+        BYTE_TO_HEX[b1] +
+        BYTE_TO_HEX[b2] +
+        BYTE_TO_HEX[b3] +
+        "-" +
+        BYTE_TO_HEX[b4] +
+        BYTE_TO_HEX[b5] +
+        "-" +
+        BYTE_TO_HEX[b6] +
+        BYTE_TO_HEX[b7] +
+        "-" +
+        BYTE_TO_HEX[b8] +
+        BYTE_TO_HEX[b9] +
+        "-" +
+        BYTE_TO_HEX[b10] +
+        BYTE_TO_HEX[b11] +
+        BYTE_TO_HEX[b12] +
+        BYTE_TO_HEX[b13] +
+        BYTE_TO_HEX[b14] +
+        BYTE_TO_HEX[b15]
       );
     },
   },
@@ -494,13 +541,19 @@ const SCALAR_CODECS: Record<string, Codec> = {
   IPv4: {
     encode: (e, v) => {
       const s = v as string;
-      if (s.length < 7 || s.length > 15) { // "0.0.0.0" to "255.255.255.255"
+      if (s.length < 7 || s.length > 15) {
+        // "0.0.0.0" to "255.255.255.255"
         throw new Error(`Invalid IPv4 address length ${s.length}`);
       }
-      let val = 0, pos = 0;
+      let val = 0,
+        pos = 0;
       for (let i = 0; i < 4; i++) {
-        let num = 0, ch = s.charCodeAt(pos);
-        while (pos < s.length && ch >= 48 && ch <= 57) { num = num * 10 + (ch - 48); ch = s.charCodeAt(++pos); }
+        let num = 0,
+          ch = s.charCodeAt(pos);
+        while (pos < s.length && ch >= 48 && ch <= 57) {
+          num = num * 10 + (ch - 48);
+          ch = s.charCodeAt(++pos);
+        }
         if (num > 255) throw new Error(`Invalid IPv4 octet value ${num}`);
         pos++; // skip dot
         val = (val << 8) | num;
@@ -552,7 +605,7 @@ const SCALAR_CODECS: Record<string, Codec> = {
 };
 
 class NothingCodec implements Codec {
-  encode(_e: RowBinaryEncoder, _v: unknown) { }
+  encode(_e: RowBinaryEncoder, _v: unknown) {}
   decode(_v: DataView, _b: Uint8Array, _c: Cursor) {
     return null;
   }
@@ -615,22 +668,22 @@ class ArrayCodec implements Codec {
     // Fast path: TypedArray view (no copy)
     // Safe in streaming because we don't compact - old buffers stay alive via views
     if (this.TypedArrayCtor) {
-      const byteLen = len * this.TypedArrayCtor.BYTES_PER_ELEMENT
+      const byteLen = len * this.TypedArrayCtor.BYTES_PER_ELEMENT;
       checkBounds(b, c, byteLen);
-      const absoluteOffset = b.byteOffset + c.offset
+      const absoluteOffset = b.byteOffset + c.offset;
       if (absoluteOffset % this.TypedArrayCtor.BYTES_PER_ELEMENT === 0) {
-        const res = new this.TypedArrayCtor(b.buffer, absoluteOffset, len)
-        c.offset += byteLen
-        return res
+        const res = new this.TypedArrayCtor(b.buffer, absoluteOffset, len);
+        c.offset += byteLen;
+        return res;
       }
       // Unaligned: must copy to aligned buffer
-      const copy = new Uint8Array(byteLen)
-      copy.set(b.subarray(c.offset, c.offset + byteLen))
-      c.offset += byteLen
-      return new this.TypedArrayCtor(copy.buffer)
+      const copy = new Uint8Array(byteLen);
+      copy.set(b.subarray(c.offset, c.offset + byteLen));
+      c.offset += byteLen;
+      return new this.TypedArrayCtor(copy.buffer);
     }
 
-    const result = new Array(len)
+    const result = new Array(len);
     for (let i = 0; i < len; i++) result[i] = this.inner.decode(v, b, c);
     return result;
   }
@@ -703,21 +756,21 @@ class MapCodec implements Codec {
   decode(v: DataView, b: Uint8Array, c: Cursor) {
     const len = readLEB128(b, c);
     if (c.options?.mapAsArray) {
-      const result: [unknown, unknown][] = []
+      const result: [unknown, unknown][] = [];
       for (let i = 0; i < len; i++) {
-        const key = this.key.decode(v, b, c)
-        const val = this.value.decode(v, b, c)
-        result.push([key, val])
+        const key = this.key.decode(v, b, c);
+        const val = this.value.decode(v, b, c);
+        result.push([key, val]);
       }
-      return result
+      return result;
     }
-    const result = new Map()
+    const result = new Map();
     for (let i = 0; i < len; i++) {
-      const key = this.key.decode(v, b, c)
-      const val = this.value.decode(v, b, c)
-      result.set(key, val)
+      const key = this.key.decode(v, b, c);
+      const val = this.value.decode(v, b, c);
+      result.set(key, val);
     }
-    return result
+    return result;
   }
 }
 
@@ -737,32 +790,36 @@ class FixedStringCodec implements Codec {
 
   decode(_: DataView, b: Uint8Array, c: Cursor) {
     checkBounds(b, c, this.n);
-    const bytes = new Uint8Array(this.n)
-    bytes.set(b.subarray(c.offset, c.offset + this.n))
-    c.offset += this.n
-    return bytes
+    const bytes = new Uint8Array(this.n);
+    bytes.set(b.subarray(c.offset, c.offset + this.n));
+    c.offset += this.n;
+    return bytes;
   }
 }
 
 class Date32Codec implements Codec {
   encode(e: RowBinaryEncoder, v: unknown) {
-    e.i32(Math.floor((v instanceof Date ? v : new Date(v as string)).getTime() / 86400000))
+    e.i32(
+      Math.floor(
+        (v instanceof Date ? v : new Date(v as string)).getTime() / 86400000,
+      ),
+    );
   }
   decode(v: DataView, _: Uint8Array, c: Cursor) {
-    const days = v.getInt32(c.offset, true)
-    c.offset += 4
-    return new Date(days * 86400000)
+    const days = v.getInt32(c.offset, true);
+    c.offset += 4;
+    return new Date(days * 86400000);
   }
 }
 
 class DateTime64Codec implements Codec {
-  private precision: number
-  private pow: bigint
+  private precision: number;
+  private pow: bigint;
 
   constructor(type: string) {
-    const match = type.match(/DateTime64\((\d+)/)
-    this.precision = match ? parseInt(match[1], 10) : 3
-    this.pow = 10n ** BigInt(Math.abs(this.precision - 3))
+    const match = type.match(/DateTime64\((\d+)/);
+    this.precision = match ? parseInt(match[1], 10) : 3;
+    this.pow = 10n ** BigInt(Math.abs(this.precision - 3));
   }
 
   encode(e: RowBinaryEncoder, v: unknown) {
@@ -773,22 +830,24 @@ class DateTime64Codec implements Codec {
       // If we want to be safe, we could rescale, but that requires knowing source precision.
       // We'll trust the user/ticks for now, or use toClosestDate logic?
       // Ideally we just write ticks.
-      e.i64(v.ticks)
-      return
+      e.i64(v.ticks);
+      return;
     }
-    if (typeof v === 'bigint') {
-      e.i64(v)
-      return
+    if (typeof v === "bigint") {
+      e.i64(v);
+      return;
     }
-    const ms = BigInt((v instanceof Date ? v : new Date(v as string)).getTime())
-    const ticks = this.precision >= 3 ? ms * this.pow : ms / this.pow
-    e.i64(ticks)
+    const ms = BigInt(
+      (v instanceof Date ? v : new Date(v as string)).getTime(),
+    );
+    const ticks = this.precision >= 3 ? ms * this.pow : ms / this.pow;
+    e.i64(ticks);
   }
 
   decode(v: DataView, _: Uint8Array, c: Cursor) {
-    const ticks = v.getBigInt64(c.offset, true)
-    c.offset += 8
-    return new ClickHouseDateTime64(ticks, this.precision)
+    const ticks = v.getBigInt64(c.offset, true);
+    c.offset += 8;
+    return new ClickHouseDateTime64(ticks, this.precision);
   }
 }
 
@@ -952,11 +1011,15 @@ export function decodeRowBinary(
 
 export interface StreamDecodeResult {
   columns: ColumnDef[];
-  rows: unknown[][];  // batch of rows
+  rows: unknown[][]; // batch of rows
 }
 
 /** Read a string from streaming reader with retry-on-underflow */
-async function readStreamString(reader: StreamingReader, options: DecodeOptions | undefined, errorMsg: string): Promise<string> {
+async function readStreamString(
+  reader: StreamingReader,
+  options: DecodeOptions | undefined,
+  errorMsg: string,
+): Promise<string> {
   while (true) {
     const slice = reader.getSlice();
     const cursor: Cursor = { offset: 0, options };
@@ -1020,7 +1083,8 @@ async function* streamDecodeRows(
             yield { columns, rows: batch };
           }
         }
-        if (!(await reader.pullMore())) throw new Error('Unexpected EOF mid-row');
+        if (!(await reader.pullMore()))
+          throw new Error("Unexpected EOF mid-row");
         continue;
       }
       throw e;
@@ -1053,10 +1117,22 @@ export async function* streamDecodeRowBinary(
       const names: string[] = [];
       const types: string[] = [];
       for (let i = 0; i < colCount; i++) {
-        names.push(await readStreamString(reader, options, 'Unexpected EOF reading column names'));
+        names.push(
+          await readStreamString(
+            reader,
+            options,
+            "Unexpected EOF reading column names",
+          ),
+        );
       }
       for (let i = 0; i < colCount; i++) {
-        types.push(await readStreamString(reader, options, 'Unexpected EOF reading column types'));
+        types.push(
+          await readStreamString(
+            reader,
+            options,
+            "Unexpected EOF reading column types",
+          ),
+        );
       }
 
       const columns = names.map((name, i) => ({ name, type: types[i] }));
@@ -1066,7 +1142,8 @@ export async function* streamDecodeRowBinary(
       return;
     } catch (e) {
       if (e instanceof RangeError) {
-        if (!(await reader.pullMore())) throw new Error('Unexpected EOF reading header');
+        if (!(await reader.pullMore()))
+          throw new Error("Unexpected EOF reading header");
         continue;
       }
       throw e;
@@ -1162,21 +1239,38 @@ function read256(view: DataView, c: Cursor, signed: boolean): bigint {
   return val;
 }
 
-function writeScaledInt(v: DataView, o: number, val: bigint, size: number): void {
+function writeScaledInt(
+  v: DataView,
+  o: number,
+  val: bigint,
+  size: number,
+): void {
   switch (size) {
-    case 4: v.setInt32(o, Number(val), true); break;
-    case 8: v.setBigInt64(o, val, true); break;
-    case 16: writeBigInt128(v, o, val, true); break;
-    case 32: writeBigInt256(v, o, val, true); break;
+    case 4:
+      v.setInt32(o, Number(val), true);
+      break;
+    case 8:
+      v.setBigInt64(o, val, true);
+      break;
+    case 16:
+      writeBigInt128(v, o, val, true);
+      break;
+    case 32:
+      writeBigInt256(v, o, val, true);
+      break;
   }
 }
 
 function readScaledInt(v: DataView, o: number, size: number): bigint {
   switch (size) {
-    case 4: return BigInt(v.getInt32(o, true));
-    case 8: return v.getBigInt64(o, true);
-    case 16: return readBigInt128(v, o, true);
-    case 32: return readBigInt256(v, o, true);
+    case 4:
+      return BigInt(v.getInt32(o, true));
+    case 8:
+      return v.getBigInt64(o, true);
+    case 16:
+      return readBigInt128(v, o, true);
+    case 32:
+      return readBigInt256(v, o, true);
   }
   return 0n;
 }

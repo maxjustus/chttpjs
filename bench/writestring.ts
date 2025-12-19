@@ -30,20 +30,24 @@ class CurrentImpl {
     const lenOffset = this.offset++;
     const { written } = TEXT_ENCODER.encodeInto(
       val,
-      this.buffer.subarray(this.offset, this.offset + maxLen)
+      this.buffer.subarray(this.offset, this.offset + maxLen),
     );
 
     if (written < 128) {
       this.buffer[lenOffset] = written;
       this.offset += written;
     } else {
-      let len = written, varintSize = 1;
-      while (len >= 0x80) { varintSize++; len >>>= 7; }
+      let len = written,
+        varintSize = 1;
+      while (len >= 0x80) {
+        varintSize++;
+        len >>>= 7;
+      }
 
       this.buffer.copyWithin(
         lenOffset + varintSize,
         lenOffset + 1,
-        this.offset + written
+        this.offset + written,
       );
 
       len = written;
@@ -57,7 +61,9 @@ class CurrentImpl {
     }
   }
 
-  reset() { this.offset = 0; }
+  reset() {
+    this.offset = 0;
+  }
 }
 
 // Alternative 1: Always use TextEncoder.encode() + separate length write
@@ -96,7 +102,9 @@ class EncodeFirst {
     this.offset += encoded.length;
   }
 
-  reset() { this.offset = 0; }
+  reset() {
+    this.offset = 0;
+  }
 }
 
 // Alternative 2: Check string length to guarantee fast path
@@ -135,7 +143,7 @@ class GuaranteedFastPath {
       const lenOffset = this.offset++;
       const { written } = TEXT_ENCODER.encodeInto(
         val,
-        this.buffer.subarray(this.offset, this.offset + maxLen)
+        this.buffer.subarray(this.offset, this.offset + maxLen),
       );
       this.buffer[lenOffset] = written;
       this.offset += written;
@@ -148,7 +156,9 @@ class GuaranteedFastPath {
     }
   }
 
-  reset() { this.offset = 0; }
+  reset() {
+    this.offset = 0;
+  }
 }
 
 // Alternative 3: encodeInto to temp buffer, then copy with length
@@ -197,16 +207,26 @@ class TempBuffer {
     this.offset += written;
   }
 
-  reset() { this.offset = 0; }
+  reset() {
+    this.offset = 0;
+  }
 }
 
 // Generate test strings
-function generateStrings(count: number, avgLen: number, variance: number): string[] {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ';
+function generateStrings(
+  count: number,
+  avgLen: number,
+  variance: number,
+): string[] {
+  const chars =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ";
   const result: string[] = [];
   for (let i = 0; i < count; i++) {
-    const len = Math.max(1, Math.floor(avgLen + (Math.random() - 0.5) * variance * 2));
-    let s = '';
+    const len = Math.max(
+      1,
+      Math.floor(avgLen + (Math.random() - 0.5) * variance * 2),
+    );
+    let s = "";
     for (let j = 0; j < len; j++) {
       s += chars[Math.floor(Math.random() * chars.length)];
     }
@@ -217,11 +237,14 @@ function generateStrings(count: number, avgLen: number, variance: number): strin
 
 function generateUnicodeStrings(count: number, avgLen: number): string[] {
   // Mix of ASCII and multi-byte UTF-8
-  const chars = 'abcdefghijklmnopqrstuvwxyz日本語中文한국어émojis🎉🚀💻';
+  const chars = "abcdefghijklmnopqrstuvwxyz日本語中文한국어émojis🎉🚀💻";
   const result: string[] = [];
   for (let i = 0; i < count; i++) {
-    const len = Math.max(1, Math.floor(avgLen + (Math.random() - 0.5) * avgLen));
-    let s = '';
+    const len = Math.max(
+      1,
+      Math.floor(avgLen + (Math.random() - 0.5) * avgLen),
+    );
+    let s = "";
     for (let j = 0; j < len; j++) {
       s += chars[Math.floor(Math.random() * chars.length)];
     }
@@ -244,37 +267,56 @@ function bench(name: string, fn: () => void, iterations: number): number {
 // Run benchmarks
 const ITERATIONS = 100;
 
-console.log('=== writeString Benchmark ===\n');
+console.log("=== writeString Benchmark ===\n");
 
 const scenarios = [
-  { name: 'Short ASCII (10 chars avg)', strings: generateStrings(10000, 10, 5) },
-  { name: 'Medium ASCII (50 chars avg)', strings: generateStrings(10000, 50, 20) },
-  { name: 'Long ASCII (200 chars avg)', strings: generateStrings(10000, 200, 100) },
-  { name: 'Very Long ASCII (1000 chars avg)', strings: generateStrings(1000, 1000, 500) },
-  { name: 'Unicode mixed (30 chars avg)', strings: generateUnicodeStrings(10000, 30) },
+  {
+    name: "Short ASCII (10 chars avg)",
+    strings: generateStrings(10000, 10, 5),
+  },
+  {
+    name: "Medium ASCII (50 chars avg)",
+    strings: generateStrings(10000, 50, 20),
+  },
+  {
+    name: "Long ASCII (200 chars avg)",
+    strings: generateStrings(10000, 200, 100),
+  },
+  {
+    name: "Very Long ASCII (1000 chars avg)",
+    strings: generateStrings(1000, 1000, 500),
+  },
+  {
+    name: "Unicode mixed (30 chars avg)",
+    strings: generateUnicodeStrings(10000, 30),
+  },
 ];
 
 const implementations = [
-  { name: 'Current (speculative)', create: () => new CurrentImpl() },
-  { name: 'Encode first', create: () => new EncodeFirst() },
-  { name: 'Guaranteed fast path', create: () => new GuaranteedFastPath() },
-  { name: 'Temp buffer', create: () => new TempBuffer() },
+  { name: "Current (speculative)", create: () => new CurrentImpl() },
+  { name: "Encode first", create: () => new EncodeFirst() },
+  { name: "Guaranteed fast path", create: () => new GuaranteedFastPath() },
+  { name: "Temp buffer", create: () => new TempBuffer() },
 ];
 
 for (const scenario of scenarios) {
   console.log(`\n${scenario.name} (${scenario.strings.length} strings):`);
-  console.log('-'.repeat(60));
+  console.log("-".repeat(60));
 
   const results: { name: string; time: number }[] = [];
 
   for (const impl of implementations) {
     const writer = impl.create();
-    const time = bench(impl.name, () => {
-      writer.reset();
-      for (const s of scenario.strings) {
-        writer.writeString(s);
-      }
-    }, ITERATIONS);
+    const time = bench(
+      impl.name,
+      () => {
+        writer.reset();
+        for (const s of scenario.strings) {
+          writer.writeString(s);
+        }
+      },
+      ITERATIONS,
+    );
     results.push({ name: impl.name, time });
   }
 
@@ -284,7 +326,9 @@ for (const scenario of scenarios) {
 
   for (const r of results) {
     const ratio = r.time / baseline;
-    const marker = ratio === 1 ? '(fastest)' : `(${ratio.toFixed(2)}x)`;
-    console.log(`  ${r.name.padEnd(25)} ${r.time.toFixed(2).padStart(8)}ms ${marker}`);
+    const marker = ratio === 1 ? "(fastest)" : `(${ratio.toFixed(2)}x)`;
+    console.log(
+      `  ${r.name.padEnd(25)} ${r.time.toFixed(2).padStart(8)}ms ${marker}`,
+    );
   }
 }

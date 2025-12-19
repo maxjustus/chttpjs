@@ -46,19 +46,29 @@ export class Table implements Iterable<Row> {
     const rowCount = columnData[0]?.length ?? 0;
     const cols: Column[] = columnData.map((data, i) => {
       // Already a Column - use as-is
-      if (data && typeof (data as any).get === 'function') return data as Column;
+      if (data && typeof (data as any).get === "function")
+        return data as Column;
       // TypedArray - wrap in DataColumn with type from schema
-      if (ArrayBuffer.isView(data) && !(data instanceof DataView)) return new DataColumn(columns[i].type, data as TypedArray);
+      if (ArrayBuffer.isView(data) && !(data instanceof DataView))
+        return new DataColumn(columns[i].type, data as TypedArray);
       // Array - use codec.fromValues
       return getCodec(columns[i].type).fromValues(data as unknown[]);
     });
     return new Table({ columns, columnData: cols, rowCount });
   }
 
-  get length(): number { return this.rowCount; }
-  get numCols(): number { return this.columns.length; }
-  get schema(): ColumnDef[] { return this.columns; }
-  get columnNames(): string[] { return this.columns.map(c => c.name); }
+  get length(): number {
+    return this.rowCount;
+  }
+  get numCols(): number {
+    return this.columns.length;
+  }
+  get schema(): ColumnDef[] {
+    return this.columns;
+  }
+  get columnNames(): string[] {
+    return this.columns.map((c) => c.name);
+  }
 
   /** Get column by name. */
   getColumn(name: string): Column | undefined {
@@ -71,6 +81,11 @@ export class Table implements Iterable<Row> {
     return this.columnData[index];
   }
 
+  /** Get value at specific row and column index. Allocation-free. */
+  getAt(rowIndex: number, colIndex: number): unknown {
+    return this.columnData[colIndex].get(rowIndex);
+  }
+
   /** Get row at index (returns a lazy Proxy). */
   get(index: number): Row {
     if (index < 0 || index >= this.rowCount) {
@@ -79,14 +94,53 @@ export class Table implements Iterable<Row> {
     return createRowProxy(this, index);
   }
 
-  /** Get row at index, supporting negative indices. */
-  at(index: number): Row | undefined {
-    const idx = index < 0 ? this.rowCount + index : index;
-    if (idx < 0 || idx >= this.rowCount) return undefined;
-    return this.get(idx);
+  /**
+   * Iterate over rows lazily using a single reused Proxy object.
+   * Extremely efficient for large tables as it avoids per-row allocations.
+   */
+  *rows(): IterableIterator<Row> {
+    const names = this.columnNames;
+    const numCols = this.numCols;
+    let currentRow = 0;
+
+    const proxy = new Proxy({} as Row, {
+      get: (_, prop) => {
+        if (prop === "toObject") {
+          return () => {
+            const obj: Record<string, unknown> = {};
+            for (let j = 0; j < numCols; j++)
+              obj[names[j]] = this.getAt(currentRow, j);
+            return obj;
+          };
+        }
+        if (prop === "toArray") {
+          return () => {
+            const arr = new Array(numCols);
+            for (let j = 0; j < numCols; j++)
+              arr[j] = this.getAt(currentRow, j);
+            return arr;
+          };
+        }
+        if (typeof prop === "string") {
+          const idx = this.nameToIndex.get(prop);
+          if (idx !== undefined) return this.getAt(currentRow, idx);
+        }
+        return undefined;
+      },
+      ownKeys: () => names,
+      getOwnPropertyDescriptor: (_, prop) =>
+        typeof prop === "string" && names.includes(prop)
+          ? { enumerable: true, configurable: true }
+          : undefined,
+      has: (_, prop) => typeof prop === "string" && names.includes(prop),
+    });
+
+    for (; currentRow < this.rowCount; currentRow++) {
+      yield proxy;
+    }
   }
 
-  /** Iterate over rows lazily. */
+  /** Iterate over rows lazily. Default iterator still creates new proxies for safety. */
   *[Symbol.iterator](): Iterator<Row> {
     for (let i = 0; i < this.rowCount; i++) {
       yield this.get(i);
@@ -122,7 +176,7 @@ function createRowProxy(table: Table, rowIndex: number): Row {
   const names = table.columnNames;
   return new Proxy({} as Row, {
     get(_, prop) {
-      if (prop === 'toObject') {
+      if (prop === "toObject") {
         return () => {
           const obj: Record<string, unknown> = {};
           for (let j = 0; j < table.numCols; j++) {
@@ -131,7 +185,7 @@ function createRowProxy(table: Table, rowIndex: number): Row {
           return obj;
         };
       }
-      if (prop === 'toArray') {
+      if (prop === "toArray") {
         return () => {
           const arr = new Array(table.numCols);
           for (let j = 0; j < table.numCols; j++) {
@@ -140,7 +194,7 @@ function createRowProxy(table: Table, rowIndex: number): Row {
           return arr;
         };
       }
-      if (typeof prop === 'string') {
+      if (typeof prop === "string") {
         const col = table.getColumn(prop);
         if (col) return col.get(rowIndex);
       }
@@ -150,14 +204,14 @@ function createRowProxy(table: Table, rowIndex: number): Row {
       return names;
     },
     getOwnPropertyDescriptor(_, prop) {
-      if (typeof prop === 'string' && names.includes(prop)) {
+      if (typeof prop === "string" && names.includes(prop)) {
         return { enumerable: true, configurable: true };
       }
       return undefined;
     },
     has(_, prop) {
-      return typeof prop === 'string' && names.includes(prop);
-    }
+      return typeof prop === "string" && names.includes(prop);
+    },
   });
 }
 
@@ -173,14 +227,17 @@ export class TableBuilder {
 
   constructor(schema: ColumnDef[]) {
     this.schema = schema;
-    this.builders = schema.map(col => makeBuilder(col.type));
+    this.builders = schema.map((col) => makeBuilder(col.type));
   }
 
-  get rowCount(): number { return this._rowCount; }
+  get rowCount(): number {
+    return this._rowCount;
+  }
 
   /** Append a row (values in column order). */
   appendRow(values: unknown[]): this {
-    if (values.length !== this.schema.length) throw new Error("Row length mismatch");
+    if (values.length !== this.schema.length)
+      throw new Error("Row length mismatch");
     for (let i = 0; i < values.length; i++) {
       this.builders[i].append(values[i]);
     }
@@ -194,7 +251,7 @@ export class TableBuilder {
     this.finished = true;
     return new Table({
       columns: this.schema,
-      columnData: this.builders.map(b => b.finish()),
+      columnData: this.builders.map((b) => b.finish()),
       rowCount: this._rowCount,
     });
   }
@@ -216,7 +273,7 @@ export function tableFromArrays(
   schema: ColumnDef[],
   data: Record<string, unknown[] | TypedArray | Column>,
 ): Table {
-  const columnData = schema.map(col => data[col.name]);
+  const columnData = schema.map((col) => data[col.name]);
   return Table.fromColumnar(schema, columnData);
 }
 
@@ -232,10 +289,7 @@ export function tableFromArrays(
  *   [[1, 'alice'], [2, 'bob'], [3, 'charlie']]
  * );
  */
-export function tableFromRows(
-  schema: ColumnDef[],
-  rows: unknown[][],
-): Table {
+export function tableFromRows(schema: ColumnDef[], rows: unknown[][]): Table {
   // Transpose rows to columns
   const numCols = schema.length;
   const columns: unknown[][] = schema.map(() => new Array(rows.length));
@@ -246,7 +300,9 @@ export function tableFromRows(
     }
   }
   // Use codec.fromValues for each column
-  const columnData = columns.map((arr, i) => getCodec(schema[i].type).fromValues(arr));
+  const columnData = columns.map((arr, i) =>
+    getCodec(schema[i].type).fromValues(arr),
+  );
   return new Table({ columns: schema, columnData, rowCount: rows.length });
 }
 
@@ -263,8 +319,8 @@ export function tableFromRows(
  */
 export function tableFromCols(columns: Record<string, Column>): Table {
   const names = Object.keys(columns);
-  const schema = names.map(name => ({ name, type: columns[name].type }));
-  const columnData = names.map(name => columns[name]);
+  const schema = names.map((name) => ({ name, type: columns[name].type }));
+  const columnData = names.map((name) => columns[name]);
   const rowCount = columnData[0]?.length ?? 0;
   return new Table({ columns: schema, columnData, rowCount });
 }
@@ -282,4 +338,3 @@ export function tableFromCols(columns: Record<string, Column>): Table {
 export function tableBuilder(schema: ColumnDef[]): TableBuilder {
   return new TableBuilder(schema);
 }
-
