@@ -36,6 +36,8 @@ export interface TcpClientOptions {
   keepAliveIntervalMs?: number;
   /** TLS options. true for defaults, or tls.ConnectionOptions for custom config. */
   tls?: boolean | tls.ConnectionOptions;
+  /** Grace period in ms after sending CANCEL before forceful socket close (default: 2000) */
+  cancelGracePeriodMs?: number;
 }
 
 export interface ColumnSchema {
@@ -58,6 +60,13 @@ export class TcpClient {
     }
   }
 
+  /** Write with backpressure - waits for drain if socket buffer is full */
+  private async writeWithBackpressure(data: Uint8Array): Promise<void> {
+    if (!this.socket!.write(data)) {
+      await new Promise<void>(resolve => this.socket!.once('drain', resolve));
+    }
+  }
+
   /** Server info from handshake, available after connect() */
   get serverHello() { return this._serverHello; }
 
@@ -75,13 +84,36 @@ export class TcpClient {
     };
   }
 
-  async connect(): Promise<void> {
+  async connect(options: { signal?: AbortSignal } = {}): Promise<void> {
+    const signal = options.signal;
+    if (signal?.aborted) throw new Error("Connect aborted before start");
+
     await initCompression();
     const timeout = this.options.connectTimeout ?? 10000;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+
+    const cleanup = () => {
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", abortHandler);
+    };
+
+    const abortHandler = () => {
+      if (!settled) {
+        cleanup();
+        this.socket?.destroy();
+      }
+    };
+    signal?.addEventListener("abort", abortHandler);
 
     const connectPromise = new Promise<void>((resolve, reject) => {
       const onConnected = async () => {
         try {
+          if (signal?.aborted) {
+            reject(new Error("Connect aborted"));
+            return;
+          }
           this.reader = new StreamingReader(this.socket!);
           await this.handshake();
           this.startKeepAliveTimer();
@@ -108,13 +140,23 @@ export class TcpClient {
     });
 
     const timeoutPromise = new Promise<void>((_, reject) => {
-      setTimeout(() => {
+      timeoutId = setTimeout(() => {
         this.socket?.destroy();
         reject(new Error(`Connection timeout after ${timeout}ms`));
       }, timeout);
     });
 
-    return Promise.race([connectPromise, timeoutPromise]);
+    const abortPromise = new Promise<void>((_, reject) => {
+      if (signal) {
+        signal.addEventListener("abort", () => reject(new Error("Connect aborted")), { once: true });
+      }
+    });
+
+    try {
+      await Promise.race(signal ? [connectPromise, timeoutPromise, abortPromise] : [connectPromise, timeoutPromise]);
+    } finally {
+      cleanup();
+    }
   }
 
   private async handshake() {
@@ -190,93 +232,116 @@ export class TcpClient {
     for await (const _ of this.query(sql)) { }
   }
 
-  async insert(sql: string, data: Table | AsyncIterable<Table> | Iterable<Table>) {
+  async insert(
+    sql: string,
+    data: Table | AsyncIterable<Table> | Iterable<Table>,
+    options: { signal?: AbortSignal } = {}
+  ) {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
 
-    const useCompression = !!this.options.compression;
-    const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
+    const signal = options.signal;
+    if (signal?.aborted) throw new Error("Insert aborted before start");
 
-    const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {}, useCompression, {});
-    this.socket.write(queryPacket);
+    let cancelled = false;
+    const abortHandler = () => {
+      if (!cancelled && this.socket) {
+        cancelled = true;
+        this.socket.write(this.writer.encodeCancel());
+      }
+    };
+    signal?.addEventListener("abort", abortHandler);
 
-    const queryDelimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
-    this.socket.write(queryDelimiter);
+    try {
+      const useCompression = !!this.options.compression;
+      const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
 
-    let schemaReceived = false;
-    while (!schemaReceived) {
-      const packetId = Number(await this.reader.readVarInt());
+      const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {}, useCompression, {});
+      this.socket.write(queryPacket);
 
-      switch (packetId) {
-        case ServerPacketId.Data: {
-          const block = await this.readBlock(useCompression);
-          this.currentSchema = block.columns.map(c => ({ name: c.name, type: c.type }));
-          schemaReceived = true;
-          break;
+      const queryDelimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
+      this.socket.write(queryDelimiter);
+
+      let schemaReceived = false;
+      while (!schemaReceived) {
+        if (cancelled) throw new Error("Insert cancelled");
+        const packetId = Number(await this.reader.readVarInt());
+
+        switch (packetId) {
+          case ServerPacketId.Data: {
+            const block = await this.readBlock(useCompression);
+            this.currentSchema = block.columns.map(c => ({ name: c.name, type: c.type }));
+            schemaReceived = true;
+            break;
+          }
+          case ServerPacketId.Progress: await this.readProgress(); break;
+          case ServerPacketId.Log: await this.readBlock(false); break;
+          case 11: // TableColumns
+            await this.reader.readString();
+            await this.reader.readString();
+            break;
+          case ServerPacketId.Exception:
+            throw await this.reader.readException();
+          default:
+            throw new Error(`Unexpected packet while waiting for insert header: ${packetId}`);
         }
-        case ServerPacketId.Progress: await this.readProgress(); break;
-        case ServerPacketId.Log: await this.readBlock(false); break;
-        case 11: // TableColumns
-          await this.reader.readString();
-          await this.reader.readString();
-          break;
-        case ServerPacketId.Exception:
-          throw await this.reader.readException();
-        default:
-          throw new Error(`Unexpected packet while waiting for insert header: ${packetId}`);
-      }
-    }
-
-    const blocks = (data instanceof Table)
-      ? [data]
-      : (data as AsyncIterable<Table> | Iterable<Table>);
-
-    let totalInserted = 0;
-    for await (const table of blocks) {
-      const encodedColumns = [];
-      for (let i = 0; i < table.columns.length; i++) {
-        const colDef = table.columns[i];
-        const colData = table.columnData[i];
-        const codec = getCodec(colDef.type);
-
-        const writer = new BufferWriter();
-        codec.writePrefix?.(writer, colData);
-        const data = codec.encode(colData);
-        writer.write(data);
-
-        encodedColumns.push({
-          name: colDef.name,
-          type: colDef.type,
-          data: writer.finish()
-        });
       }
 
-      const dataPacket = this.writer.encodeData("", table.rowCount, encodedColumns, this.serverHello.revision, useCompression, compressionMethod);
-      this.socket.write(dataPacket);
-      totalInserted += table.rowCount;
-    }
+      const blocks = (data instanceof Table)
+        ? [data]
+        : (data as AsyncIterable<Table> | Iterable<Table>);
 
-    const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
-    this.socket.write(delimiter);
+      let totalInserted = 0;
+      for await (const table of blocks) {
+        if (cancelled) throw new Error("Insert cancelled");
 
-    while (true) {
-      const packetId = Number(await this.reader.readVarInt());
-      if (packetId === ServerPacketId.EndOfStream) break;
+        const encodedColumns = [];
+        for (let i = 0; i < table.columns.length; i++) {
+          const colDef = table.columns[i];
+          const colData = table.columnData[i];
+          const codec = getCodec(colDef.type);
 
-      switch (packetId) {
-        case ServerPacketId.Progress: await this.readProgress(); break;
-        case ServerPacketId.ProfileInfo: await this.readProfileInfo(); break;
-        case ServerPacketId.Data:
-          await this.readBlock(useCompression);
-          break;
-        case ServerPacketId.Log:
-        case ServerPacketId.ProfileEvents:
-          await this.readBlock(false);
-          break;
-        case ServerPacketId.Exception:
-          throw await this.reader.readException();
+          const writer = new BufferWriter();
+          codec.writePrefix?.(writer, colData);
+          const data = codec.encode(colData);
+          writer.write(data);
+
+          encodedColumns.push({
+            name: colDef.name,
+            type: colDef.type,
+            data: writer.finish()
+          });
+        }
+
+        const dataPacket = this.writer.encodeData("", table.rowCount, encodedColumns, this.serverHello.revision, useCompression, compressionMethod);
+        await this.writeWithBackpressure(dataPacket);
+        totalInserted += table.rowCount;
       }
+
+      const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
+      this.socket.write(delimiter);
+
+      while (true) {
+        const packetId = Number(await this.reader.readVarInt());
+        if (packetId === ServerPacketId.EndOfStream) break;
+
+        switch (packetId) {
+          case ServerPacketId.Progress: await this.readProgress(); break;
+          case ServerPacketId.ProfileInfo: await this.readProfileInfo(); break;
+          case ServerPacketId.Data:
+            await this.readBlock(useCompression);
+            break;
+          case ServerPacketId.Log:
+          case ServerPacketId.ProfileEvents:
+            await this.readBlock(false);
+            break;
+          case ServerPacketId.Exception:
+            throw await this.reader.readException();
+        }
+      }
+      this.log(`Successfully inserted ${totalInserted} rows.`);
+    } finally {
+      signal?.removeEventListener("abort", abortHandler);
     }
-    this.log(`Successfully inserted ${totalInserted} rows.`);
   }
 
   private async readProgress(): Promise<Progress> {
@@ -362,7 +427,7 @@ export class TcpClient {
           // Read serialization kind tree if supported
           let serNode: SerializationNode = DENSE_LEAF;
           if (this.serverHello!.revision >= 54454n) {
-            const hasCustom = tempReader.buffer[tempReader.offset++] !== 0;
+            const hasCustom = tempReader.readU8() !== 0;
             if (hasCustom) {
               serNode = codec.readKinds(tempReader);
             }
@@ -427,7 +492,7 @@ export class TcpClient {
 
       let serNode: SerializationNode = DENSE_LEAF;
       if (this.serverHello!.revision >= 54454n) {
-        const hasCustom = reader.buffer[reader.offset++] !== 0;
+        const hasCustom = reader.readU8() !== 0;
         if (hasCustom) {
           serNode = codec.readKinds(reader);
         }
@@ -459,7 +524,9 @@ export class TcpClient {
     const useCompression = !!this.options.compression;
     const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
     const queryTimeout = this.options.queryTimeout ?? 30000;
+    const cancelGracePeriod = this.options.cancelGracePeriodMs ?? 2000;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let graceTimeoutId: ReturnType<typeof setTimeout> | null = null;
     let timedOut = false;
     let cancelled = false;
 
@@ -467,7 +534,17 @@ export class TcpClient {
       if (queryTimeout > 0) {
         timeoutId = setTimeout(() => {
           timedOut = true;
-          this.socket?.destroy();
+          // First try graceful cancel
+          if (this.socket && !cancelled) {
+            cancelled = true;
+            this.socket.write(this.writer.encodeCancel());
+          }
+          // Give server grace period to respond, then force close
+          graceTimeoutId = setTimeout(() => {
+            if (timedOut) {
+              this.socket?.destroy();
+            }
+          }, cancelGracePeriod);
         }, queryTimeout);
       }
     };
@@ -476,6 +553,10 @@ export class TcpClient {
       if (timeoutId) {
         clearTimeout(timeoutId);
         timeoutId = null;
+      }
+      if (graceTimeoutId) {
+        clearTimeout(graceTimeoutId);
+        graceTimeoutId = null;
       }
     };
 
@@ -633,9 +714,9 @@ export class TcpClient {
    * Static factory that connects and returns a disposable client.
    * Usage: await using client = await TcpClient.connect(options);
    */
-  static async connect(options: TcpClientOptions): Promise<TcpClient> {
+  static async connect(options: TcpClientOptions, connectOptions: { signal?: AbortSignal } = {}): Promise<TcpClient> {
     const client = new TcpClient(options);
-    await client.connect();
+    await client.connect(connectOptions);
     return client;
   }
 }

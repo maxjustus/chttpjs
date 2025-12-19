@@ -175,4 +175,45 @@ export class BufferReader {
     this.offset += length;
     return res;
   }
+
+  // Bounds check helper - throws BufferUnderflowError if not enough bytes available
+  ensureAvailable(bytes: number): void {
+    if (this.offset + bytes > this.buffer.length) {
+      throw new BufferUnderflowError(`Need ${bytes} bytes at offset ${this.offset}, only ${this.buffer.length - this.offset} available`);
+    }
+  }
+
+  // Fixed-size reads with bounds checking
+  readU8(): number {
+    this.ensureAvailable(1);
+    return this.buffer[this.offset++];
+  }
+
+  readU32LE(): number {
+    this.ensureAvailable(4);
+    const val = this.view.getUint32(this.offset, true);
+    this.offset += 4;
+    return val;
+  }
+
+  readU64LE(): bigint {
+    this.ensureAvailable(8);
+    const val = this.view.getBigUint64(this.offset, true);
+    this.offset += 8;
+    return val;
+  }
+
+  readI32LE(): number {
+    this.ensureAvailable(4);
+    const val = this.view.getInt32(this.offset, true);
+    this.offset += 4;
+    return val;
+  }
+
+  readI64LE(): bigint {
+    this.ensureAvailable(8);
+    const val = this.view.getBigInt64(this.offset, true);
+    this.offset += 8;
+    return val;
+  }
 }

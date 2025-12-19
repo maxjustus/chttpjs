@@ -153,7 +153,7 @@ export abstract class BaseCodec implements Codec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.buffer[reader.offset++];
+    const kind = reader.readU8();
     return { kind, children: [] };
   }
 }
@@ -385,6 +385,7 @@ class UUIDCodec extends BaseCodec {
   }
 
   decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
+    reader.ensureAvailable(rows * 16);
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const b = reader.buffer.subarray(reader.offset, reader.offset + 16);
@@ -437,6 +438,7 @@ class FixedStringCodec extends BaseCodec {
   }
 
   decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
+    reader.ensureAvailable(rows * this.len);
     const values: Uint8Array[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       values[i] = reader.buffer.slice(reader.offset, reader.offset + this.len);
@@ -501,6 +503,7 @@ class BigIntCodec extends BaseCodec {
   }
 
   decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
+    reader.ensureAvailable(rows * this.byteSize);
     const values: bigint[] = new Array(rows);
     const readFn = this.byteSize === 16 ? readBigInt128 : readBigInt256;
     for (let i = 0; i < rows; i++) {
@@ -565,8 +568,8 @@ class DecimalCodec extends BaseCodec {
   }
 
   decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
+    reader.ensureAvailable(rows * this.byteSize);
     const values: string[] = new Array(rows);
-
     for (let i = 0; i < rows; i++) {
       let scaled: bigint;
       if (this.byteSize === 4) {
@@ -885,7 +888,7 @@ class ArrayCodec extends BaseCodec {
   estimateSize(rows: number) { return rows * 8 + this.inner.estimateSize(rows * 5); }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.buffer[reader.offset++];
+    const kind = reader.readU8();
     return { kind, children: [this.inner.readKinds(reader)] };
   }
 }
@@ -974,7 +977,7 @@ class NullableCodec extends BaseCodec {
   estimateSize(rows: number) { return rows + this.inner.estimateSize(rows); }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.buffer[reader.offset++];
+    const kind = reader.readU8();
     return { kind, children: [this.inner.readKinds(reader)] };
   }
 }
@@ -1058,20 +1061,16 @@ class LowCardinalityCodec extends BaseCodec {
   decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     if (rows === 0) return new DataColumn(this.type, []);
 
-    const flags = reader.view.getBigUint64(reader.offset, true);
-    reader.offset += 8;
-
+    const flags = reader.readU64LE();
     const typeInfo = Number(flags & 0xFFn);
     const isNullable = this.inner instanceof NullableCodec;
 
-    const dictSize = Number(reader.view.getBigUint64(reader.offset, true));
-    reader.offset += 8;
+    const dictSize = Number(reader.readU64LE());
 
     // Dictionary values are never sparse
     const dict = this.dictCodec.decode(reader, dictSize, defaultDeserializerState());
 
-    const count = Number(reader.view.getBigUint64(reader.offset, true));
-    reader.offset += 8;
+    const count = Number(reader.readU64LE());
 
     let indices: TypedArray;
     if (typeInfo === 0) indices = reader.readTypedArray(Uint8Array, count);
@@ -1133,7 +1132,7 @@ class LowCardinalityCodec extends BaseCodec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.buffer[reader.offset++];
+    const kind = reader.readU8();
     return { kind, children: [this.inner.readKinds(reader)] };
   }
 }
@@ -1248,7 +1247,7 @@ class MapCodec extends BaseCodec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.buffer[reader.offset++];
+    const kind = reader.readU8();
     return {
       kind,
       children: [
@@ -1354,7 +1353,7 @@ class TupleCodec extends BaseCodec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.buffer[reader.offset++];
+    const kind = reader.readU8();
     const children: SerializationNode[] = [];
     for (const el of this.elements) {
       children.push(el.codec.readKinds(reader));
@@ -1500,7 +1499,7 @@ class VariantCodec implements Codec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.buffer[reader.offset++];
+    const kind = reader.readU8();
     const children: SerializationNode[] = [];
     for (const codec of this.codecs) {
       children.push(codec.readKinds(reader));
@@ -1530,8 +1529,7 @@ class DynamicCodec implements Codec {
   }
 
   readPrefix(reader: BufferReader) {
-    const version = reader.view.getBigUint64(reader.offset, true);
-    reader.offset += 8;
+    const version = reader.readU64LE();
     if (version !== 3n) throw new Error(`Dynamic: only V3 supported, got V${version}`);
 
     const count = reader.readVarint();
@@ -1635,7 +1633,7 @@ class DynamicCodec implements Codec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.buffer[reader.offset++];
+    const kind = reader.readU8();
     const children: SerializationNode[] = [];
     for (const codec of this.codecs) {
       children.push(codec.readKinds(reader));
@@ -1665,8 +1663,7 @@ class JsonCodec implements Codec {
   }
 
   readPrefix(reader: BufferReader) {
-    const ver = reader.view.getBigUint64(reader.offset, true);
-    reader.offset += 8;
+    const ver = reader.readU64LE();
     if (ver !== 3n) throw new Error(`JSON: only V3 supported, got V${ver}`);
 
     const count = reader.readVarint();
@@ -1748,7 +1745,7 @@ class JsonCodec implements Codec {
   estimateSize(rows: number) { return rows * 32; } // Conservative: ~32 bytes per row
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.buffer[reader.offset++];
+    const kind = reader.readU8();
     const children: SerializationNode[] = [];
     for (const pathCodec of this.pathCodecs.values()) {
       children.push(pathCodec.readKinds(reader));

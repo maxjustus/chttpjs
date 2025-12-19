@@ -1,4 +1,4 @@
-.PHONY: build build-full build-lz4 test fuzz bench bench-formats bench-profile publish
+.PHONY: build build-full build-lz4 test test-tcp fuzz fuzz-tcp bench bench-formats bench-profile publish
 
 build: build-full build-lz4
 
@@ -11,8 +11,15 @@ build-lz4:
 test:
 	npm test
 
+test-tcp:
+	npm run test:tcp
+
 fuzz:
 	npm run test:fuzz
+
+# TCP fuzz: FUZZ_ITERATIONS=10 FUZZ_ROWS=50000 make fuzz-tcp
+fuzz-tcp:
+	npm run test:tcp-fuzz
 
 bench:
 	npm run bench

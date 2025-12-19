@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert";
 import { TcpClient } from "../client.ts";
 import { ClickHouseException } from "../types.ts";
+import { Table } from "../../formats/native/table.ts";
 
 describe("TCP Client Reliability", () => {
   const options = {
@@ -120,6 +121,110 @@ describe("TCP Client Reliability", () => {
         err.message.includes("timeout") || err.message.includes("ETIMEDOUT") || err.code === "ETIMEDOUT",
         `Should be timeout error, got: ${err.message}`
       );
+    }
+  });
+
+  test("should cancel insert via AbortSignal", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+
+    const controller = new AbortController();
+
+    try {
+      // Create table for insert test
+      await client.execute("CREATE TABLE IF NOT EXISTS test_abort_insert (x UInt64) ENGINE = Memory");
+
+      // Create an async generator that yields tables slowly
+      async function* slowTables() {
+        for (let i = 0; i < 100; i++) {
+          yield Table.fromColumnar(
+            [{ name: "x", type: "UInt64" }],
+            [BigInt64Array.from([BigInt(i)])]
+          );
+          await new Promise(r => setTimeout(r, 10));
+        }
+      }
+
+      // Cancel after 50ms
+      setTimeout(() => controller.abort(), 50);
+
+      await client.insert(
+        "INSERT INTO test_abort_insert FORMAT Native",
+        slowTables(),
+        { signal: controller.signal }
+      );
+      // Insert may complete or be cancelled
+    } catch (err: any) {
+      assert.ok(
+        err.message.includes("cancelled") || err.message.includes("aborted"),
+        `Should be cancel/abort error, got: ${err.message}`
+      );
+    } finally {
+      // Clean up - use a fresh client since connection may be in bad state
+      const cleanupClient = new TcpClient(options);
+      await cleanupClient.connect();
+      await cleanupClient.execute("DROP TABLE IF EXISTS test_abort_insert");
+      cleanupClient.close();
+      client.close();
+    }
+  });
+
+  test("should reject insert if already aborted", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+
+    const controller = new AbortController();
+    controller.abort(); // Abort before insert starts
+
+    try {
+      const table = Table.fromColumnar(
+        [{ name: "x", type: "UInt64" }],
+        [BigInt64Array.from([1n, 2n, 3n])]
+      );
+      await client.insert("INSERT INTO system.numbers FORMAT Native", table, { signal: controller.signal });
+      assert.fail("Should have thrown an error");
+    } catch (err: any) {
+      assert.ok(err.message.includes("aborted"), "Should mention aborted");
+    } finally {
+      client.close();
+    }
+  });
+
+  test("should cancel connect via AbortSignal", async () => {
+    const controller = new AbortController();
+
+    // Use non-routable IP so connection hangs
+    const client = new TcpClient({
+      host: "192.0.2.1", // Non-routable IP (RFC 5737 TEST-NET-1)
+      port: 9000,
+      connectTimeout: 10000 // Long timeout so abort happens first
+    });
+
+    // Abort after 50ms
+    setTimeout(() => controller.abort(), 50);
+
+    try {
+      await client.connect({ signal: controller.signal });
+      assert.fail("Should have thrown an abort error");
+    } catch (err: any) {
+      assert.ok(
+        err.message.includes("aborted") || err.message.includes("abort"),
+        `Should be abort error, got: ${err.message}`
+      );
+    }
+  });
+
+  test("should reject connect if already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(); // Abort before connect starts
+
+    const client = new TcpClient(options);
+
+    try {
+      await client.connect({ signal: controller.signal });
+      assert.fail("Should have thrown an error");
+    } catch (err: any) {
+      assert.ok(err.message.includes("aborted"), "Should mention aborted");
     }
   });
 });
