@@ -494,11 +494,11 @@ Requires Node.js 20+ or modern browsers (Chrome 116+, Firefox 124+, Safari 17.4+
 
 Set `compression` in options:
 
-- `"lz4"` - fast, WASM (default)
+- `"lz4"` - fast, native in Node.js with WASM fallback (default)
 - `"zstd"` - ~2x better compression, native in Node.js with WASM fallback
 - `"none"` - no compression
 
-ZSTD uses native bindings in Node.js when available, falling back to WASM in browsers. Run `npm run bench` to see compression ratios and speeds for your data.
+ZSTD and LZ4 use native bindings in Node.js when available, falling back to WASM in browsers. Run `npm run bench` to see compression ratios and speeds for your data.
 
 ## Development
 
