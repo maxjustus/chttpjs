@@ -1,4 +1,4 @@
-import { gzip, gunzip } from "node:zlib";
+import { gzip, gunzip, zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { promisify } from "node:util";
 import { compressFrame, decompressFrame } from "lz4-napi";
 import {
@@ -198,6 +198,11 @@ function getMethods(): CompressionMethod[] {
       name: "ZSTD napi",
       compress: async (d) => new Uint8Array(zstdNativeCompress(d)),
       decompress: async (d) => new Uint8Array(zstdNativeDecompress(d)),
+    },
+    {
+      name: "ZSTD node",
+      compress: async (d) => new Uint8Array(zstdCompressSync(d, { level: 3 })),
+      decompress: async (d) => new Uint8Array(zstdDecompressSync(d)),
     },
     {
       name: "gzip",
