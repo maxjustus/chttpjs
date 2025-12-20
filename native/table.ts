@@ -105,15 +105,17 @@ export class RecordBatch implements Iterable<Row> {
     const numCols = this.numCols;
     let currentRow = 0;
 
+    const materialize = () => {
+      const obj: Record<string, unknown> = {};
+      for (let j = 0; j < numCols; j++)
+        obj[names[j]] = this.getAt(currentRow, j);
+      return obj;
+    };
+
     const proxy = new Proxy({} as Row, {
       get: (_, prop) => {
-        if (prop === "toObject") {
-          return () => {
-            const obj: Record<string, unknown> = {};
-            for (let j = 0; j < numCols; j++)
-              obj[names[j]] = this.getAt(currentRow, j);
-            return obj;
-          };
+        if (prop === "toObject" || prop === "toJSON") {
+          return materialize;
         }
         if (prop === "toArray") {
           return () => {
@@ -176,16 +178,17 @@ export class RecordBatch implements Iterable<Row> {
  */
 function createRowProxy(batch: RecordBatch, rowIndex: number): Row {
   const names = batch.columnNames;
+  const materialize = () => {
+    const obj: Record<string, unknown> = {};
+    for (let j = 0; j < batch.numCols; j++) {
+      obj[names[j]] = batch.columnData[j].get(rowIndex);
+    }
+    return obj;
+  };
   return new Proxy({} as Row, {
     get(_, prop) {
-      if (prop === "toObject") {
-        return () => {
-          const obj: Record<string, unknown> = {};
-          for (let j = 0; j < batch.numCols; j++) {
-            obj[names[j]] = batch.columnData[j].get(rowIndex);
-          }
-          return obj;
-        };
+      if (prop === "toObject" || prop === "toJSON") {
+        return materialize;
       }
       if (prop === "toArray") {
         return () => {

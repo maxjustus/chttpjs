@@ -14,8 +14,30 @@
  */
 
 import * as readline from "node:readline";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { TcpClient } from "./client.ts";
 import type { Packet } from "./types.ts";
+
+const HISTORY_FILE = path.join(os.homedir(), ".ch_cli_history");
+const MAX_HISTORY = 500;
+
+function loadHistory(): string[] {
+  try {
+    return fs.readFileSync(HISTORY_FILE, "utf-8").split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(history: string[]): void {
+  try {
+    fs.writeFileSync(HISTORY_FILE, history.slice(-MAX_HISTORY).join("\n") + "\n");
+  } catch {
+    // Ignore write errors
+  }
+}
 
 const options = {
   host: process.env.CH_HOST ?? "localhost",
@@ -40,16 +62,22 @@ function toJSON(obj: unknown): unknown {
   return obj;
 }
 
-function formatPacket(packet: Packet): Record<string, unknown> {
+function formatPacket(packet: Packet, compact: boolean = false): Record<string, unknown> {
   switch (packet.type) {
     case "Data":
     case "Totals":
     case "Extremes": {
-      const rows = [...packet.batch.rows()].map(r => r.toObject());
+      if (compact) {
+        return {
+          type: packet.type,
+          columns: packet.batch.columns,
+          rowCount: packet.batch.rowCount,
+        };
+      }
       return {
         type: packet.type,
         columns: packet.batch.columns,
-        rows: rows,
+        rows: packet.batch.toArray(),
       };
     }
     case "Progress":
@@ -70,17 +98,23 @@ function formatPacket(packet: Packet): Record<string, unknown> {
   }
 }
 
-async function runQuery(client: TcpClient, query: string): Promise<void> {
+async function runQuery(client: TcpClient, query: string, pretty: boolean = false): Promise<void> {
+  const compact = /\bFORMAT\s+Null\b/i.test(query);
   for await (const packet of client.query(query, { send_logs_level: "trace" })) {
-    console.log(JSON.stringify(toJSON(formatPacket(packet))));
+    const json = toJSON(formatPacket(packet, compact));
+    console.log(pretty ? JSON.stringify(json, null, 2) : JSON.stringify(json));
   }
 }
 
 async function runInteractive(client: TcpClient): Promise<void> {
+  const history = loadHistory();
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     prompt: "ch> ",
+    history,
+    historySize: MAX_HISTORY,
   });
 
   console.log(`Connected to ${options.host}:${options.port}`);
@@ -98,13 +132,16 @@ async function runInteractive(client: TcpClient): Promise<void> {
     }
 
     try {
-      await runQuery(client, query);
+      await runQuery(client, query, true);
     } catch (err) {
       console.error(`Error: ${(err as Error).message}`);
     }
     console.log();
     rl.prompt();
   }
+
+  // Save history on exit
+  saveHistory((rl as any).history || []);
 
   rl.close();
 }
