@@ -35,7 +35,6 @@ describe("TCP Client Stress Tests", () => {
         try {
           for await (const _ of client.query(
             `SELECT number, 'value' FROM numbers(1000000)`,
-            {},
             { signal: controller.signal }
           )) {}
         } catch {
@@ -79,7 +78,7 @@ describe("TCP Client Stress Tests", () => {
           let count = 0n;
           for await (const packet of client.query(`SELECT count() FROM ${tableName}`)) {
             if (packet.type === "Data") {
-              for (const row of packet.batch.rows()) {
+              for (const row of packet.batch) {
                 count = row["count()"] as bigint;
               }
             }
@@ -101,7 +100,6 @@ describe("TCP Client Stress Tests", () => {
       try {
         for await (const packet of client.query(
           `SELECT number, toString(number) FROM numbers(500000)`,
-          {},
           { signal: controller.signal }
         )) {
           if (packet.type === "Data") {
@@ -121,7 +119,7 @@ describe("TCP Client Stress Tests", () => {
       let result = 0n;
       for await (const packet of client.query("SELECT 42 as answer")) {
         if (packet.type === "Data") {
-          for (const row of packet.batch.rows()) {
+          for (const row of packet.batch) {
             result = row.answer as bigint;
           }
         }
@@ -187,7 +185,7 @@ describe("TCP Client Stress Tests", () => {
         let result = 0n;
         for await (const packet of client.query(`SELECT ${i} as val`)) {
           if (packet.type === "Data") {
-            for (const row of packet.batch.rows()) {
+            for (const row of packet.batch) {
               result = row.val as bigint;
             }
           }
@@ -227,7 +225,7 @@ describe("TCP Client Stress Tests", () => {
           let count = 0n;
           for await (const packet of client.query(`SELECT count() FROM ${tableName}`)) {
             if (packet.type === "Data") {
-              for (const row of packet.batch.rows()) {
+              for (const row of packet.batch) {
                 count = row["count()"] as bigint;
               }
             }
@@ -254,7 +252,7 @@ describe("TCP Client Stress Tests", () => {
       let result = 0n;
       for await (const packet of client.query("SELECT 123 as val")) {
         if (packet.type === "Data") {
-          for (const row of packet.batch.rows()) {
+          for (const row of packet.batch) {
             result = row.val as bigint;
           }
         }
@@ -273,7 +271,7 @@ describe("TCP Client Stress Tests", () => {
       let result = 0n;
       for await (const packet of client.query("SELECT 456 as val")) {
         if (packet.type === "Data") {
-          for (const row of packet.batch.rows()) {
+          for (const row of packet.batch) {
             result = row.val as bigint;
           }
         }
@@ -316,18 +314,18 @@ describe("TCP Client Stress Tests", () => {
         let count = 0n;
         for await (const packet of client.query(`SELECT count() FROM ${tableName}`)) {
           if (packet.type === "Data") {
-            for (const row of packet.batch.rows()) {
+            for (const row of packet.batch) {
               count = row["count()"] as bigint;
             }
           }
         }
         assert.strictEqual(Number(count), totalRows);
 
-        // Spot check some data - use toObject() since rows() reuses proxy
+        // Spot check some data
         const spotCheckRows: Record<string, unknown>[] = [];
         for await (const packet of client.query(`SELECT * FROM ${tableName} WHERE id IN (0, 99999, 199999) ORDER BY id`)) {
           if (packet.type === "Data") {
-            for (const row of packet.batch.rows()) {
+            for (const row of packet.batch) {
               spotCheckRows.push(row.toObject());
             }
           }
@@ -367,7 +365,7 @@ describe("TCP Client Stress Tests", () => {
         let hash = 0n;
         for await (const packet of client.query(`SELECT count() as c, sum(cityHash64(*)) as h FROM ${tableName}`)) {
           if (packet.type === "Data") {
-            for (const row of packet.batch.rows()) {
+            for (const row of packet.batch) {
               count = row.c as bigint;
               hash = row.h as bigint;
             }

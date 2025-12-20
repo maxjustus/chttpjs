@@ -13,6 +13,7 @@ import {
   Method,
   usingNativeZstd,
 } from "../compression.ts";
+import { benchAsync, readBenchOptions, reportEnvironment } from "./harness.ts";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -135,30 +136,31 @@ async function benchMethod(
   compress: (d: Uint8Array) => Promise<Uint8Array>,
   decompress: (d: Uint8Array) => Promise<Uint8Array>,
   iterations: number,
+  warmup: number,
 ): Promise<BenchResult> {
-  // Warmup
-  const warmupCompressed = await compress(data);
-  await decompress(warmupCompressed);
+  let compressed: Uint8Array = await compress(data);
+  await decompress(compressed);
 
-  // Benchmark compress
-  const compressStart = performance.now();
-  let compressed: Uint8Array = new Uint8Array(0);
-  for (let i = 0; i < iterations; i++) {
-    compressed = await compress(data);
-  }
-  const compressMs = (performance.now() - compressStart) / iterations;
+  const compressStats = await benchAsync(
+    `${name} compress`,
+    async () => {
+      compressed = await compress(data);
+    },
+    { iterations, warmup },
+  );
 
-  // Benchmark decompress
-  const decompressStart = performance.now();
-  for (let i = 0; i < iterations; i++) {
-    await decompress(compressed);
-  }
-  const decompressMs = (performance.now() - decompressStart) / iterations;
+  const decompressStats = await benchAsync(
+    `${name} decompress`,
+    async () => {
+      await decompress(compressed);
+    },
+    { iterations, warmup },
+  );
 
   return {
     method: name,
-    compressMs,
-    decompressMs,
+    compressMs: compressStats.meanMs,
+    decompressMs: decompressStats.meanMs,
     ratio: data.length / compressed.length,
     compressedSize: compressed.length,
   };
@@ -216,14 +218,17 @@ async function main() {
   await init();
   await bokuweb.init();
 
-  const iterations = 5;
+  reportEnvironment();
+  const benchOptions = readBenchOptions({ iterations: 5, warmup: 2 });
+  const iterations = benchOptions.iterations ?? 5;
+  const warmup = benchOptions.warmup ?? 2;
   const datasets = generateTestDataSets();
   const methods = getMethods();
 
   console.log(
     `ZSTD backend: ${usingNativeZstd ? "native (zstd-napi)" : "WASM (@bokuweb/zstd-wasm)"}`,
   );
-  console.log(`Iterations: ${iterations}\n`);
+  console.log(`Iterations: ${iterations}, Warmup: ${warmup}\n`);
 
   for (const dataset of datasets) {
     console.log(`\n${"=".repeat(70)}`);
@@ -240,6 +245,7 @@ async function main() {
         (d) => method.compress(d, dataset.data.length),
         (d) => method.decompress(d, dataset.data.length),
         iterations,
+        warmup,
       );
       console.log(
         `${result.method.padEnd(14)} ${result.compressMs.toFixed(2).padStart(12)}  ${result.decompressMs.toFixed(2).padStart(14)}  ${result.ratio.toFixed(2).padStart(5)}x  ${result.compressedSize}`,

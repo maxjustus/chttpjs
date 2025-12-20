@@ -96,55 +96,7 @@ export class RecordBatch implements Iterable<Row> {
     return createRowProxy(this, index);
   }
 
-  /**
-   * Iterate over rows lazily using a single reused Proxy object.
-   * Extremely efficient for large tables as it avoids per-row allocations.
-   */
-  *rows(): IterableIterator<Row> {
-    const names = this.columnNames;
-    const numCols = this.numCols;
-    let currentRow = 0;
-
-    const materialize = () => {
-      const obj: Record<string, unknown> = {};
-      for (let j = 0; j < numCols; j++)
-        obj[names[j]] = this.getAt(currentRow, j);
-      return obj;
-    };
-
-    const proxy = new Proxy({} as Row, {
-      get: (_, prop) => {
-        if (prop === "toObject" || prop === "toJSON") {
-          return materialize;
-        }
-        if (prop === "toArray") {
-          return () => {
-            const arr = new Array(numCols);
-            for (let j = 0; j < numCols; j++)
-              arr[j] = this.getAt(currentRow, j);
-            return arr;
-          };
-        }
-        if (typeof prop === "string") {
-          const idx = this.nameToIndex.get(prop);
-          if (idx !== undefined) return this.getAt(currentRow, idx);
-        }
-        return undefined;
-      },
-      ownKeys: () => names,
-      getOwnPropertyDescriptor: (_, prop) =>
-        typeof prop === "string" && names.includes(prop)
-          ? { enumerable: true, configurable: true }
-          : undefined,
-      has: (_, prop) => typeof prop === "string" && names.includes(prop),
-    });
-
-    for (; currentRow < this.rowCount; currentRow++) {
-      yield proxy;
-    }
-  }
-
-  /** Iterate over rows lazily. Default iterator still creates new proxies for safety. */
+  /** Iterate over rows lazily. Default iterator creates new proxies per row (safe to store/collect). */
   *[Symbol.iterator](): Iterator<Row> {
     for (let i = 0; i < this.rowCount; i++) {
       yield this.get(i);

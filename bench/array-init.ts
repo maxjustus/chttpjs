@@ -1,24 +1,12 @@
 // Benchmark: Array initialization strategies and V8 element kinds
 // Tests HOLEY vs PACKED arrays and their impact on performance
 
+import { benchSync, readBenchOptions, reportEnvironment } from "./harness.ts";
+
 const SIZES = [1000, 10_000, 100_000, 1_000_000];
 const ITERATIONS = 100;
 
-function benchmark(
-  name: string,
-  fn: () => void,
-  iterations: number = ITERATIONS,
-): number {
-  // Warmup
-  for (let i = 0; i < 10; i++) fn();
-
-  const start = performance.now();
-  for (let i = 0; i < iterations; i++) fn();
-  const end = performance.now();
-  return (end - start) / iterations;
-}
-
-function runSuite(size: number) {
+function runSuite(size: number, benchOptions: { iterations: number; warmup: number }) {
   console.log(`\n=== Size: ${size.toLocaleString()} ===\n`);
 
   // --- Creation benchmarks ---
@@ -35,23 +23,24 @@ function runSuite(size: number) {
     return arr;
   };
 
+  const opts = { ...benchOptions, iterations: benchOptions.iterations };
   console.log(
-    `new Array(n):              ${benchmark("holey", createHoley).toFixed(3)}ms`,
+    `new Array(n):              ${benchSync("holey", createHoley, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `new Array(n).fill(undef):  ${benchmark("fill-undef", createFillUndefined).toFixed(3)}ms`,
+    `new Array(n).fill(undef):  ${benchSync("fill-undef", createFillUndefined, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `new Array(n).fill(null):   ${benchmark("fill-null", createFillNull).toFixed(3)}ms`,
+    `new Array(n).fill(null):   ${benchSync("fill-null", createFillNull, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `new Array(n).fill(0):      ${benchmark("fill-zero", createFillZero).toFixed(3)}ms`,
+    `new Array(n).fill(0):      ${benchSync("fill-zero", createFillZero, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `new Array(n).fill(''):     ${benchmark("fill-string", createFillString).toFixed(3)}ms`,
+    `new Array(n).fill(''):     ${benchSync("fill-string", createFillString, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `[].push() loop:            ${benchmark("push-loop", createPush).toFixed(3)}ms`,
+    `[].push() loop:            ${benchSync("push-loop", createPush, opts).meanMs.toFixed(3)}ms`,
   );
 
   // --- Write benchmarks (simulating decode loop) ---
@@ -82,16 +71,16 @@ function runSuite(size: number) {
   };
 
   console.log(
-    `write to holey:            ${benchmark("write-holey", writeToHoley).toFixed(3)}ms`,
+    `write to holey:            ${benchSync("write-holey", writeToHoley, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `write to fill(null):       ${benchmark("write-fill-null", writeToFillNull).toFixed(3)}ms`,
+    `write to fill(null):       ${benchSync("write-fill-null", writeToFillNull, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `write to fill(0):          ${benchmark("write-fill-zero", writeToFillZero).toFixed(3)}ms`,
+    `write to fill(0):          ${benchSync("write-fill-zero", writeToFillZero, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `push loop:                 ${benchmark("write-push", writePush).toFixed(3)}ms`,
+    `push loop:                 ${benchSync("write-push", writePush, opts).meanMs.toFixed(3)}ms`,
   );
 
   // --- Read benchmarks (after array is populated) ---
@@ -117,10 +106,10 @@ function runSuite(size: number) {
   };
 
   console.log(
-    `read holey array:          ${benchmark("read-holey", readHoley).toFixed(3)}ms`,
+    `read holey array:          ${benchSync("read-holey", readHoley, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `read packed array:         ${benchmark("read-packed", readPacked).toFixed(3)}ms`,
+    `read packed array:         ${benchSync("read-packed", readPacked, opts).meanMs.toFixed(3)}ms`,
   );
 
   // --- Reference type benchmarks ---
@@ -145,13 +134,13 @@ function runSuite(size: number) {
   };
 
   console.log(
-    `Date to holey:             ${benchmark("date-holey", writeDateToHoley).toFixed(3)}ms`,
+    `Date to holey:             ${benchSync("date-holey", writeDateToHoley, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `Date to fill(null):        ${benchmark("date-fill-null", writeDateToFillNull).toFixed(3)}ms`,
+    `Date to fill(null):        ${benchSync("date-fill-null", writeDateToFillNull, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `Date to fill(shared):      ${benchmark("date-fill-shared", writeDateToFillShared).toFixed(3)}ms`,
+    `Date to fill(shared):      ${benchSync("date-fill-shared", writeDateToFillShared, opts).meanMs.toFixed(3)}ms`,
   );
 
   // --- String type benchmarks (matching StringCodec pattern) ---
@@ -176,23 +165,24 @@ function runSuite(size: number) {
   };
 
   console.log(
-    `String to holey:           ${benchmark("str-holey", writeStringToHoley).toFixed(3)}ms`,
+    `String to holey:           ${benchSync("str-holey", writeStringToHoley, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `String to fill(''):        ${benchmark("str-fill-empty", writeStringToFillEmpty).toFixed(3)}ms`,
+    `String to fill(''):        ${benchSync("str-fill-empty", writeStringToFillEmpty, opts).meanMs.toFixed(3)}ms`,
   );
   console.log(
-    `String to fill(null):      ${benchmark("str-fill-null", writeStringToFillNull).toFixed(3)}ms`,
+    `String to fill(null):      ${benchSync("str-fill-null", writeStringToFillNull, opts).meanMs.toFixed(3)}ms`,
   );
 }
 
 console.log("Array Initialization Performance Benchmark");
 console.log("==========================================");
-console.log(`Node version: ${process.version}`);
-console.log(`Iterations per test: ${ITERATIONS}`);
+reportEnvironment();
+const benchOptions = readBenchOptions({ iterations: ITERATIONS, warmup: 10 });
+console.log(`Iterations per test: ${benchOptions.iterations ?? ITERATIONS}`);
 
 for (const size of SIZES) {
-  runSuite(size);
+  runSuite(size, { iterations: benchOptions.iterations ?? ITERATIONS, warmup: benchOptions.warmup ?? 10 });
 }
 
 console.log("\n\nDone.");

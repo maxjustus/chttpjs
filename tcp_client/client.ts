@@ -20,6 +20,7 @@ import { RecordBatch } from "../native/table.ts";
 import { decodeNativeBlock } from "../native/index.ts";
 import { type ColumnDef } from "../native/types.ts";
 import { init as initCompression, Method, type MethodCode } from "../compression.ts";
+import type { ClickHouseSettings } from "../settings.ts";
 
 export interface TcpClientOptions {
   host: string;
@@ -40,6 +41,8 @@ export interface TcpClientOptions {
   tls?: boolean | tls.ConnectionOptions;
   /** Grace period in ms after sending CANCEL before forceful socket close (default: 2000) */
   cancelGracePeriodMs?: number;
+  /** Default settings applied to all queries and inserts (can be overridden per-call) */
+  settings?: ClickHouseSettings;
 }
 
 export interface ColumnSchema {
@@ -53,7 +56,18 @@ export interface InsertOptions {
   batchSize?: number;
   /** Optional schema to validate against server schema */
   schema?: ColumnDef[];
+  /** Per-insert settings (merged with client defaults, overrides them) */
+  settings?: ClickHouseSettings;
 }
+
+export interface QueryOptions {
+  /** Per-query settings (merged with client defaults, overrides them) */
+  settings?: ClickHouseSettings;
+  /** Query parameters (substitution values) */
+  params?: ClickHouseSettings;
+  signal?: AbortSignal;
+}
+
 
 /** Validates that expected schema matches server schema exactly. */
 function validateSchema(expected: ColumnDef[], actual: ColumnSchema[]): void {
@@ -75,6 +89,7 @@ export class TcpClient {
   private reader: StreamingReader | null = null;
   private writer: StreamingWriter = new StreamingWriter();
   private options: TcpClientOptions;
+  private defaultSettings: ClickHouseSettings;
   private _serverHello: ServerHello | null = null;
   private currentSchema: ColumnSchema[] | null = null;
   private sessionTimezone: string | null = null;
@@ -108,6 +123,7 @@ export class TcpClient {
       compression: false,
       ...options
     };
+    this.defaultSettings = options.settings ?? {};
   }
 
   async connect(options: { signal?: AbortSignal } = {}): Promise<void> {
@@ -306,8 +322,10 @@ export class TcpClient {
     try {
       const useCompression = !!this.options.compression;
       const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
+      // Merge settings: client defaults < per-insert overrides
+      const mergedSettings = { ...this.defaultSettings, ...options.settings };
 
-      const serverSchema = await this.sendInsertQueryAndGetSchema(sql, useCompression, compressionMethod, () => cancelled);
+      const serverSchema = await this.sendInsertQueryAndGetSchema(sql, useCompression, compressionMethod, mergedSettings, () => cancelled);
 
       // Validate schema if provided
       if (options.schema) {
@@ -437,9 +455,10 @@ export class TcpClient {
     sql: string,
     useCompression: boolean,
     compressionMethod: MethodCode,
+    settings: Record<string, string | number | boolean>,
     isCancelled: () => boolean
   ): Promise<ColumnSchema[]> {
-    const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello!.revision, {}, useCompression, {});
+    const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello!.revision, settings, useCompression, {});
     this.socket!.write(queryPacket);
 
     const delimiter = this.writer.encodeData("", 0, [], this.serverHello!.revision, useCompression, compressionMethod);
@@ -534,7 +553,7 @@ export class TcpClient {
 
   private parseLogBlock(batch: RecordBatch): LogEntry[] {
     const entries: LogEntry[] = [];
-    for (const row of batch.rows()) {
+    for (const row of batch) {
       entries.push({
         time: row.event_time as string,
         timeMicroseconds: row.event_time_microseconds as number,
@@ -586,14 +605,13 @@ export class TcpClient {
   // TODO: we should make the use flattened v3 setting automatically enabled until we support the other dynamic encodings
   async *query(
     sql: string,
-    settings: Record<string, string | number | boolean> = {},
-    options: { signal?: AbortSignal; params?: Record<string, string | number | boolean> } = {}
+    options: QueryOptions = {},
   ): AsyncGenerator<Packet> {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
     if (this.busy) throw new Error("Connection busy - cannot run concurrent operations on the same TcpClient");
     this.busy = true;
 
-    const signal = options?.signal;
+    const { settings = {}, signal } = options;
     if (signal?.aborted) throw new Error("Query aborted before start");
 
     const useCompression = !!this.options.compression;
@@ -604,6 +622,8 @@ export class TcpClient {
     let graceTimeoutId: ReturnType<typeof setTimeout> | null = null;
     let timedOut = false;
     let cancelled = false;
+
+    let reachedEndOfStream = false;
 
     const startTimeout = () => {
       if (queryTimeout > 0) {
@@ -651,10 +671,19 @@ export class TcpClient {
         // The compression flag in the query packet enables bidirectional compression:
         // - When 1: client sends compressed Data blocks, server sends compressed Data blocks
         // - When 0: both sides send uncompressed
-        const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
-          "allow_special_serialization_kinds_in_output_formats": "0",
-          ...settings
-        }, useCompression, options.params ?? {});
+        // Settings merge order: hardcoded < client defaults < per-call overrides
+        const baseSettings: ClickHouseSettings = {
+          ...this.defaultSettings,
+          ...settings,
+        };
+        const queryPacket = this.writer.encodeQuery(
+          randomUUID(),
+          sql,
+          this.serverHello.revision,
+          baseSettings,
+          useCompression,
+          options.params ?? {},
+        );
         this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
         this.socket.write(queryPacket);
 
@@ -735,6 +764,7 @@ export class TcpClient {
               this.log(`[query] timezone updated to: ${this.sessionTimezone}`);
               break;
             case ServerPacketId.EndOfStream:
+              reachedEndOfStream = true;
               yield { type: "EndOfStream" };
               return;
             case ServerPacketId.Exception:
@@ -750,9 +780,59 @@ export class TcpClient {
         throw err;
       }
     } finally {
+      // If generator was abandoned early (before EndOfStream), drain remaining packets
+      // to keep the connection in a clean state for subsequent queries
+      if (!reachedEndOfStream && this.socket && this.reader) {
+        try {
+          await this.drainPackets(useCompression);
+        } catch {
+          // Ignore errors during drain - connection may be closing
+        }
+      }
       this.busy = false;
       clearQueryTimeout();
       signal?.removeEventListener("abort", abortHandler);
+    }
+  }
+
+  /** Drain remaining packets until EndOfStream or Exception. Used when query is abandoned early. */
+  private async drainPackets(useCompression: boolean): Promise<void> {
+    if (!this.reader) return;
+    while (true) {
+      const packetId = Number(await this.reader.readVarInt());
+      switch (packetId) {
+        case ServerPacketId.Data:
+          await this.readBlock(useCompression);
+          break;
+        case ServerPacketId.Progress:
+          await this.readProgress();
+          break;
+        case ServerPacketId.ProfileInfo:
+          await this.readProfileInfo();
+          break;
+        case ServerPacketId.ProfileEvents:
+          await this.readBlock(false);
+          break;
+        case ServerPacketId.Totals:
+        case ServerPacketId.Extremes:
+          await this.readBlock(useCompression);
+          break;
+        case ServerPacketId.Log:
+          await this.readBlock(false);
+          break;
+        case ServerPacketId.TimezoneUpdate:
+          await this.reader.readString();
+          break;
+        case ServerPacketId.EndOfStream:
+          return;
+        case ServerPacketId.Exception:
+          // Read and discard the exception
+          await this.reader.readException();
+          return;
+        default:
+          // Unknown packet - can't continue safely
+          return;
+      }
     }
   }
 

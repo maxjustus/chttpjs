@@ -17,21 +17,10 @@ import {
   type ColumnDef,
 } from "../native/index.ts";
 import { DataColumn } from "../native/columns.ts";
+import { benchSync, readBenchOptions, reportEnvironment } from "./harness.ts";
 
 function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
   return encodeNative(tableFromRows(columns, rows));
-}
-
-function bench(
-  name: string,
-  fn: () => void,
-  warmup = 50,
-  iterations = 100,
-): { name: string; ms: number } {
-  for (let i = 0; i < warmup; i++) fn();
-  const start = performance.now();
-  for (let i = 0; i < iterations; i++) fn();
-  return { name, ms: (performance.now() - start) / iterations };
 }
 
 function collectRows(gen: Iterable<any>): unknown[] {
@@ -147,8 +136,10 @@ function toArrayRowsHybrid(result: Block): unknown[][] {
 
 async function main() {
   const ROWS = 10_000;
-  const ITERATIONS = 100;
+  const benchOptions = readBenchOptions({ iterations: 100, warmup: 20 });
+  const ITERATIONS = benchOptions.iterations ?? 100;
 
+  reportEnvironment();
   console.log(
     `Benchmarking data access with ${ROWS} rows, ${ITERATIONS} iterations\n`,
   );
@@ -166,58 +157,53 @@ async function main() {
     const decoded = await decodeNative(encoded);
 
     console.log("Materializing to rows:");
-    const toArrayResult = bench(
+    const toArrayResult = benchSync(
       "  toArrayRows() (get loop)",
       () => toArrayRows(decoded),
-      50,
-      ITERATIONS,
+      { ...benchOptions, iterations: ITERATIONS },
     );
-    const hybridToArray = bench(
+    const hybridToArray = benchSync(
       "  hybrid (direct + get)",
       () => toArrayRowsHybrid(decoded),
-      50,
-      ITERATIONS,
+      { ...benchOptions, iterations: ITERATIONS },
     );
     console.log(
-      `  ${toArrayResult.name.padEnd(25)} ${toArrayResult.ms.toFixed(3).padStart(8)}ms`,
+      `  ${toArrayResult.name.padEnd(25)} ${toArrayResult.meanMs.toFixed(3).padStart(8)}ms`,
     );
     console.log(
-      `  ${hybridToArray.name.padEnd(25)} ${hybridToArray.ms.toFixed(3).padStart(8)}ms`,
+      `  ${hybridToArray.name.padEnd(25)} ${hybridToArray.meanMs.toFixed(3).padStart(8)}ms`,
     );
     console.log(
-      `  Hybrid speedup: ${(toArrayResult.ms / hybridToArray.ms).toFixed(2)}x\n`,
+      `  Hybrid speedup: ${(toArrayResult.meanMs / hybridToArray.meanMs).toFixed(2)}x\n`,
     );
 
     console.log("asRows() (collected):");
-    const asRowsResult = bench(
+    const asRowsResult = benchSync(
       "  asRows()",
       () => collectRows(asRows(decoded)),
-      50,
-      ITERATIONS,
+      { ...benchOptions, iterations: ITERATIONS },
     );
     console.log(
-      `  ${asRowsResult.name.padEnd(25)} ${asRowsResult.ms.toFixed(3).padStart(8)}ms\n`,
+      `  ${asRowsResult.name.padEnd(25)} ${asRowsResult.meanMs.toFixed(3).padStart(8)}ms\n`,
     );
 
     console.log("Table (Proxy rows):");
     const table = Table.from(decoded);
-    const tableResult = bench(
+    const tableResult = benchSync(
       "  Table iter (access 1)",
       () => collectRowsTable(table),
-      50,
-      ITERATIONS,
+      { ...benchOptions, iterations: ITERATIONS },
     );
-    const tableFullResult = bench(
+    const tableFullResult = benchSync(
       "  Table iter (toObject)",
       () => collectRowsTableFull(table),
-      50,
-      ITERATIONS,
+      { ...benchOptions, iterations: ITERATIONS },
     );
     console.log(
-      `  ${tableResult.name.padEnd(25)} ${tableResult.ms.toFixed(3).padStart(8)}ms`,
+      `  ${tableResult.name.padEnd(25)} ${tableResult.meanMs.toFixed(3).padStart(8)}ms`,
     );
     console.log(
-      `  ${tableFullResult.name.padEnd(25)} ${tableFullResult.ms.toFixed(3).padStart(8)}ms\n`,
+      `  ${tableFullResult.name.padEnd(25)} ${tableFullResult.meanMs.toFixed(3).padStart(8)}ms\n`,
     );
   }
 }

@@ -78,7 +78,7 @@ describe("TCP Client Multi-block Integration", () => {
       let totalCount = 0n;
       for await (const packet of stream) {
         if (packet.type === "Data") {
-          for (const row of packet.batch.rows()) {
+          for (const row of packet.batch) {
             totalCount = row["count()"] as bigint;
           }
         }

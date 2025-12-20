@@ -52,7 +52,7 @@ describe("TCP Client Integration", () => {
       const allRows: any[] = [];
       for await (const packet of stream) {
         if (packet.type === "Data") {
-          for (const row of packet.batch.rows()) {
+          for (const row of packet.batch) {
             allRows.push(row.toObject());
           }
         }
@@ -102,7 +102,7 @@ describe("TCP Client Integration", () => {
       const allRows: any[] = [];
       for await (const packet of stream) {
         if (packet.type === "Data") {
-          for (const row of packet.batch.rows()) {
+          for (const row of packet.batch) {
             allRows.push(row.toObject());
           }
         }
@@ -261,5 +261,57 @@ describe("TCP Client Integration", () => {
     await cleanupClient.connect();
     await cleanupClient.execute(`DROP TABLE ${tableName}`);
     cleanupClient.close();
+  });
+
+  test("should read JSON columns with typed paths", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      const tableName = `test_json_typed_paths_${Date.now()}`;
+      // Create table with JSON column that has typed paths
+      await client.execute(`
+        CREATE TABLE ${tableName} (
+          id UInt32,
+          data JSON(currency LowCardinality(String), amount Int64)
+        ) ENGINE = Memory
+      `);
+
+      // Insert data using JSONEachRow format (simpler than native for JSON)
+      await client.execute(`
+        INSERT INTO ${tableName} FORMAT JSONEachRow
+        {"id": 1, "data": {"currency": "USD", "amount": 100}}
+        {"id": 2, "data": {"currency": "EUR", "amount": 200, "extra": "dynamic"}}
+      `);
+
+      // Read back using native format with flattened JSON serialization
+      const stream = client.query(
+        `SELECT * FROM ${tableName} ORDER BY id`,
+        { settings: { output_format_native_use_flattened_dynamic_and_json_serialization: 1 } }
+      );
+
+      const allRows: any[] = [];
+      for await (const packet of stream) {
+        if (packet.type === "Data") {
+          for (const row of packet.batch) {
+            allRows.push(row.toObject());
+          }
+        }
+      }
+
+      assert.strictEqual(allRows.length, 2);
+      // First row: typed paths only
+      assert.strictEqual(allRows[0].id, 1);
+      assert.strictEqual(allRows[0].data.currency, "USD");
+      assert.strictEqual(allRows[0].data.amount, 100n);
+      // Second row: typed paths + dynamic path
+      assert.strictEqual(allRows[1].id, 2);
+      assert.strictEqual(allRows[1].data.currency, "EUR");
+      assert.strictEqual(allRows[1].data.amount, 200n);
+      assert.strictEqual(allRows[1].data.extra, "dynamic");
+
+      await client.execute(`DROP TABLE ${tableName}`);
+    } finally {
+      client.close();
+    }
   });
 });

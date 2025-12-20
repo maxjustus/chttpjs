@@ -67,7 +67,6 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
     try {
       const packets = client.query(
         `SELECT * FROM test_tcp_sparse ORDER BY id`,
-        { "allow_special_serialization_kinds_in_output_formats": "1" }
       );
 
       let totalRows = 0;

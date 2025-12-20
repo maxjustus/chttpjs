@@ -2,6 +2,8 @@
  * Benchmark comparing writeString implementations in V8
  */
 
+import { benchSync, readBenchOptions, reportEnvironment } from "./harness.ts";
+
 const TEXT_ENCODER = new TextEncoder();
 
 // Current implementation: speculative 1-byte length, copyWithin for overflow
@@ -254,20 +256,13 @@ function generateUnicodeStrings(count: number, avgLen: number): string[] {
 }
 
 // Benchmark runner
-function bench(name: string, fn: () => void, iterations: number): number {
-  // Warmup
-  for (let i = 0; i < 100; i++) fn();
-
-  const start = performance.now();
-  for (let i = 0; i < iterations; i++) fn();
-  const elapsed = performance.now() - start;
-  return elapsed;
-}
-
 // Run benchmarks
 const ITERATIONS = 100;
 
 console.log("=== writeString Benchmark ===\n");
+reportEnvironment();
+const benchOptions = readBenchOptions({ iterations: ITERATIONS, warmup: 20 });
+const iterations = benchOptions.iterations ?? ITERATIONS;
 
 const scenarios = [
   {
@@ -307,7 +302,7 @@ for (const scenario of scenarios) {
 
   for (const impl of implementations) {
     const writer = impl.create();
-    const time = bench(
+    const stats = benchSync(
       impl.name,
       () => {
         writer.reset();
@@ -315,9 +310,9 @@ for (const scenario of scenarios) {
           writer.writeString(s);
         }
       },
-      ITERATIONS,
+      { ...benchOptions, iterations },
     );
-    results.push({ name: impl.name, time });
+    results.push({ name: impl.name, time: stats.meanMs });
   }
 
   // Sort by time and display
@@ -328,7 +323,7 @@ for (const scenario of scenarios) {
     const ratio = r.time / baseline;
     const marker = ratio === 1 ? "(fastest)" : `(${ratio.toFixed(2)}x)`;
     console.log(
-      `  ${r.name.padEnd(25)} ${r.time.toFixed(2).padStart(8)}ms ${marker}`,
+      `  ${r.name.padEnd(25)} ${r.time.toFixed(3).padStart(8)}ms ${marker}`,
     );
   }
 }

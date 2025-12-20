@@ -7,7 +7,7 @@
  */
 
 import { parseArgs } from "node:util";
-import { encodeNative, streamDecodeNative, batchFromRows, RecordBatch, collectRows, type ColumnDef } from "../native/index.ts";
+import { encodeNative, streamDecodeNative, batchFromRows, RecordBatch, type ColumnDef } from "../native/index.ts";
 
 function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
   return encodeNative(batchFromRows(columns, rows));
@@ -329,7 +329,7 @@ async function main() {
       if (operation === "encode") {
         if (columnar) encodeNative(RecordBatch.fromColumnar(columns, columnarData));
         else encodeNativeRows(columns, rows);
-      } else await collectRows(streamDecodeNative(toAsync([encNative])));
+      } else await Array.fromAsync(streamDecodeNative(toAsync([encNative])));
     } else {
       if (operation === "encode") encodeJson(objects);
       else decodeJson(encJson);

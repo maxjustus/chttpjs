@@ -1,4 +1,5 @@
-export { TcpClient, type TcpClientOptions, type ColumnSchema } from "./client.ts";
+export { TcpClient, type TcpClientOptions, type ColumnSchema, type QueryOptions } from "./client.ts";
+export type { ClickHouseSettings } from "../settings.ts";
 export {
   type Packet,
   type Progress,

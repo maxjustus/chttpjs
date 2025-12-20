@@ -5,11 +5,11 @@ import {
 
 let container: StartedClickHouseContainer | undefined;
 
-export async function startClickHouse() {
+export async function startClickHouse(version = "25.8") {
   console.log("Starting ClickHouse container...");
 
   container = await new ClickHouseContainer(
-    "clickhouse/clickhouse-server:25.8",
+    `clickhouse/clickhouse-server:${version}`,
   )
     .withDatabase("default")
     .withUsername("default")

@@ -346,6 +346,111 @@ describe("JSON", () => {
     assert.deepStrictEqual(decodedRows[0][0], {});
     assert.deepStrictEqual(decodedRows[1][0], {});
   });
+
+  it("parses JSON with typed paths from type string", async () => {
+    // Tests that the type parser correctly extracts typed paths
+    const columns: ColumnDef[] = [
+      { name: "j", type: "JSON(max_dynamic_paths=128, currency String, amount Int64)" }
+    ];
+    const rows = [
+      [{ currency: "USD", amount: 100 }],
+      [{ currency: "EUR", amount: 200 }],
+    ];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(decoded.columns, columns);
+    const obj0 = decodedRows[0][0] as Record<string, unknown>;
+    const obj1 = decodedRows[1][0] as Record<string, unknown>;
+    assert.strictEqual(obj0.currency, "USD");
+    assert.strictEqual(obj0.amount, 100n);
+    assert.strictEqual(obj1.currency, "EUR");
+    assert.strictEqual(obj1.amount, 200n);
+  });
+
+  it("handles JSON with typed paths and dynamic paths together", async () => {
+    const columns: ColumnDef[] = [
+      { name: "j", type: "JSON(currency String, amount Int64)" }
+    ];
+    const rows = [
+      [{ currency: "USD", amount: 100, extra: "foo" }],
+      [{ currency: "EUR", amount: 200, extra: "bar" }],
+    ];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    const obj0 = decodedRows[0][0] as Record<string, unknown>;
+    const obj1 = decodedRows[1][0] as Record<string, unknown>;
+    assert.strictEqual(obj0.currency, "USD");
+    assert.strictEqual(obj0.amount, 100n);
+    assert.strictEqual(obj0.extra, "foo");
+    assert.strictEqual(obj1.currency, "EUR");
+    assert.strictEqual(obj1.amount, 200n);
+    assert.strictEqual(obj1.extra, "bar");
+  });
+
+  it("handles JSON with LowCardinality typed paths", async () => {
+    const columns: ColumnDef[] = [
+      { name: "j", type: "JSON(status LowCardinality(String))" }
+    ];
+    const rows = [
+      [{ status: "active" }],
+      [{ status: "inactive" }],
+      [{ status: "active" }],  // Repeated value for LC
+    ];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.strictEqual((decodedRows[0][0] as any).status, "active");
+    assert.strictEqual((decodedRows[1][0] as any).status, "inactive");
+    assert.strictEqual((decodedRows[2][0] as any).status, "active");
+  });
+
+  it("handles JSON with Nullable typed paths", async () => {
+    const columns: ColumnDef[] = [
+      { name: "j", type: "JSON(name Nullable(String), age Int32)" }
+    ];
+    const rows = [
+      [{ name: "alice", age: 30 }],
+      [{ name: null, age: 25 }],
+      [{ age: 40 }],  // missing name treated as null
+    ];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    const obj0 = decodedRows[0][0] as Record<string, unknown>;
+    const obj1 = decodedRows[1][0] as Record<string, unknown>;
+    const obj2 = decodedRows[2][0] as Record<string, unknown>;
+    assert.strictEqual(obj0.name, "alice");
+    assert.strictEqual(obj0.age, 30);
+    // JsonColumn.get() omits null values from the object (undefined means absent)
+    assert.strictEqual(obj1.name, undefined);
+    assert.strictEqual(obj1.age, 25);
+    assert.strictEqual(obj2.name, undefined);
+    assert.strictEqual(obj2.age, 40);
+  });
+
+  it("handles JSON with Array typed paths", async () => {
+    const columns: ColumnDef[] = [
+      { name: "j", type: "JSON(tags Array(String))" }
+    ];
+    const rows = [
+      [{ tags: ["a", "b", "c"] }],
+      [{ tags: [] }],
+      [{ tags: ["x"] }],
+    ];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual((decodedRows[0][0] as any).tags, ["a", "b", "c"]);
+    assert.deepStrictEqual((decodedRows[1][0] as any).tags, []);
+    assert.deepStrictEqual((decodedRows[2][0] as any).tags, ["x"]);
+  });
 });
 
 describe("round-trip with complex nested types", () => {

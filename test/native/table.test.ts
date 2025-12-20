@@ -74,6 +74,37 @@ describe("streamDecodeNative", () => {
     assert.ok(results[0] instanceof RecordBatch);
     assert.deepStrictEqual(toArrayRows(results[0]), [[1], [2], [3]]);
   });
+
+  it("RecordBatch iteration yields stable row objects that can be collected", async () => {
+    const schema: ColumnDef[] = [
+      { name: "id", type: "Int32" },
+      { name: "name", type: "String" },
+    ];
+
+    const batch = batchFromRows(schema, [
+      [1, "alice"],
+      [2, "bob"],
+      [3, "charlie"],
+    ]);
+
+    const collected = [...batch];
+
+    // Each element should be a distinct row reference (not a single reused view)
+    assert.notStrictEqual(collected[0], collected[1]);
+    assert.notStrictEqual(collected[1], collected[2]);
+
+    // Values should remain correct after collection
+    assert.strictEqual(collected[0].id, 1);
+    assert.strictEqual(collected[0].name, "alice");
+    assert.strictEqual(collected[1].id, 2);
+    assert.strictEqual(collected[1].name, "bob");
+    assert.strictEqual(collected[2].id, 3);
+    assert.strictEqual(collected[2].name, "charlie");
+
+    // Materialization helpers should also be stable
+    assert.deepStrictEqual(collected[0].toObject(), { id: 1, name: "alice" });
+    assert.deepStrictEqual(collected[2].toArray(), [3, "charlie"]);
+  });
 });
 
 describe("Arrow-style factory functions", () => {

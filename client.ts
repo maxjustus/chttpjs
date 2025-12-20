@@ -5,6 +5,7 @@ import {
   Method,
   type MethodCode,
 } from "./compression.ts";
+import type { ClickHouseSettings } from "./settings.ts";
 
 export {
   encodeNative,
@@ -107,7 +108,7 @@ interface ProgressInfo {
   complete?: boolean;
 }
 
-interface InsertOptions {
+export interface InsertOptions {
   baseUrl?: string;
   /** Compression method: "lz4" (default), "zstd", or "none" */
   compression?: Compression;
@@ -121,6 +122,10 @@ interface InsertOptions {
   signal?: AbortSignal;
   /** Request timeout in milliseconds */
   timeout?: number;
+  /** ClickHouse settings applied to this insert */
+  settings?: ClickHouseSettings;
+  /** Query params */
+  params?: ClickHouseSettings;
 }
 
 type InsertData =
@@ -150,6 +155,16 @@ async function insert(
     query: query,
     decompress: "1",
   };
+  if (options.settings) {
+    for (const [key, value] of Object.entries(options.settings)) {
+      params[key] = String(value);
+    }
+  }
+  if (options.params) {
+    for (const [key, value] of Object.entries(options.params)) {
+      params[key] = String(value);
+    }
+  }
 
   // Normalize all input types to Iterable<Uint8Array>
   // This ensures consistent chunking behavior (1MB threshold) for all inputs
@@ -299,7 +314,7 @@ function streamJsonEachRow(
   })();
 }
 
-interface QueryOptions {
+export interface QueryOptions {
   baseUrl?: string;
   auth?: AuthConfig;
   /** Compression method for response: "lz4" (default), "zstd", or "none" */
@@ -310,6 +325,10 @@ interface QueryOptions {
   timeout?: number;
   /** Client version string (e.g. "24.8") or numeric revision */
   clientVersion?: string | number;
+  /** ClickHouse settings applied to this query */
+  settings?: ClickHouseSettings;
+  /** Query params */
+  params?: ClickHouseSettings;
 }
 
 async function* query(
@@ -342,7 +361,19 @@ async function* query(
     "signal",
     "timeout",
     "clientVersion",
+    "settings",
+    "params",
   ];
+  if (options.settings) {
+    for (const [key, value] of Object.entries(options.settings)) {
+      params[key] = String(value);
+    }
+  }
+  if (options.params) {
+    for (const [key, value] of Object.entries(options.params)) {
+      params[key] = String(value);
+    }
+  }
   for (const [key, value] of Object.entries(options)) {
     if (!reserved.includes(key) && value !== undefined) {
       params[key] = String(value);

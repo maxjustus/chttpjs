@@ -37,7 +37,7 @@ describe("TCP Client Protocol Features", () => {
       let gotExtremes = false;
       for await (const packet of client.query(
         "SELECT number FROM numbers(100)",
-        { extremes: 1 }
+        { settings: { extremes: 1 } }
       )) {
         if (packet.type === "Extremes") gotExtremes = true;
       }
@@ -133,7 +133,7 @@ describe("TCP Client Protocol Features", () => {
       // Using typed settings values
       for await (const packet of client.query(
         "SELECT * FROM numbers(10)",
-        { max_threads: 2, log_queries: false }
+        { settings: { max_threads: 2, log_queries: false } }
       )) {
         if (packet.type === "Data") rows += packet.batch.rowCount;
       }
@@ -150,7 +150,7 @@ describe("TCP Client Protocol Features", () => {
       let gotLog = false;
       for await (const packet of client.query(
         "SELECT 1",
-        { send_logs_level: "trace" }
+        { settings: { send_logs_level: "trace" } }
       )) {
         if (packet.type === "Log") {
           gotLog = true;
@@ -176,7 +176,7 @@ describe("TCP Client Protocol Features", () => {
       // Use frequent profile events to get multiple packets
       for await (const packet of client.query(
         "SELECT sleep(0.05), number FROM numbers(10)",
-        { send_profile_events: 1, profile_events_delay_ms: 25 }
+        { settings: { send_profile_events: 1, profile_events_delay_ms: 25 } }
       )) {
         if (packet.type === "ProfileEvents") {
           packetCount++;
@@ -257,7 +257,6 @@ describe("TCP Client Protocol Features", () => {
       let result: bigint | null = null;
       for await (const packet of client.query(
         "SELECT {value:UInt64} as v",
-        {},
         { params: { value: 42 } }
       )) {
         if (packet.type === "Data" && packet.batch.rowCount > 0) {
@@ -277,7 +276,6 @@ describe("TCP Client Protocol Features", () => {
       let result: string | null = null;
       for await (const packet of client.query(
         "SELECT {name:String} as s",
-        {},
         { params: { name: "hello world" } }
       )) {
         if (packet.type === "Data" && packet.batch.rowCount > 0) {

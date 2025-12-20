@@ -290,6 +290,24 @@ describe("additional scalar types", () => {
     assert.strictEqual(decodedRows[1][0], "-999.9999");
   });
 
+  it("encodes Decimal32, Decimal128, and Decimal256", async () => {
+    const columns: ColumnDef[] = [
+      { name: "d32", type: "Decimal32(2)" },
+      { name: "d128", type: "Decimal128(6)" },
+      { name: "d256", type: "Decimal256(10)" },
+    ];
+    const rows = [
+      ["12.34", "12345.678901", "-1234567890.0123456789"],
+      ["-0.01", "0.000001", "9999999999.9999999999"],
+    ];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(decoded.columns, columns);
+    assert.deepStrictEqual(decodedRows, rows);
+  });
+
   it("encodes Int128", async () => {
     const columns: ColumnDef[] = [{ name: "i", type: "Int128" }];
     const rows = [[170141183460469231731687303715884105727n], [-170141183460469231731687303715884105728n]];
@@ -300,6 +318,33 @@ describe("additional scalar types", () => {
     assert.deepStrictEqual(decoded.columns, columns);
     assert.strictEqual(decodedRows[0][0], 170141183460469231731687303715884105727n);
     assert.strictEqual(decodedRows[1][0], -170141183460469231731687303715884105728n);
+  });
+
+  it("encodes UInt128", async () => {
+    const columns: ColumnDef[] = [{ name: "u", type: "UInt128" }];
+    const maxU128 = (1n << 128n) - 1n;
+    const rows = [[maxU128], [0n]];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(decoded.columns, columns);
+    assert.strictEqual(decodedRows[0][0], maxU128);
+    assert.strictEqual(decodedRows[1][0], 0n);
+  });
+
+  it("encodes Int256", async () => {
+    const columns: ColumnDef[] = [{ name: "i", type: "Int256" }];
+    const maxI256 = (1n << 255n) - 1n;
+    const minI256 = -(1n << 255n);
+    const rows = [[maxI256], [minI256]];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(decoded.columns, columns);
+    assert.strictEqual(decodedRows[0][0], maxI256);
+    assert.strictEqual(decodedRows[1][0], minI256);
   });
 
   it("encodes UInt256", async () => {

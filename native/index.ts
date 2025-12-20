@@ -30,6 +30,7 @@ import {
   batchFromCols,
   batchBuilder,
 } from "./table.ts";
+import { rows, collectRows } from "./rows.ts";
 
 // Re-export types for public API
 export {
@@ -38,8 +39,16 @@ export {
   type DecodeOptions,
   ClickHouseDateTime64,
 };
+
+// Re-export table helpers / types
 export { type Column, RecordBatch, RecordBatchBuilder, type Row };
 export { batchFromArrays, batchFromRows, batchFromCols, batchBuilder };
+export { rows, collectRows };
+export {
+  parseTypeList,
+  parseTupleElements,
+};
+
 export {
   DataColumn,
   TupleColumn,
@@ -478,31 +487,13 @@ export async function* streamDecodeNative(
 /**
  * Iterate rows from RecordBatches.
  *
- * @example
- * for await (const row of rows(streamDecodeNative(query(...)))) {
- *   console.log(row.id, row.name);
- * }
- */
-export async function* rows(
-  batches: AsyncIterable<RecordBatch>,
-): AsyncGenerator<Record<string, unknown>> {
-  for await (const batch of batches) {
-    yield* batch.rows();
-  }
-}
-
-/**
- * Collect all rows from RecordBatches into an array.
+ * `RecordBatch` implements the iterable protocol, so you can iterate rows
+ * directly from each batch yielded by `streamDecodeNative()`.
  *
  * @example
- * const allRows = await collectRows(streamDecodeNative(query(...)));
+ * for await (const batch of streamDecodeNative(query(...))) {
+ *   for (const row of batch) {
+ *     console.log(row.id, row.name);
+ *   }
+ * }
  */
-export async function collectRows(
-  batches: AsyncIterable<RecordBatch>,
-): Promise<Record<string, unknown>[]> {
-  const result: Record<string, unknown>[] = [];
-  for await (const row of rows(batches)) {
-    result.push(row);
-  }
-  return result;
-}

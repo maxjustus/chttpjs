@@ -188,14 +188,14 @@ await insert(
   config,
 );
 
-// Query returns columnar data as RecordBatch - stream and iterate
+// Query returns columnar data as RecordBatch - stream rows directly
 for await (const row of rows(
   streamDecodeNative(query("SELECT * FROM t FORMAT Native", "session", config)),
 )) {
   console.log(row.id, row.name);
 }
 
-// Or collect all rows at once
+// Or collect all rows at once (materialized to plain objects)
 const allRows = await collectRows(
   streamDecodeNative(query("SELECT * FROM t FORMAT Native", "session", config)),
 );
@@ -297,6 +297,7 @@ const pointCol = makeBuilder("Tuple(Float64, Float64)")
 
 ```ts
 import {
+  query,
   streamEncodeNative,
   streamDecodeNative,
   rows,

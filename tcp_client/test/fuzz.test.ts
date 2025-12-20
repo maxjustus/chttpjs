@@ -63,7 +63,7 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
   ): Promise<{ totalRows: number; blocks: number }> {
     let totalRows = 0, blocks = 0;
     const verbose = !!process.env.VERBOSE;
-    for await (const p of client.query(sql, settings)) {
+    for await (const p of client.query(sql, { settings })) {
       if (p.type === "Data") {
         totalRows += p.batch.rowCount;
         blocks++;
@@ -85,7 +85,7 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
   ): Promise<number> {
     let rowsRead = 0;
     const stream = (async function* () {
-      for await (const p of readClient.query(`SELECT * FROM ${srcTable}`, settings)) {
+      for await (const p of readClient.query(`SELECT * FROM ${srcTable}`, { settings })) {
         if (p.type === "Data") {
           rowsRead += p.batch.rowCount;
           yield p.batch;
@@ -106,11 +106,17 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
     settings?: Record<string, string>
   ): Promise<void> {
     let srcCount = 0n, dstCount = 0n;
-    for await (const p of client.query(`SELECT count() as c FROM ${srcTable}`, settings ?? QUERY_SETTINGS)) {
-      if (p.type === "Data" && p.batch.rowCount > 0) srcCount = (p.batch.rows().next().value as any).c;
+    for await (const p of client.query(`SELECT count() as c FROM ${srcTable}`, { settings: settings ?? QUERY_SETTINGS })) {
+      if (p.type === "Data" && p.batch.rowCount > 0) {
+        const firstRow = p.batch.get(0) as any;
+        srcCount = firstRow?.c;
+      }
     }
-    for await (const p of client.query(`SELECT count() as c FROM ${dstTable}`, settings ?? QUERY_SETTINGS)) {
-      if (p.type === "Data" && p.batch.rowCount > 0) dstCount = (p.batch.rows().next().value as any).c;
+    for await (const p of client.query(`SELECT count() as c FROM ${dstTable}`, { settings: settings ?? QUERY_SETTINGS })) {
+      if (p.type === "Data" && p.batch.rowCount > 0) {
+        const firstRow = p.batch.get(0) as any;
+        dstCount = firstRow?.c;
+      }
     }
     if (srcCount !== dstCount) {
       throw new Error(`Row count mismatch: src=${srcCount}, dst=${dstCount}`);
@@ -119,7 +125,7 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
 
   /** Execute a statement (DDL/DML) with optional settings via query() */
   async function exec(client: TcpClient, sql: string, settings?: Record<string, string>): Promise<void> {
-    for await (const _ of client.query(sql, settings)) { /* drain */ }
+    for await (const _ of client.query(sql, { settings })) { /* drain */ }
   }
 
   async function getRandomStructure(
@@ -131,9 +137,9 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
       ? `SELECT generateRandomStructure(${numColumns}) AS s`
       : `SELECT generateRandomStructure() AS s`;
     let result = "";
-    for await (const p of client.query(query, settings)) {
+    for await (const p of client.query(query, { settings })) {
       if (p.type === "Data" && p.batch.rowCount > 0 && !result) {
-        const row = p.batch.rows().next().value as any;
+        const row = p.batch.get(0) as any;
         if (row && row.s) result = row.s;
       }
     }
@@ -331,10 +337,10 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
     const largeValue = 18446744073709551615n; // UInt64 max
     for await (const p of client.query(
       `SELECT map('big', toUInt64('18446744073709551615'))::JSON AS j`,
-      QUERY_SETTINGS
+      { settings: QUERY_SETTINGS }
     )) {
       if (p.type === "Data") {
-        for (const row of p.batch.rows()) {
+        for (const row of p.batch) {
           const val = (row as any).j?.big;
           assert.strictEqual(typeof val, "bigint", "Large UInt64 should be BigInt");
           assert.strictEqual(val, largeValue);

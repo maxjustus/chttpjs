@@ -7,7 +7,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { encodeNative, streamDecodeNative, RecordBatchBuilder, type ColumnDef } from "../../native/index.ts";
+import { encodeNative, streamDecodeNative, RecordBatchBuilder, RecordBatch, type ColumnDef } from "../../native/index.ts";
 import { decodeBatch, toArrayRows } from "../test_utils.ts";
 
 // Helper to encode rows via RecordBatchBuilder
@@ -431,6 +431,88 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       }
     }
   });
+
+  it("fuzz JSON with typed paths", async () => {
+    const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "50", 10);
+
+    // Available typed path types - non-nullable types must always be present
+    const typedPathTypes = [
+      { type: "String", gen: () => randomString(20), nullable: false },
+      { type: "Int64", gen: () => randomBigInt(64), nullable: false },
+      { type: "Int32", gen: () => randomInt(-2147483648, 2147483647), nullable: false },
+      { type: "Float64", gen: randomFloat, nullable: false },
+      { type: "LowCardinality(String)", gen: () => ["active", "inactive", "pending"][randomInt(0, 2)], nullable: false },
+      { type: "Array(String)", gen: () => Array.from({ length: randomInt(0, 5) }, () => randomString(10)), nullable: false },
+      { type: "Nullable(String)", gen: () => Math.random() < 0.3 ? null : randomString(15), nullable: true },
+      { type: "Nullable(Int64)", gen: () => Math.random() < 0.3 ? null : randomBigInt(64), nullable: true },
+    ];
+
+    for (let iter = 0; iter < iterations; iter++) {
+      // Generate 1-3 typed paths
+      const numTypedPaths = randomInt(1, 3);
+      const selectedTypedPaths = Array.from({ length: numTypedPaths }, (_, i) => {
+        const tp = typedPathTypes[randomInt(0, typedPathTypes.length - 1)];
+        return { name: `typed_${i}`, ...tp };
+      });
+
+      // Build JSON type string
+      const typeArgs = selectedTypedPaths.map(p => `${p.name} ${p.type}`).join(", ");
+      const jsonType = `JSON(${typeArgs})`;
+
+      // Generate rows with typed paths + random dynamic paths
+      const rowCount = randomInt(1, 50);
+      const rows: unknown[][] = [];
+      for (let r = 0; r < rowCount; r++) {
+        const obj: Record<string, unknown> = {};
+        // Add typed path values - nullable types can be omitted, non-nullable must be present
+        for (const tp of selectedTypedPaths) {
+          if (tp.nullable) {
+            if (Math.random() > 0.2) obj[tp.name] = tp.gen();
+          } else {
+            obj[tp.name] = tp.gen(); // Always present for non-nullable
+          }
+        }
+        // Add 0-2 dynamic paths
+        const numDynamic = randomInt(0, 2);
+        for (let d = 0; d < numDynamic; d++) {
+          obj[`dyn_${d}`] = randomString(10);
+        }
+        rows.push([obj]);
+      }
+
+      const columns: ColumnDef[] = [{ name: "j", type: jsonType }];
+      const encoded = encodeRows(columns, rows);
+      const decoded = await decodeBatch(encoded);
+
+      assert.deepStrictEqual(decoded.columns, columns);
+      assert.strictEqual(decoded.rowCount, rowCount);
+
+      // Verify each row's structure is preserved
+      const decodedRows = toArrayRows(decoded);
+      for (let r = 0; r < rowCount; r++) {
+        const orig = rows[r][0] as Record<string, unknown>;
+        const dec = decodedRows[r][0] as Record<string, unknown>;
+        for (const key of Object.keys(orig)) {
+          const origVal = orig[key];
+          const decVal = dec[key];
+          // Null values are omitted from decoded object
+          if (origVal === null) {
+            assert.strictEqual(decVal, undefined, `Row ${r}, key ${key}: null should become undefined`);
+          } else if (Array.isArray(origVal)) {
+            assert.deepStrictEqual(decVal, origVal, `Row ${r}, key ${key}: array mismatch`);
+          } else if (typeof origVal === "number") {
+            // Int64 becomes bigint, floats stay as numbers
+            assert.ok(
+              decVal === origVal || decVal === BigInt(Math.floor(origVal as number)),
+              `Row ${r}, key ${key}: numeric mismatch ${origVal} vs ${decVal}`
+            );
+          } else {
+            assert.strictEqual(decVal, origVal, `Row ${r}, key ${key}: value mismatch`);
+          }
+        }
+      }
+    }
+  });
 });
 
 // ============================================================================
@@ -452,7 +534,7 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
     const insertSessionId = sessionId + "_insert";
 
     try {
-      const N = parseInt(process.env.FUZZ_ITERATIONS ?? "25", 10);
+      const N = parseInt(process.env.INTEGRATION_FUZZ_ITERATIONS ?? process.env.FUZZ_ITERATIONS ?? "25", 10);
 
       for (let i = 0; i < N; i++) {
         const srcTable = `native_fuzz_src_${i}`;
@@ -477,7 +559,7 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
           // Note: 100k+ rows with complex nested types can exceed memory limits.
           const unescaped = structure.replace(/\\'/g, "'");
           const escapedStructure = unescaped.replace(/'/g, "''");
-          const rowCount = parseInt(process.env.FUZZ_ROWS ?? "80000", 10);
+          const rowCount = parseInt(process.env.INTEGRATION_FUZZ_ROWS ?? process.env.FUZZ_ROWS ?? "80000", 10);
           await consume(
             query(
               `CREATE TABLE ${srcTable} ENGINE = MergeTree ORDER BY tuple() AS SELECT * FROM generateRandom('${escapedStructure}') LIMIT ${rowCount}`,
@@ -498,7 +580,7 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
           // 4. Stream decode and insert block-by-block to avoid memory pressure
           // This keeps only 1-2 blocks in memory at a time instead of 80k rows
           const queryStream = query(
-            `SELECT * FROM ${srcTable} FORMAT Native`,
+            `SELECT * FROM ${srcTable} FORMAT Native SETTINGS output_format_native_use_flattened_dynamic_and_json_serialization=1`,
             sessionId,
             { baseUrl, auth },
           );
@@ -649,3 +731,131 @@ async function consume(stream: AsyncIterable<Uint8Array>) {
   for await (const _ of stream) {
   }
 }
+
+// ============================================================================
+// TCP Client Integration Fuzz Tests (requires ClickHouse)
+// ============================================================================
+
+import { TcpClient } from "../../tcp_client/client.ts";
+
+describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
+  const randomInt = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+  /**
+   * Generalized JSON typed paths fuzz test using generateRandomStructure().
+   * Tests arbitrary nested types as JSON typed paths via ClickHouse's random type generator.
+   * Full round-trip: read from ClickHouse → decode → encode → insert back → verify with cityHash64
+   */
+  it("round-trips JSON with random typed paths through ClickHouse", async () => {
+    const iterations = parseInt(process.env.TCP_FUZZ_ITERATIONS ?? process.env.FUZZ_ITERATIONS ?? "10", 10);
+    const rowCount = parseInt(process.env.TCP_FUZZ_ROWS ?? process.env.FUZZ_ROWS ?? "500", 10);
+
+    // Helper to get scalar result from query
+    async function queryScalar(client: TcpClient, sql: string): Promise<string> {
+      const stream = client.query(sql);
+      for await (const packet of stream) {
+        if (packet.type === "Data" && packet.batch.rowCount > 0) {
+          return String(packet.batch.getAt(0, 0));
+        }
+      }
+      return "";
+    }
+
+    const client = new TcpClient({ host: "localhost", port: 9000, user: "default", password: "" });
+    await client.connect();
+
+    try {
+      for (let iter = 0; iter < iterations; iter++) {
+        const srcTable = `fuzz_json_src_${Date.now()}_${iter}`;
+        const dstTable = `fuzz_json_dst_${Date.now()}_${iter}`;
+        let jsonType = "";
+
+        try {
+          // Generate 1-3 random types for typed paths
+          const numPaths = randomInt(1, 3);
+          const typedPathDefs: string[] = [];
+          const pathTypes: string[] = [];
+          for (let p = 0; p < numPaths; p++) {
+            const result = await queryScalar(client, `SELECT generateRandomStructure(1, 1)`);
+            const match = result.match(/^\S+\s+(.+)$/);
+            if (match) {
+              const idx = typedPathDefs.length;
+              typedPathDefs.push(`tp_${idx} Nullable(${match[1]})`);
+              pathTypes.push(`Nullable(${match[1]})`);
+            }
+          }
+
+          if (typedPathDefs.length === 0) continue;
+
+          jsonType = `JSON(${typedPathDefs.join(", ")})`;
+          console.log(`[json random fuzz ${iter + 1}/${iterations}] ${jsonType}`);
+
+          // Create source table with JSON column and random data
+          const helperCols = pathTypes.map((t, i) => `tp_${i} ${t}`).join(", ");
+          const pathSelect = pathTypes.map((_, i) => `'tp_${i}', tp_${i}`).join(", ");
+
+          // Create source table and insert random data
+          await client.execute(`CREATE TABLE ${srcTable} (id UInt64, data ${jsonType}) ENGINE = Memory`);
+          await client.execute(
+            `INSERT INTO ${srcTable} SELECT rowNumberInAllBlocks() as id, map(${pathSelect})::${jsonType} as data ` +
+            `FROM generateRandom('${helperCols.replace(/'/g, "''")}') LIMIT ${rowCount}`
+          );
+
+          // Create empty destination table
+          await client.execute(`CREATE TABLE ${dstTable} (id UInt64, data ${jsonType}) ENGINE = Memory`);
+
+          // Read from source via TCP (tests decoder) - collect all batches first
+          const batches: RecordBatch[] = [];
+          const stream = client.query(
+            `SELECT * FROM ${srcTable} ORDER BY id`,
+            { settings: { output_format_native_use_flattened_dynamic_and_json_serialization: 1 } }
+          );
+          for await (const packet of stream) {
+            if (packet.type === "Data" && packet.batch.rowCount > 0) {
+              batches.push(packet.batch);
+            }
+          }
+
+          // Insert batches to dest (tests encoder)
+          let insertedRows = 0;
+          for (const batch of batches) {
+            await client.insert(`INSERT INTO ${dstTable} VALUES`, batch);
+            insertedRows += batch.rowCount;
+          }
+
+          // Verify row counts first
+          const srcCount = parseInt(await queryScalar(client, `SELECT count() FROM ${srcTable}`) || "0", 10);
+          const dstCount = parseInt(await queryScalar(client, `SELECT count() FROM ${dstTable}`) || "0", 10);
+
+          if (srcCount !== dstCount) {
+            throw new Error(`Row count mismatch: src=${srcCount}, dst=${dstCount} for ${jsonType}`);
+          }
+
+          // Verify by extracting typed paths and comparing with cityHash64
+          // JSON columns don't support cityHash64 directly, so we extract paths
+          const pathList = typedPathDefs.map((_, i) => `data.tp_${i}`).join(", ");
+          const d1 = parseInt(await queryScalar(client,
+            `SELECT count() FROM (SELECT id, cityHash64(${pathList}) AS h FROM ${srcTable} EXCEPT SELECT id, cityHash64(${pathList}) AS h FROM ${dstTable})`
+          ) || "0", 10);
+          const d2 = parseInt(await queryScalar(client,
+            `SELECT count() FROM (SELECT id, cityHash64(${pathList}) AS h FROM ${dstTable} EXCEPT SELECT id, cityHash64(${pathList}) AS h FROM ${srcTable})`
+          ) || "0", 10);
+
+          if (d1 !== 0 || d2 !== 0) {
+            throw new Error(`Hash mismatch: ${d1}/${d2} rows differ for ${jsonType}`);
+          }
+        } catch (err) {
+          console.error(`[json random fuzz ${iter + 1}] FAILED with: ${jsonType}`);
+          throw err;
+        } finally {
+          try {
+            await client.execute(`DROP TABLE IF EXISTS ${srcTable}`);
+            await client.execute(`DROP TABLE IF EXISTS ${dstTable}`);
+          } catch (_) { /* ignore cleanup errors */ }
+        }
+      }
+    } finally {
+      client.close();
+    }
+  });
+});

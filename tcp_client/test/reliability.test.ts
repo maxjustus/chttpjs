@@ -67,7 +67,7 @@ describe("TCP Client Reliability", () => {
     setTimeout(() => controller.abort(), 50);
 
     try {
-      for await (const _ of client.query("SELECT sleep(10)", {}, { signal: controller.signal })) {}
+      for await (const _ of client.query("SELECT sleep(10)", { signal: controller.signal })) {}
     } catch (err: any) {
       assert.ok(true, "Query was cancelled or errored as expected");
     }
@@ -78,7 +78,7 @@ describe("TCP Client Reliability", () => {
     controller.abort();
 
     try {
-      for await (const _ of client.query("SELECT 1", {}, { signal: controller.signal })) {}
+      for await (const _ of client.query("SELECT 1", { signal: controller.signal })) {}
       assert.fail("Should have thrown an error");
     } catch (err: any) {
       assert.ok(err.message.includes("aborted"), "Should mention aborted");

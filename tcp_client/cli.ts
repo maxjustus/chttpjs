@@ -44,6 +44,9 @@ const options = {
   port: parseInt(process.env.CH_PORT ?? "9000", 10),
   user: process.env.CH_USER ?? "default",
   password: process.env.CH_PASSWORD ?? "",
+  settings: {
+    output_format_native_use_flattened_dynamic_and_json_serialization: 1,
+  }
 };
 
 // Convert non-JSON-safe types for serialization
@@ -100,10 +103,27 @@ function formatPacket(packet: Packet, compact: boolean = false): Record<string, 
 
 async function runQuery(client: TcpClient, query: string, pretty: boolean = false): Promise<void> {
   const compact = /\bFORMAT\s+Null\b/i.test(query);
-  for await (const packet of client.query(query, { send_logs_level: "trace" })) {
+  for await (const packet of client.query(query, { settings: { send_logs_level: "trace" } })) {
     const json = toJSON(formatPacket(packet, compact));
     console.log(pretty ? JSON.stringify(json, null, 2) : JSON.stringify(json));
   }
+}
+
+async function runLoad(client: TcpClient, filePath: string, tableName: string): Promise<void> {
+  const content = fs.readFileSync(filePath, "utf-8");
+  const lines = content.split("\n").filter(line => line.trim());
+
+  function* rows() {
+    for (const line of lines) {
+      yield JSON.parse(line);
+    }
+  }
+
+  const count = lines.length;
+  console.log(`Loading ${count} rows from ${filePath} into ${tableName}...`);
+
+  await client.insert(`INSERT INTO ${tableName} VALUES`, rows(), { batchSize: 10000 });
+  console.log(`Inserted ${count} rows.`);
 }
 
 async function runInteractive(client: TcpClient): Promise<void> {
@@ -118,7 +138,7 @@ async function runInteractive(client: TcpClient): Promise<void> {
   });
 
   console.log(`Connected to ${options.host}:${options.port}`);
-  console.log('Type queries, or "exit" to quit.\n');
+  console.log('Commands: \\load <file.jsonl> INTO <table>, exit\n');
   rl.prompt();
 
   for await (const line of rl) {
@@ -129,6 +149,19 @@ async function runInteractive(client: TcpClient): Promise<void> {
     }
     if (query.toLowerCase() === "exit" || query.toLowerCase() === "quit") {
       break;
+    }
+
+    // \load /path/to/file.jsonl INTO table_name
+    const loadMatch = query.match(/^\\load\s+(\S+)\s+into\s+(\S+)$/i);
+    if (loadMatch) {
+      try {
+        await runLoad(client, loadMatch[1], loadMatch[2]);
+      } catch (err) {
+        console.error(`Error: ${(err as Error).message}`);
+      }
+      console.log();
+      rl.prompt();
+      continue;
     }
 
     try {
@@ -147,6 +180,8 @@ async function runInteractive(client: TcpClient): Promise<void> {
 }
 
 async function main() {
+  // TODO: make v3 JSON setting a default here / maybe in the client library or document how more clearly.
+  // requires making settings top level in the client options
   const client = new TcpClient(options);
   await client.connect();
 

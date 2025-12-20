@@ -1,7 +1,6 @@
 import { RecordBatch } from "../native/table.ts";
 
-// Modern revision. We disable sparse/custom serialization via settings
-// (allow_special_serialization_kinds_in_output_formats=0) to keep the protocol simple.
+// Modern revision. We rely on the default server settings for serialization.
 export const DBMS_TCP_PROTOCOL_VERSION = 54479n;
 
 /** Client version sent in Hello and Query packets (ClickHouse version we're mimicking) */

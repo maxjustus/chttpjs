@@ -4,6 +4,8 @@ export {
   query,
   buildReqUrl,
   type Compression,
+  type InsertOptions,
+  type QueryOptions,
   streamJsonEachRow,
   streamText,
   streamLines,
@@ -11,6 +13,7 @@ export {
   collectBytes,
   collectText,
 } from "./client.ts";
+export type { ClickHouseSettings } from "./settings.ts";
 export {
   Method,
   encodeBlock,
@@ -32,8 +35,7 @@ export {
   batchFromCols,
   batchBuilder,
   makeBuilder,
+  ClickHouseDateTime64,
   type ColumnDef,
   type DecodeResult,
-  type DecodeOptions,
-  ClickHouseDateTime64,
 } from "./native/index.ts";
