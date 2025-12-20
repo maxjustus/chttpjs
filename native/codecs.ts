@@ -67,6 +67,14 @@ export function defaultDeserializerState(): DeserializerState {
 // Alias for brevity
 const { MS_PER_DAY, MS_PER_SECOND } = Time;
 
+// Coercion helpers for type conversion during insert.
+// TypedArrays handle overflow/clamping automatically, so we only need to convert to the base type.
+const toNumber = (v: unknown): number =>
+  typeof v === "number" ? v : typeof v === "bigint" ? Number(v) : +(v as any);
+
+const toBigInt = (v: unknown): bigint =>
+  typeof v === "bigint" ? v : typeof v === "number" ? BigInt(Math.trunc(v)) : BigInt(v as any);
+
 /**
  * Decode groups from reader based on discriminator counts.
  */
@@ -2233,29 +2241,25 @@ function createCodec(type: string): Codec {
 
   switch (type) {
     case "UInt8":
-      return new NumericCodec(type, Uint8Array);
+      return new NumericCodec(type, Uint8Array, toNumber);
     case "Int8":
-      return new NumericCodec(type, Int8Array);
+      return new NumericCodec(type, Int8Array, toNumber);
     case "UInt16":
-      return new NumericCodec(type, Uint16Array);
+      return new NumericCodec(type, Uint16Array, toNumber);
     case "Int16":
-      return new NumericCodec(type, Int16Array);
+      return new NumericCodec(type, Int16Array, toNumber);
     case "UInt32":
-      return new NumericCodec(type, Uint32Array);
+      return new NumericCodec(type, Uint32Array, toNumber);
     case "Int32":
-      return new NumericCodec(type, Int32Array);
+      return new NumericCodec(type, Int32Array, toNumber);
     case "UInt64":
-      return new NumericCodec(type, BigUint64Array, (v: unknown) =>
-        BigInt(v as any),
-      );
+      return new NumericCodec(type, BigUint64Array, toBigInt);
     case "Int64":
-      return new NumericCodec(type, BigInt64Array, (v: unknown) =>
-        BigInt(v as any),
-      );
+      return new NumericCodec(type, BigInt64Array, toBigInt);
     case "Float32":
-      return new NumericCodec(type, Float32Array);
+      return new NumericCodec(type, Float32Array, toNumber);
     case "Float64":
-      return new NumericCodec(type, Float64Array);
+      return new NumericCodec(type, Float64Array, toNumber);
     case "Bool":
       return new NumericCodec(type, Uint8Array, (v) => (v ? 1 : 0));
     case "Date":
@@ -2284,8 +2288,8 @@ function createCodec(type: string): Codec {
 
   if (type.startsWith("Enum"))
     return type.startsWith("Enum8")
-      ? new NumericCodec(type, Int8Array)
-      : new NumericCodec(type, Int16Array);
+      ? new NumericCodec(type, Int8Array, toNumber)
+      : new NumericCodec(type, Int16Array, toNumber);
 
   // Decimal types
   if (type.startsWith("Decimal")) return new DecimalCodec(type);

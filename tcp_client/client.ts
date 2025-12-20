@@ -18,7 +18,8 @@ import { getCodec } from "../native/codecs.ts";
 import { BufferWriter, BufferUnderflowError } from "../native/io.ts";
 import { RecordBatch } from "../native/table.ts";
 import { decodeNativeBlock } from "../native/index.ts";
-import { init as initCompression, Method } from "../compression.ts";
+import { type ColumnDef } from "../native/types.ts";
+import { init as initCompression, Method, type MethodCode } from "../compression.ts";
 
 export interface TcpClientOptions {
   host: string;
@@ -44,6 +45,29 @@ export interface TcpClientOptions {
 export interface ColumnSchema {
   name: string;
   type: string;
+}
+
+export interface InsertOptions {
+  signal?: AbortSignal;
+  /** Batch size for row object mode (default: 10000) */
+  batchSize?: number;
+  /** Optional schema to validate against server schema */
+  schema?: ColumnDef[];
+}
+
+/** Validates that expected schema matches server schema exactly. */
+function validateSchema(expected: ColumnDef[], actual: ColumnSchema[]): void {
+  if (expected.length !== actual.length) {
+    throw new Error(`Schema mismatch: expected ${expected.length} columns, got ${actual.length}`);
+  }
+  for (let i = 0; i < expected.length; i++) {
+    if (expected[i].name !== actual[i].name) {
+      throw new Error(`Schema mismatch: column ${i} expected name '${expected[i].name}', got '${actual[i].name}'`);
+    }
+    if (expected[i].type !== actual[i].type) {
+      throw new Error(`Schema mismatch: column '${expected[i].name}' expected type '${expected[i].type}', got '${actual[i].type}'`);
+    }
+  }
 }
 
 export class TcpClient {
@@ -251,16 +275,23 @@ export class TcpClient {
     for await (const _ of this.query(sql)) { }
   }
 
+  /** Insert a single RecordBatch. */
+  async insert(sql: string, data: RecordBatch, options?: InsertOptions): Promise<void>;
+  /** Insert an iterable of RecordBatches. */
+  async insert(sql: string, data: Iterable<RecordBatch> | AsyncIterable<RecordBatch>, options?: InsertOptions): Promise<void>;
+  /** Insert row objects with auto-coercion using server schema. */
+  async insert(sql: string, data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>, options?: InsertOptions): Promise<void>;
   async insert(
     sql: string,
-    data: RecordBatch | AsyncIterable<RecordBatch> | Iterable<RecordBatch>,
-    options: { signal?: AbortSignal } = {}
-  ) {
+    data: RecordBatch | Iterable<RecordBatch | Record<string, unknown>> | AsyncIterable<RecordBatch | Record<string, unknown>>,
+    options: InsertOptions = {}
+  ): Promise<void> {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
     if (this.busy) throw new Error("Connection busy - cannot run concurrent operations on the same TcpClient");
     this.busy = true;
 
     const signal = options.signal;
+    const batchSize = options.batchSize ?? 10000;
     if (signal?.aborted) throw new Error("Insert aborted before start");
 
     let cancelled = false;
@@ -276,45 +307,17 @@ export class TcpClient {
       const useCompression = !!this.options.compression;
       const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
 
-      const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {}, useCompression, {});
-      this.socket.write(queryPacket);
+      const serverSchema = await this.sendInsertQueryAndGetSchema(sql, useCompression, compressionMethod, () => cancelled);
 
-      const queryDelimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
-      this.socket.write(queryDelimiter);
-
-      let schemaReceived = false;
-      while (!schemaReceived) {
-        if (cancelled) throw new Error("Insert cancelled");
-        const packetId = Number(await this.reader.readVarInt());
-
-        switch (packetId) {
-          case ServerPacketId.Data: {
-            const block = await this.readBlock(useCompression);
-            this.currentSchema = block.columns.map(c => ({ name: c.name, type: c.type }));
-            schemaReceived = true;
-            break;
-          }
-          case ServerPacketId.Progress: await this.readProgress(); break;
-          case ServerPacketId.Log: await this.readBlock(false); break;
-          case ServerPacketId.TableColumns:
-            await this.reader.readString(); // external table name
-            await this.reader.readString(); // columns description
-            break;
-          case ServerPacketId.Exception:
-            throw await this.reader.readException();
-          default:
-            throw new Error(`Unexpected packet while waiting for insert header: ${packetId}`);
-        }
+      // Validate schema if provided
+      if (options.schema) {
+        validateSchema(options.schema, serverSchema);
       }
 
-      const blocks = (data instanceof RecordBatch)
-        ? [data]
-        : (data as AsyncIterable<RecordBatch> | Iterable<RecordBatch>);
-
       let totalInserted = 0;
-      for await (const batch of blocks) {
-        if (cancelled) throw new Error("Insert cancelled");
 
+      const sendBatch = async (batch: RecordBatch) => {
+        if (cancelled) throw new Error("Insert cancelled");
         const encodedColumns = [];
         for (let i = 0; i < batch.columns.length; i++) {
           const colDef = batch.columns[i];
@@ -323,8 +326,8 @@ export class TcpClient {
 
           const writer = new BufferWriter();
           codec.writePrefix?.(writer, colData);
-          const data = codec.encode(colData);
-          writer.write(data);
+          const encoded = codec.encode(colData);
+          writer.write(encoded);
 
           encodedColumns.push({
             name: colDef.name,
@@ -333,36 +336,159 @@ export class TcpClient {
           });
         }
 
-        const dataPacket = this.writer.encodeData("", batch.rowCount, encodedColumns, this.serverHello.revision, useCompression, compressionMethod);
+        const dataPacket = this.writer.encodeData("", batch.rowCount, encodedColumns, this.serverHello!.revision, useCompression, compressionMethod);
         await this.writeWithBackpressure(dataPacket);
         totalInserted += batch.rowCount;
+      };
+
+      const sendRowBatch = async (rows: Record<string, unknown>[]) => {
+        if (rows.length === 0) return;
+        const numCols = serverSchema.length;
+        const codecs = serverSchema.map(c => getCodec(c.type));
+
+        // Transpose row objects to columns
+        const columns: unknown[][] = serverSchema.map(() => new Array(rows.length));
+        for (let r = 0; r < rows.length; r++) {
+          const row = rows[r];
+          for (let c = 0; c < numCols; c++) {
+            columns[c][r] = row[serverSchema[c].name];
+          }
+        }
+
+        // Build Column objects via codecs (coercion happens in fromValues)
+        const encodedColumns = [];
+        for (let i = 0; i < numCols; i++) {
+          const col = codecs[i].fromValues(columns[i]);
+          const writer = new BufferWriter();
+          codecs[i].writePrefix?.(writer, col);
+          const encoded = codecs[i].encode(col);
+          writer.write(encoded);
+          encodedColumns.push({
+            name: serverSchema[i].name,
+            type: serverSchema[i].type,
+            data: writer.finish()
+          });
+        }
+
+        const dataPacket = this.writer.encodeData("", rows.length, encodedColumns, this.serverHello!.revision, useCompression, compressionMethod);
+        await this.writeWithBackpressure(dataPacket);
+        totalInserted += rows.length;
+      };
+
+      // Single RecordBatch - fast path
+      if (data instanceof RecordBatch) {
+        await sendBatch(data);
+      } else {
+        // Get iterator (sync or async)
+        const isAsync = Symbol.asyncIterator in data;
+        const iterator = isAsync
+          ? (data as AsyncIterable<any>)[Symbol.asyncIterator]()
+          : (data as Iterable<any>)[Symbol.iterator]();
+
+        const firstResult = await Promise.resolve(iterator.next());
+        if (!firstResult.done) {
+          const first = firstResult.value;
+
+          if (first instanceof RecordBatch) {
+            // RecordBatch mode
+            await sendBatch(first);
+            while (true) {
+              if (cancelled) throw new Error("Insert cancelled");
+              const result = await Promise.resolve(iterator.next());
+              if (result.done) break;
+              await sendBatch(result.value as RecordBatch);
+            }
+          } else {
+            // Row object mode with batching
+            let buffer: Record<string, unknown>[] = [first as Record<string, unknown>];
+            while (true) {
+              if (cancelled) throw new Error("Insert cancelled");
+              const result = await Promise.resolve(iterator.next());
+              if (result.done) break;
+              buffer.push(result.value as Record<string, unknown>);
+              if (buffer.length >= batchSize) {
+                await sendRowBatch(buffer);
+                buffer = [];
+              }
+            }
+            if (buffer.length > 0) {
+              await sendRowBatch(buffer);
+            }
+          }
+        }
       }
 
       const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
       this.socket.write(delimiter);
 
-      while (true) {
-        const packetId = Number(await this.reader.readVarInt());
-        if (packetId === ServerPacketId.EndOfStream) break;
-
-        switch (packetId) {
-          case ServerPacketId.Progress: await this.readProgress(); break;
-          case ServerPacketId.ProfileInfo: await this.readProfileInfo(); break;
-          case ServerPacketId.Data:
-            await this.readBlock(useCompression);
-            break;
-          case ServerPacketId.Log:
-          case ServerPacketId.ProfileEvents:
-            await this.readBlock(false);
-            break;
-          case ServerPacketId.Exception:
-            throw await this.reader.readException();
-        }
-      }
+      await this.drainInsertResponses(useCompression);
       this.log(`Successfully inserted ${totalInserted} rows.`);
     } finally {
       this.busy = false;
       signal?.removeEventListener("abort", abortHandler);
+    }
+  }
+
+  /**
+   * Send INSERT query and wait for schema response from server.
+   * Returns the schema (column definitions) for the target table.
+   */
+  private async sendInsertQueryAndGetSchema(
+    sql: string,
+    useCompression: boolean,
+    compressionMethod: MethodCode,
+    isCancelled: () => boolean
+  ): Promise<ColumnSchema[]> {
+    const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello!.revision, {}, useCompression, {});
+    this.socket!.write(queryPacket);
+
+    const delimiter = this.writer.encodeData("", 0, [], this.serverHello!.revision, useCompression, compressionMethod);
+    this.socket!.write(delimiter);
+
+    while (true) {
+      if (isCancelled()) throw new Error("Insert cancelled");
+      const packetId = Number(await this.reader!.readVarInt());
+
+      switch (packetId) {
+        case ServerPacketId.Data: {
+          const block = await this.readBlock(useCompression);
+          this.currentSchema = block.columns.map(c => ({ name: c.name, type: c.type }));
+          return this.currentSchema;
+        }
+        case ServerPacketId.Progress: await this.readProgress(); break;
+        case ServerPacketId.Log: await this.readBlock(false); break;
+        case ServerPacketId.TableColumns:
+          await this.reader!.readString();
+          await this.reader!.readString();
+          break;
+        case ServerPacketId.Exception:
+          throw await this.reader!.readException();
+        default:
+          throw new Error(`Unexpected packet while waiting for insert header: ${packetId}`);
+      }
+    }
+  }
+
+  /**
+   * Drain response packets after insert data has been sent.
+   * Waits until EndOfStream, handling intermediate packets.
+   */
+  private async drainInsertResponses(useCompression: boolean): Promise<void> {
+    while (true) {
+      const packetId = Number(await this.reader!.readVarInt());
+      if (packetId === ServerPacketId.EndOfStream) break;
+
+      switch (packetId) {
+        case ServerPacketId.Progress: await this.readProgress(); break;
+        case ServerPacketId.ProfileInfo: await this.readProfileInfo(); break;
+        case ServerPacketId.Data: await this.readBlock(useCompression); break;
+        case ServerPacketId.Log:
+        case ServerPacketId.ProfileEvents:
+          await this.readBlock(false);
+          break;
+        case ServerPacketId.Exception:
+          throw await this.reader!.readException();
+      }
     }
   }
 

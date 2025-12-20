@@ -320,7 +320,6 @@ for await (const batch of streamDecodeNative(
   }
 }
 
-// Streaming insert - generate RecordBatches
 async function* generateBatches() {
   const schema = [
     { name: "id", type: "UInt32" },
@@ -368,7 +367,6 @@ const client = new TcpClient({
 });
 await client.connect();
 
-// Query - streams packets as they arrive
 for await (const packet of client.query("SELECT * FROM table")) {
   if (packet.type === "Data") {
     for (const row of packet.batch) {
@@ -380,8 +378,8 @@ for await (const packet of client.query("SELECT * FROM table")) {
 // Execute DDL
 await client.execute("CREATE TABLE ...");
 
-// Insert
-await client.insert("INSERT INTO table VALUES", batch);
+// Insert (see Insert API section for details)
+await client.insert("INSERT INTO table", [{ id: 1, name: "alice" }]);
 
 client.close();
 ```
@@ -429,9 +427,42 @@ for await (const packet of client.query(sql, { send_logs_level: "trace" })) {
 }
 ```
 
-### Streaming Insert
+### Insert API
 
-Use separate connections for read and write when streaming:
+The `insert()` method accepts RecordBatches or row objects:
+
+```ts
+await client.insert("INSERT INTO t", batch);
+
+await client.insert("INSERT INTO t", [batch1, batch2]);
+
+// Row objects with auto-coercion (types inferred from server schema)
+await client.insert("INSERT INTO t", [
+  { id: 1, name: "alice" },
+  { id: 2, name: "bob" },
+]);
+
+async function* generateRows() {
+  for (let i = 0; i < 1000000; i++) {
+    yield { id: i, name: `user${i}` };
+  }
+}
+
+// batchSize dictates number of rows per RecordBatch (native insert block) sent
+await client.insert("INSERT INTO t", generateRows(), { batchSize: 10000 });
+
+// Schema validation (fail fast if types don't match the schema the server sends for the insert table)
+await client.insert("INSERT INTO t", rows, {
+  schema: [
+    { name: "id", type: "UInt32" },
+    { name: "name", type: "String" },
+  ],
+});
+```
+
+### Streaming Between Tables
+
+Use separate connections for concurrent read/write:
 
 ```ts
 import { TcpClient, recordBatches } from "@maxjustus/chttp/tcp";
@@ -441,9 +472,9 @@ const writeClient = new TcpClient(options);
 await readClient.connect();
 await writeClient.connect();
 
-// Stream from one table to another using recordBatches helper
+// Stream RecordBatches from one table to another
 await writeClient.insert(
-  "INSERT INTO dst VALUES",
+  "INSERT INTO dst",
   recordBatches(readClient.query("SELECT * FROM src")),
 );
 ```
@@ -461,7 +492,7 @@ for await (const p of client.query(sql, {}, { signal: controller.signal })) {
 }
 ```
 
-### Auto-Close
+### Auto-Close TCP connection on scope exit
 
 ```ts
 await using client = await TcpClient.connect(options);
