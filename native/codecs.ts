@@ -2038,21 +2038,44 @@ class DynamicCodec implements Codec {
 
 class JsonCodec implements Codec {
   readonly type = "JSON";
-  private paths: string[] = [];
-  private pathCodecs: Map<string, DynamicCodec> = new Map();
+  // Typed paths from schema (e.g., "currency LowCardinality(String)")
+  private typedPaths: { name: string; type: string; codec: Codec }[] = [];
+  // Dynamic paths read from wire
+  private dynamicPaths: string[] = [];
+  private dynamicCodecs: Map<string, DynamicCodec> = new Map();
+
+  constructor(typedPaths: { name: string; type: string }[] = []) {
+    this.typedPaths = typedPaths.map((p) => ({
+      name: p.name,
+      type: p.type,
+      codec: getCodec(p.type),
+    }));
+  }
 
   writePrefix(writer: BufferWriter, col: Column) {
     const json = col as JsonColumn;
-    this.paths = json.paths;
+    // For V3 format, all paths (including typed) are listed as dynamic paths
+    this.dynamicPaths = json.paths;
     writer.writeU64LE(JSON.VERSION_V3);
-    writer.writeVarint(this.paths.length);
-    for (const p of this.paths) writer.writeString(p);
+    writer.writeVarint(this.dynamicPaths.length);
+    for (const p of this.dynamicPaths) writer.writeString(p);
 
-    for (const path of this.paths) {
+    // Write typed path prefixes first (in schema order)
+    for (const tp of this.typedPaths) {
+      const pathCol = json.pathColumns.get(tp.name);
+      if (pathCol) {
+        tp.codec.writePrefix?.(writer, pathCol);
+      }
+    }
+
+    // Write dynamic path prefixes
+    for (const path of this.dynamicPaths) {
+      // Skip typed paths - they were written above
+      if (this.typedPaths.some((tp) => tp.name === path)) continue;
       const codec = new DynamicCodec();
       const pathCol = json.pathColumns.get(path)!;
       codec.writePrefix(writer, pathCol);
-      this.pathCodecs.set(path, codec);
+      this.dynamicCodecs.set(path, codec);
     }
   }
 
@@ -2061,14 +2084,25 @@ class JsonCodec implements Codec {
     if (ver !== JSON.VERSION_V3)
       throw new Error(`JSON: only V3 supported, got V${ver}`);
 
+    // Read path count and names (these are ALL paths, both typed and dynamic)
     const count = reader.readVarint();
-    this.paths = [];
-    for (let i = 0; i < count; i++) this.paths.push(reader.readString());
+    const allPathNames: string[] = [];
+    for (let i = 0; i < count; i++) allPathNames.push(reader.readString());
 
-    for (const path of this.paths) {
+    // Separate typed paths (from schema) from dynamic paths
+    const typedPathNames = new Set(this.typedPaths.map((tp) => tp.name));
+    this.dynamicPaths = allPathNames.filter((p) => !typedPathNames.has(p));
+
+    // Read typed path prefixes first (in schema order)
+    for (const tp of this.typedPaths) {
+      tp.codec.readPrefix?.(reader);
+    }
+
+    // Read dynamic path prefixes
+    for (const path of this.dynamicPaths) {
       const codec = new DynamicCodec();
       codec.readPrefix(reader);
-      this.pathCodecs.set(path, codec);
+      this.dynamicCodecs.set(path, codec);
     }
   }
 
@@ -2076,9 +2110,22 @@ class JsonCodec implements Codec {
     const json = col as JsonColumn;
     const hint = sizeHint ?? this.estimateSize(col.length);
     const writer = new BufferWriter(hint);
-    for (const path of this.paths) {
+
+    // Encode typed path columns first (in schema order)
+    for (const tp of this.typedPaths) {
+      const pathCol = json.pathColumns.get(tp.name);
+      if (pathCol) {
+        const encoded = tp.codec.encode(pathCol);
+        writer.write(encoded);
+      }
+    }
+
+    // Encode dynamic path columns
+    for (const path of this.dynamicPaths) {
+      // Skip typed paths - they were written above
+      if (this.typedPaths.some((tp) => tp.name === path)) continue;
       const pathCol = json.pathColumns.get(path)!;
-      const pathCodec = this.pathCodecs.get(path)!;
+      const pathCodec = this.dynamicCodecs.get(path)!;
       const pathHint = pathCodec.estimateSize(pathCol.length);
       writer.write(pathCodec.encode(pathCol, pathHint));
     }
@@ -2090,21 +2137,37 @@ class JsonCodec implements Codec {
     rows: number,
     state: DeserializerState,
   ): JsonColumn {
-    const pathColumns = new Map<string, DynamicColumn>();
-    for (let i = 0; i < this.paths.length; i++) {
-      const p = this.paths[i];
-      // JSON paths are encoded as Dynamic columns. We use the path index as the path component.
+    const pathColumns = new Map<string, Column>();
+    let childIndex = 0;
+
+    // Decode typed path columns first (in schema order)
+    for (const tp of this.typedPaths) {
       const childState = {
         ...state,
-        serNode: state.serNode.children[i] ?? DENSE_LEAF,
+        serNode: state.serNode.children[childIndex++] ?? DENSE_LEAF,
+      };
+      const col = tp.codec.decode(reader, rows, childState);
+      pathColumns.set(tp.name, col);
+    }
+
+    // Decode dynamic path columns
+    for (const path of this.dynamicPaths) {
+      const childState = {
+        ...state,
+        serNode: state.serNode.children[childIndex++] ?? DENSE_LEAF,
       };
       pathColumns.set(
-        p,
-        this.pathCodecs.get(p)!.decode(reader, rows, childState),
+        path,
+        this.dynamicCodecs.get(path)!.decode(reader, rows, childState),
       );
     }
 
-    return new JsonColumn(this.paths, pathColumns, rows);
+    // Combine all paths
+    const allPaths = [
+      ...this.typedPaths.map((tp) => tp.name),
+      ...this.dynamicPaths,
+    ];
+    return new JsonColumn(allPaths, pathColumns as Map<string, DynamicColumn>, rows);
   }
 
   fromValues(values: unknown[]): JsonColumn {
@@ -2160,8 +2223,17 @@ class JsonCodec implements Codec {
   readKinds(reader: BufferReader): SerializationNode {
     const kind = reader.readU8();
     const children: SerializationNode[] = [];
-    for (const pathCodec of this.pathCodecs.values()) {
-      children.push(pathCodec.readKinds(reader));
+    // Read kinds for typed paths first
+    for (const tp of this.typedPaths) {
+      if (tp.codec.readKinds) {
+        children.push(tp.codec.readKinds(reader));
+      } else {
+        children.push(DENSE_LEAF);
+      }
+    }
+    // Read kinds for dynamic paths
+    for (const codec of this.dynamicCodecs.values()) {
+      children.push(codec.readKinds(reader));
     }
     return { kind, children };
   }
@@ -2214,7 +2286,10 @@ function createCodec(type: string): Codec {
     return new VariantCodec(type, innerTypes, innerTypes.map(getCodec));
   }
   if (type === "Dynamic") return new DynamicCodec();
-  if (type === "JSON" || type.startsWith("JSON")) return new JsonCodec();
+  if (type === "JSON" || type.startsWith("JSON")) {
+    const typedPaths = parseJsonTypedPaths(type);
+    return new JsonCodec(typedPaths);
+  }
 
   if (type.startsWith("FixedString"))
     return new FixedStringCodec(parseInt(extractTypeArgs(type)));
@@ -2300,4 +2375,48 @@ function createCodec(type: string): Codec {
 // Extracts the content between the outermost parentheses: "Array(Int32)" → "Int32"
 function extractTypeArgs(type: string): string {
   return type.substring(type.indexOf("(") + 1, type.lastIndexOf(")"));
+}
+
+/**
+ * Parse typed paths from a JSON type string.
+ * e.g., JSON(max_dynamic_paths=128, currency LowCardinality(String), integration LowCardinality(String))
+ * returns [{ name: "currency", type: "LowCardinality(String)" }, { name: "integration", type: "LowCardinality(String)" }]
+ */
+function parseJsonTypedPaths(type: string): { name: string; type: string }[] {
+  if (type === "JSON" || !type.includes("(")) return [];
+
+  const inner = extractTypeArgs(type);
+  if (!inner) return [];
+
+  const parts = parseTypeList(inner);
+  const typedPaths: { name: string; type: string }[] = [];
+
+  for (const part of parts) {
+    const trimmed = part.trim();
+    // Skip config params like max_dynamic_paths=128
+    if (trimmed.includes("=")) continue;
+    // Skip SKIP directives
+    if (trimmed.startsWith("SKIP")) continue;
+
+    // Try to parse as "name Type" format
+    // Match: identifier followed by space and then a type
+    const match = trimmed.match(/^([a-z_][a-z0-9_]*)\s+(.+)$/i);
+    if (match) {
+      const name = match[1];
+      const typeStr = match[2];
+      // Verify the second part looks like a type (starts with a type keyword)
+      const typeKeywords = [
+        "Int", "UInt", "Float", "String", "Bool", "Date", "DateTime",
+        "Nullable", "Array", "Tuple", "Map", "Enum", "UUID", "IPv",
+        "Decimal", "FixedString", "Variant", "JSON", "Object",
+        "LowCardinality", "Nested", "Nothing", "Dynamic", "Point",
+        "Ring", "Polygon", "MultiPolygon",
+      ];
+      if (typeKeywords.some((kw) => typeStr.startsWith(kw))) {
+        typedPaths.push({ name, type: typeStr });
+      }
+    }
+  }
+
+  return typedPaths;
 }

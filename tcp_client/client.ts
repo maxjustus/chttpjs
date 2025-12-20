@@ -40,6 +40,8 @@ export interface TcpClientOptions {
   tls?: boolean | tls.ConnectionOptions;
   /** Grace period in ms after sending CANCEL before forceful socket close (default: 2000) */
   cancelGracePeriodMs?: number;
+  /** Default settings applied to all queries and inserts (can be overridden per-call) */
+  settings?: Record<string, string | number | boolean>;
 }
 
 export interface ColumnSchema {
@@ -53,6 +55,8 @@ export interface InsertOptions {
   batchSize?: number;
   /** Optional schema to validate against server schema */
   schema?: ColumnDef[];
+  /** Per-insert settings (merged with client defaults, overrides them) */
+  settings?: Record<string, string | number | boolean>;
 }
 
 /** Validates that expected schema matches server schema exactly. */
@@ -75,6 +79,7 @@ export class TcpClient {
   private reader: StreamingReader | null = null;
   private writer: StreamingWriter = new StreamingWriter();
   private options: TcpClientOptions;
+  private defaultSettings: Record<string, string | number | boolean>;
   private _serverHello: ServerHello | null = null;
   private currentSchema: ColumnSchema[] | null = null;
   private sessionTimezone: string | null = null;
@@ -108,6 +113,7 @@ export class TcpClient {
       compression: false,
       ...options
     };
+    this.defaultSettings = options.settings ?? {};
   }
 
   async connect(options: { signal?: AbortSignal } = {}): Promise<void> {
@@ -306,8 +312,10 @@ export class TcpClient {
     try {
       const useCompression = !!this.options.compression;
       const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
+      // Merge settings: client defaults < per-insert overrides
+      const mergedSettings = { ...this.defaultSettings, ...options.settings };
 
-      const serverSchema = await this.sendInsertQueryAndGetSchema(sql, useCompression, compressionMethod, () => cancelled);
+      const serverSchema = await this.sendInsertQueryAndGetSchema(sql, useCompression, compressionMethod, mergedSettings, () => cancelled);
 
       // Validate schema if provided
       if (options.schema) {
@@ -437,9 +445,10 @@ export class TcpClient {
     sql: string,
     useCompression: boolean,
     compressionMethod: MethodCode,
+    settings: Record<string, string | number | boolean>,
     isCancelled: () => boolean
   ): Promise<ColumnSchema[]> {
-    const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello!.revision, {}, useCompression, {});
+    const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello!.revision, settings, useCompression, {});
     this.socket!.write(queryPacket);
 
     const delimiter = this.writer.encodeData("", 0, [], this.serverHello!.revision, useCompression, compressionMethod);
@@ -651,8 +660,10 @@ export class TcpClient {
         // The compression flag in the query packet enables bidirectional compression:
         // - When 1: client sends compressed Data blocks, server sends compressed Data blocks
         // - When 0: both sides send uncompressed
+        // Settings merge order: hardcoded < client defaults < per-call overrides
         const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello.revision, {
           "allow_special_serialization_kinds_in_output_formats": "0",
+          ...this.defaultSettings,
           ...settings
         }, useCompression, options.params ?? {});
         this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
