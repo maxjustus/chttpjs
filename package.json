@@ -44,18 +44,9 @@
     "zstd-napi": "^0.0.12"
   },
   "devDependencies": {
-    "@clickhouse/client": "^1.14.0",
-    "@dweb-browser/zstd-wasm": "^1.2.1",
-    "@hpcc-js/wasm-zstd": "^1.8.0",
-    "@lichtblick/wasm-zstd": "^1.0.0",
-    "@mongodb-js/zstd": "^7.0.0",
-    "@oneidentity/zstd-js": "^1.0.3",
     "@testcontainers/clickhouse": "^11.5.1",
     "esbuild": "^0.27.0",
-    "fast-json-stringify": "^6.1.1",
-    "flatstr": "^1.0.12",
     "testcontainers": "^11.5.1",
-    "typescript": "^5.9.3",
-    "zstd-wasm-decoder": "^0.2.2"
+    "typescript": "^5.9.3"
   }
 }
