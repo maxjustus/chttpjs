@@ -614,6 +614,8 @@ export class TcpClient {
     let timedOut = false;
     let cancelled = false;
 
+    let reachedEndOfStream = false;
+
     const startTimeout = () => {
       if (queryTimeout > 0) {
         timeoutId = setTimeout(() => {
@@ -746,6 +748,7 @@ export class TcpClient {
               this.log(`[query] timezone updated to: ${this.sessionTimezone}`);
               break;
             case ServerPacketId.EndOfStream:
+              reachedEndOfStream = true;
               yield { type: "EndOfStream" };
               return;
             case ServerPacketId.Exception:
@@ -761,9 +764,59 @@ export class TcpClient {
         throw err;
       }
     } finally {
+      // If generator was abandoned early (before EndOfStream), drain remaining packets
+      // to keep the connection in a clean state for subsequent queries
+      if (!reachedEndOfStream && this.socket && this.reader) {
+        try {
+          await this.drainPackets(useCompression);
+        } catch {
+          // Ignore errors during drain - connection may be closing
+        }
+      }
       this.busy = false;
       clearQueryTimeout();
       signal?.removeEventListener("abort", abortHandler);
+    }
+  }
+
+  /** Drain remaining packets until EndOfStream or Exception. Used when query is abandoned early. */
+  private async drainPackets(useCompression: boolean): Promise<void> {
+    if (!this.reader) return;
+    while (true) {
+      const packetId = Number(await this.reader.readVarInt());
+      switch (packetId) {
+        case ServerPacketId.Data:
+          await this.readBlock(useCompression);
+          break;
+        case ServerPacketId.Progress:
+          await this.readProgress();
+          break;
+        case ServerPacketId.ProfileInfo:
+          await this.readProfileInfo();
+          break;
+        case ServerPacketId.ProfileEvents:
+          await this.readBlock(false);
+          break;
+        case ServerPacketId.Totals:
+        case ServerPacketId.Extremes:
+          await this.readBlock(useCompression);
+          break;
+        case ServerPacketId.Log:
+          await this.readBlock(false);
+          break;
+        case ServerPacketId.TimezoneUpdate:
+          await this.reader.readString();
+          break;
+        case ServerPacketId.EndOfStream:
+          return;
+        case ServerPacketId.Exception:
+          // Read and discard the exception
+          await this.reader.readException();
+          return;
+        default:
+          // Unknown packet - can't continue safely
+          return;
+      }
     }
   }
 

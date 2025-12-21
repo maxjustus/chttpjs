@@ -2054,8 +2054,10 @@ class JsonCodec implements Codec {
 
   writePrefix(writer: BufferWriter, col: Column) {
     const json = col as JsonColumn;
-    // For V3 format, all paths (including typed) are listed as dynamic paths
-    this.dynamicPaths = json.paths;
+    // V3 format: only dynamic paths listed in header, typed paths are implicit from schema
+    const typedPathNames = new Set(this.typedPaths.map((tp) => tp.name));
+    this.dynamicPaths = json.paths.filter((p) => !typedPathNames.has(p));
+
     writer.writeU64LE(JSON.VERSION_V3);
     writer.writeVarint(this.dynamicPaths.length);
     for (const p of this.dynamicPaths) writer.writeString(p);
@@ -2070,8 +2072,6 @@ class JsonCodec implements Codec {
 
     // Write dynamic path prefixes
     for (const path of this.dynamicPaths) {
-      // Skip typed paths - they were written above
-      if (this.typedPaths.some((tp) => tp.name === path)) continue;
       const codec = new DynamicCodec();
       const pathCol = json.pathColumns.get(path)!;
       codec.writePrefix(writer, pathCol);
@@ -2122,8 +2122,6 @@ class JsonCodec implements Codec {
 
     // Encode dynamic path columns
     for (const path of this.dynamicPaths) {
-      // Skip typed paths - they were written above
-      if (this.typedPaths.some((tp) => tp.name === path)) continue;
       const pathCol = json.pathColumns.get(path)!;
       const pathCodec = this.dynamicCodecs.get(path)!;
       const pathHint = pathCodec.estimateSize(pathCol.length);
@@ -2167,35 +2165,40 @@ class JsonCodec implements Codec {
       ...this.typedPaths.map((tp) => tp.name),
       ...this.dynamicPaths,
     ];
-    return new JsonColumn(allPaths, pathColumns as Map<string, DynamicColumn>, rows);
+    return new JsonColumn(allPaths, pathColumns, rows);
   }
 
   fromValues(values: unknown[]): JsonColumn {
-    // Collect all unique paths across all objects
-    const pathSet = new Set<string>();
+    const extractPath = (path: string) => values.map(v =>
+      v && typeof v === "object" ? (v as Record<string, unknown>)[path] ?? null : null
+    );
+
+    const pathColumns = new Map<string, Column>();
+    const typedPathNames = new Set<string>();
+
+    // Typed paths use their specific codecs
+    for (const tp of this.typedPaths) {
+      typedPathNames.add(tp.name);
+      pathColumns.set(tp.name, tp.codec.fromValues(extractPath(tp.name)));
+    }
+
+    // Collect and encode dynamic paths
+    const dynamicPaths = new Set<string>();
     for (const v of values) {
       if (v && typeof v === "object" && !Array.isArray(v)) {
-        for (const key of Object.keys(v as object)) {
-          pathSet.add(key);
+        for (const key of Object.keys(v)) {
+          if (!typedPathNames.has(key)) dynamicPaths.add(key);
         }
       }
     }
-    const paths = Array.from(pathSet).sort();
 
-    // For each path, create a DynamicColumn
-    const pathColumns = new Map<string, DynamicColumn>();
     const dynCodec = new DynamicCodec();
-    for (const path of paths) {
-      const pathValues: unknown[] = new Array(values.length);
-      for (let i = 0; i < values.length; i++) {
-        const obj = values[i] as Record<string, unknown> | null;
-        pathValues[i] =
-          obj && typeof obj === "object" ? (obj[path] ?? null) : null;
-      }
-      pathColumns.set(path, dynCodec.fromValues(pathValues));
+    const sortedDynamic = [...dynamicPaths].sort();
+    for (const path of sortedDynamic) {
+      pathColumns.set(path, dynCodec.fromValues(extractPath(path)));
     }
 
-    return new JsonColumn(paths, pathColumns, values.length);
+    return new JsonColumn([...typedPathNames, ...sortedDynamic], pathColumns, values.length);
   }
 
   builder(size: number): ColumnBuilder {
@@ -2379,44 +2382,22 @@ function extractTypeArgs(type: string): string {
 
 /**
  * Parse typed paths from a JSON type string.
- * e.g., JSON(max_dynamic_paths=128, currency LowCardinality(String), integration LowCardinality(String))
- * returns [{ name: "currency", type: "LowCardinality(String)" }, { name: "integration", type: "LowCardinality(String)" }]
+ * Reuses parseTupleElements for the "name Type" parsing, filters out config params.
  */
 function parseJsonTypedPaths(type: string): { name: string; type: string }[] {
   if (type === "JSON" || !type.includes("(")) return [];
-
   const inner = extractTypeArgs(type);
   if (!inner) return [];
 
-  const parts = parseTypeList(inner);
-  const typedPaths: { name: string; type: string }[] = [];
+  // Reuse parseTupleElements which handles "name Type" format
+  const elements = parseTupleElements(inner);
 
-  for (const part of parts) {
-    const trimmed = part.trim();
-    // Skip config params like max_dynamic_paths=128
-    if (trimmed.includes("=")) continue;
-    // Skip SKIP directives
-    if (trimmed.startsWith("SKIP")) continue;
-
-    // Try to parse as "name Type" format
-    // Match: identifier followed by space and then a type
-    const match = trimmed.match(/^([a-z_][a-z0-9_]*)\s+(.+)$/i);
-    if (match) {
-      const name = match[1];
-      const typeStr = match[2];
-      // Verify the second part looks like a type (starts with a type keyword)
-      const typeKeywords = [
-        "Int", "UInt", "Float", "String", "Bool", "Date", "DateTime",
-        "Nullable", "Array", "Tuple", "Map", "Enum", "UUID", "IPv",
-        "Decimal", "FixedString", "Variant", "JSON", "Object",
-        "LowCardinality", "Nested", "Nothing", "Dynamic", "Point",
-        "Ring", "Polygon", "MultiPolygon",
-      ];
-      if (typeKeywords.some((kw) => typeStr.startsWith(kw))) {
-        typedPaths.push({ name, type: typeStr });
-      }
-    }
-  }
-
-  return typedPaths;
+  // Filter to only named elements, excluding config params and SKIP directives
+  return elements
+    .filter((el): el is { name: string; type: string } =>
+      el.name !== null &&
+      !el.type.includes("=") &&
+      !el.name.toUpperCase().startsWith("SKIP")
+    )
+    .map(el => ({ name: el.name, type: el.type }));
 }
