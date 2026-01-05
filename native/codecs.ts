@@ -29,7 +29,7 @@ import {
 import {
   type DeserializerState,
   type SerializationNode,
-  DENSE_LEAF,
+  DEFAULT_DENSE_NODE,
 } from "./index.ts";
 import {
   type Column,
@@ -59,8 +59,20 @@ import {
 
 export function defaultDeserializerState(): DeserializerState {
   return {
-    serNode: DENSE_LEAF,
+    serNode: DEFAULT_DENSE_NODE,
     sparseRuntime: new Map(),
+  };
+}
+
+/**
+ * Create child deserializer state for nested type at given index.
+ * Falls back to dense serialization if child node doesn't exist
+ * (older ClickHouse versions or incomplete tree).
+ */
+function childState(state: DeserializerState, index: number): DeserializerState {
+  return {
+    ...state,
+    serNode: state.serNode.children[index] ?? DEFAULT_DENSE_NODE,
   };
 }
 
@@ -87,11 +99,7 @@ function decodeGroups(
   const groups = new Map<number, Column>();
   for (let i = 0; i < codecs.length; i++) {
     if (counts.has(i)) {
-      const childState = {
-        ...state,
-        serNode: state.serNode.children[i] ?? DENSE_LEAF,
-      };
-      groups.set(i, codecs[i].decode(reader, counts.get(i)!, childState));
+      groups.set(i, codecs[i].decode(reader, counts.get(i)!, childState(state, i)));
     }
   }
   return groups;
@@ -143,19 +151,9 @@ export interface Codec {
   fromValues(values: unknown[]): Column;
   builder(size: number): ColumnBuilder;
   zeroValue(): unknown;
-  // Estimate bytes needed for this column type with given row count
   estimateSize(rows: number): number;
-  // Nested types need to handle prefix writing/reading
   writePrefix?(writer: BufferWriter, col: Column): void;
   readPrefix?(reader: BufferReader): void;
-  // Dense decoding (without sparse check) - used by readSparse
-  decodeDense?(
-    reader: BufferReader,
-    rows: number,
-    state: DeserializerState,
-  ): Column;
-  // Read sparse/dense serialization kind bytes for this type tree.
-  // Each nested type reads its kind byte (0=dense, 1=sparse) from the wire.
   readKinds(reader: BufferReader): SerializationNode;
 }
 
@@ -189,8 +187,12 @@ export abstract class BaseCodec implements Codec {
   }
 }
 
+/**
+ * Read sparse-encoded column data and materialize to dense array.
+ * Only called from BaseCodec.decode() when serNode.kind is Sparse.
+ */
 function readSparse(
-  codec: Codec,
+  codec: BaseCodec,
   reader: BufferReader,
   rows: number,
   state: DeserializerState,
@@ -268,12 +270,8 @@ function readSparse(
   state.sparseRuntime.set(node, [trailingDefaults, hasValueAfterDefaults]);
 
   const zero = codec.zeroValue();
-
-  // Use decodeDense if available, otherwise fall back to decode with fresh state
   const decodeFn = (r: BufferReader, n: number) =>
-    codec.decodeDense
-      ? codec.decodeDense(r, n, defaultDeserializerState())
-      : codec.decode(r, n, defaultDeserializerState());
+    codec.decodeDense(r, n, defaultDeserializerState());
 
   if (skippedValuesRows > 0) {
     decodeFn(reader, skippedValuesRows);
@@ -1006,11 +1004,7 @@ class ArrayCodec extends BaseCodec {
   ): Column {
     const offsets = reader.readTypedArray(BigUint64Array, rows);
     const totalCount = rows > 0 ? Number(offsets[rows - 1]) : 0;
-    const childState = {
-      ...state,
-      serNode: state.serNode.children[0] ?? DENSE_LEAF,
-    };
-    const inner = this.inner.decode(reader, totalCount, childState);
+    const inner = this.inner.decode(reader, totalCount, childState(state, 0));
     return new ArrayColumn(this.type, offsets, inner);
   }
 
@@ -1135,11 +1129,7 @@ class NullableCodec extends BaseCodec {
     state: DeserializerState,
   ): Column {
     const nullFlags = reader.readTypedArray(Uint8Array, rows);
-    const childState = {
-      ...state,
-      serNode: state.serNode.children[0] ?? DENSE_LEAF,
-    };
-    const inner = this.inner.decode(reader, rows, childState);
+    const inner = this.inner.decode(reader, rows, childState(state, 0));
     return new NullableColumn(this.type, nullFlags, inner);
   }
 
@@ -1431,16 +1421,8 @@ class MapCodec extends BaseCodec {
   ): Column {
     const offsets = reader.readTypedArray(BigUint64Array, rows);
     const total = rows > 0 ? Number(offsets[rows - 1]) : 0;
-    const keyState = {
-      ...state,
-      serNode: state.serNode.children[0] ?? DENSE_LEAF,
-    };
-    const valState = {
-      ...state,
-      serNode: state.serNode.children[1] ?? DENSE_LEAF,
-    };
-    const keys = this.keyCodec.decode(reader, total, keyState);
-    const vals = this.valCodec.decode(reader, total, valState);
+    const keys = this.keyCodec.decode(reader, total, childState(state, 0));
+    const vals = this.valCodec.decode(reader, total, childState(state, 1));
     return new MapColumn(
       this.type,
       offsets,
@@ -1606,13 +1588,9 @@ class TupleCodec extends BaseCodec {
     rows: number,
     state: DeserializerState,
   ): Column {
-    const cols = this.elements.map((e, i) => {
-      const childState = {
-        ...state,
-        serNode: state.serNode.children[i] ?? DENSE_LEAF,
-      };
-      return e.codec.decode(reader, rows, childState);
-    });
+    const cols = this.elements.map((e, i) =>
+      e.codec.decode(reader, rows, childState(state, i))
+    );
     return new TupleColumn(
       this.type,
       this.elements.map((e) => ({ name: e.name })),
@@ -1684,6 +1662,16 @@ class TupleCodec extends BaseCodec {
   }
 }
 
+/**
+ * VariantCodec handles Variant(T1, T2, ...) types.
+ *
+ * Does NOT extend BaseCodec because:
+ * - Variant has its own null representation (discriminator=255)
+ * - Sparse serialization applies to children, not variant itself
+ * - Discriminators are always dense-encoded
+ *
+ * Children (variant groups) may be sparse-encoded individually.
+ */
 class VariantCodec implements Codec {
   readonly type: string;
   private typeStrings: string[];
@@ -1870,6 +1858,16 @@ class VariantCodec implements Codec {
   }
 }
 
+/**
+ * DynamicCodec handles Dynamic type (runtime-typed values).
+ *
+ * Does NOT extend BaseCodec because:
+ * - Dynamic has its own null representation (discriminator=types.length)
+ * - Sparse serialization applies to children, not dynamic itself
+ * - Discriminators are always dense-encoded
+ *
+ * Children (type groups) may be sparse-encoded individually.
+ */
 class DynamicCodec implements Codec {
   readonly type = "Dynamic";
   private types: string[] = [];
@@ -2136,27 +2134,18 @@ class JsonCodec implements Codec {
     state: DeserializerState,
   ): JsonColumn {
     const pathColumns = new Map<string, Column>();
-    let childIndex = 0;
+    let idx = 0;
 
     // Decode typed path columns first (in schema order)
     for (const tp of this.typedPaths) {
-      const childState = {
-        ...state,
-        serNode: state.serNode.children[childIndex++] ?? DENSE_LEAF,
-      };
-      const col = tp.codec.decode(reader, rows, childState);
-      pathColumns.set(tp.name, col);
+      pathColumns.set(tp.name, tp.codec.decode(reader, rows, childState(state, idx++)));
     }
 
     // Decode dynamic path columns
     for (const path of this.dynamicPaths) {
-      const childState = {
-        ...state,
-        serNode: state.serNode.children[childIndex++] ?? DENSE_LEAF,
-      };
       pathColumns.set(
         path,
-        this.dynamicCodecs.get(path)!.decode(reader, rows, childState),
+        this.dynamicCodecs.get(path)!.decode(reader, rows, childState(state, idx++)),
       );
     }
 
@@ -2226,18 +2215,17 @@ class JsonCodec implements Codec {
   readKinds(reader: BufferReader): SerializationNode {
     const kind = reader.readU8();
     const children: SerializationNode[] = [];
-    // Read kinds for typed paths first
+
+    // Read kinds for typed paths (from schema, known at construction)
     for (const tp of this.typedPaths) {
-      if (tp.codec.readKinds) {
-        children.push(tp.codec.readKinds(reader));
-      } else {
-        children.push(DENSE_LEAF);
-      }
+      children.push(tp.codec.readKinds(reader));
     }
-    // Read kinds for dynamic paths
+
+    // Read kinds for dynamic paths (populated in readPrefix, which runs before readKinds)
     for (const codec of this.dynamicCodecs.values()) {
       children.push(codec.readKinds(reader));
     }
+
     return { kind, children };
   }
 }

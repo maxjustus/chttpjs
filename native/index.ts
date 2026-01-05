@@ -70,15 +70,36 @@ export interface Block {
 
 /**
  * Node in the serialization tree. Tracks kind (dense/sparse) for each position
- * in the type tree. Children correspond to nested types (Array element, Map key/value, etc.)
+ * in the type tree.
+ *
+ * Tree structure mirrors the type hierarchy:
+ * - Leaf types (UInt32, String, etc.): no children
+ * - Array(T): 1 child for inner type
+ * - Nullable(T): 1 child for inner type
+ * - Map(K, V): 2 children [key, value]
+ * - Tuple(T1, T2, ...): N children, one per element
+ * - Variant(T1, T2, ...): N children, one per variant
+ * - JSON: M children for typed paths, dynamic paths use fallback
  */
 export interface SerializationNode {
   kind: number; // 0 = Dense, 1 = Sparse
   children: SerializationNode[];
 }
 
-/** Default node for dense serialization (no sparse encoding) */
-export const DENSE_LEAF: SerializationNode = { kind: 0, children: [] };
+/**
+ * Default serialization node representing dense (non-sparse) encoding.
+ *
+ * ClickHouse Native format supports sparse serialization (v54454+) where
+ * columns with many default/zero values encode only non-default positions.
+ * The server sends a tree of "kind" bytes (0=dense, 1=sparse) matching the
+ * type structure before column data.
+ *
+ * This constant is used when:
+ * - Server doesn't use custom serialization (hasCustomSerialization=false)
+ * - Accessing child nodes that don't exist in the tree (fallback)
+ * - Creating fresh state for inner decoding during sparse materialization
+ */
+export const DEFAULT_DENSE_NODE: SerializationNode = { kind: 0, children: [] };
 
 /**
  * State maintained during a block deserialization.
@@ -259,7 +280,7 @@ export function decodeNativeBlock(
 
     const codec = getCodec(type);
 
-    let serNode: SerializationNode = DENSE_LEAF;
+    let serNode: SerializationNode = DEFAULT_DENSE_NODE;
     if (clientVersion >= 54454) {
       const hasCustomSerialization = reader.readU8() !== 0;
       if (hasCustomSerialization) {
