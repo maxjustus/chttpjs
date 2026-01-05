@@ -94,6 +94,62 @@ A compressed stream may contain multiple consecutive blocks. To decode:
 5. Verify checksum, decompress
 6. Repeat until end of stream
 
+## Chunked Transfer (TCP Protocol)
+
+Introduced in Protocol Revision 54470. 
+
+Chunked transfer is a transport-layer framing mechanism used in the TCP protocol to improve backpressure, flow control, and memory predictability. Once negotiated, it wraps **all** communication (Data packets, Progress, Logs, etc.) in small, manageable frames.
+
+### Negotiation
+
+Negotiation occurs during the initial Handshake (Hello exchange):
+
+1. **Server Hello**: If `server_revision >= 54470`, the server sends two strings:
+   - `proto_send_chunked_srv`: The mode the server prefers for sending to the client.
+   - `proto_recv_chunked_srv`: The mode the server prefers for receiving from the client.
+2. **Client Preference**: The client compares these with its own supported modes (`chunked`, `chunked_optional`, `notchunked`, `notchunked_optional`).
+3. **Addendum**: The client calculates the negotiated modes and sends them back to the server in the `Addendum` packet.
+   - Example: If both sides support `chunked_optional`, the result is `chunked`.
+
+### Framing Layout
+
+Every frame in a chunked stream follows this layout:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Chunk Length (4 bytes, UInt32 LE)                                │
+│   The number of bytes of payload following this header           │
+├──────────────────────────────────────────────────────────────────┤
+│ Payload (variable)                                               │
+│   Raw protocol bytes (Packet IDs, Strings, Blocks, etc.)         │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Key Rules**:
+- **Multiplexing**: A single chunk can contain multiple small protocol packets (e.g., `Progress` followed by `Log`).
+- **Fragmentation**: A single large packet (e.g., a 10MB `Data` block) is split across multiple consecutive chunks.
+- **Zero-Length Chunks**: Not used for termination (termination is still handled by the `EndOfStream` packet ID), but valid as empty frames.
+
+### Timing & "The Upgrade"
+
+The most critical aspect of chunked transfer is **when** it starts.
+
+1. The `Hello` exchange and the `Addendum` packet are sent over a **Plain (unchunked)** stream.
+2. Immediately **after** the `Addendum` packet is written to the wire, both the client and server "upgrade" the connection to Chunked mode.
+3. Every byte thereafter (including the `Query` packet) is wrapped in the `UInt32` length header.
+
+### Interaction with Compression
+
+Chunking is the **outermost** layer. Compression is an **inner** layer applied only to `Data`, `Totals`, and `Extremes` packets.
+
+**Layering Order (Outgoing):**
+1. **Application**: Columnar Data.
+2. **Native Codec**: Encode to binary Native block.
+3. **Compression**: Wrap in ClickHouse compression framing (Checksum + Header + Data).
+4. **Protocol**: Wrap in `Data` packet (`PacketId.Data` + `tableName` + `CompressionFlag`).
+5. **Chunking**: Split the resulting bytes into framed chunks (e.g., 64KB each).
+6. **Socket**: Write bytes to TCP.
+
 ## Block Structure & Field Delimitation
 
 The Native format has **no explicit delimiters** between fields. Parsing relies strictly on sequential reading, length prefixes, and known data types.

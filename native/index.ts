@@ -45,42 +45,11 @@ export {
   ClickHouseDateTime64,
 };
 
-// Re-export serialization state/types (public API)
-export {
-  type DeserializerState,
-  type SerializationNode,
-  DEFAULT_DENSE_NODE,
-} from "./serialization.ts";
-
 // Re-export table helpers / types
 export { type Column, RecordBatch, RecordBatchBuilder, type Row };
 export { batchFromArrays, batchFromRows, batchFromCols, batchBuilder };
 export { rows, collectRows };
-export {
-  parseTypeList,
-  parseTupleElements,
-};
-
-export {
-  DataColumn,
-  TupleColumn,
-  MapColumn,
-  VariantColumn,
-  DynamicColumn,
-  JsonColumn,
-  NullableColumn,
-  ArrayColumn,
-} from "./columns.ts";
 export { makeBuilder, type ColumnBuilder } from "./codecs.ts";
-
-export interface Block {
-  columns: ColumnDef[];
-  columnData: Column[]; // columnData[colIndex]
-  rowCount: number;
-  decodeTimeMs?: number;
-}
-
-
 
 interface BlockResult {
   columns: ColumnDef[];
@@ -165,7 +134,7 @@ function estimateBlockSize(
  * Skip serialization tree bytes without building the tree.
  * Used when we only need to advance past the kind metadata.
  */
-export function skipSerializationTree(
+function skipSerializationTree(
   reader: BufferReader,
   typeStr: string,
 ): void {

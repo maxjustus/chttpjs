@@ -406,7 +406,7 @@ const client = new TcpClient({
 Query yields packets - handle by type:
 
 ```ts
-for await (const packet of client.query(sql, { send_logs_level: "trace" })) {
+for await (const packet of client.query(sql, { settings: { send_logs_level: "trace" } })) {
   switch (packet.type) {
     case "Data":
       console.log(`${packet.batch.rowCount} rows`);
