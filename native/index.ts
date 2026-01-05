@@ -22,6 +22,11 @@ import { getCodec } from "./codecs.ts";
 import { type Column, DataColumn } from "./columns.ts";
 import { BlockInfoField } from "./constants.ts";
 import {
+  type DeserializerState,
+  type SerializationNode,
+  DEFAULT_DENSE_NODE,
+} from "./serialization.ts";
+import {
   RecordBatch,
   RecordBatchBuilder,
   type Row,
@@ -39,6 +44,13 @@ export {
   type DecodeOptions,
   ClickHouseDateTime64,
 };
+
+// Re-export serialization state/types (public API)
+export {
+  type DeserializerState,
+  type SerializationNode,
+  DEFAULT_DENSE_NODE,
+} from "./serialization.ts";
 
 // Re-export table helpers / types
 export { type Column, RecordBatch, RecordBatchBuilder, type Row };
@@ -68,50 +80,7 @@ export interface Block {
   decodeTimeMs?: number;
 }
 
-/**
- * Node in the serialization tree. Tracks kind (dense/sparse) for each position
- * in the type tree.
- *
- * Tree structure mirrors the type hierarchy:
- * - Leaf types (UInt32, String, etc.): no children
- * - Array(T): 1 child for inner type
- * - Nullable(T): 1 child for inner type
- * - Map(K, V): 2 children [key, value]
- * - Tuple(T1, T2, ...): N children, one per element
- * - Variant(T1, T2, ...): N children, one per variant
- * - JSON: M children for typed paths, dynamic paths use fallback
- */
-export interface SerializationNode {
-  kind: number; // 0 = Dense, 1 = Sparse
-  children: SerializationNode[];
-}
 
-/**
- * Default serialization node representing dense (non-sparse) encoding.
- *
- * ClickHouse Native format supports sparse serialization (v54454+) where
- * columns with many default/zero values encode only non-default positions.
- * The server sends a tree of "kind" bytes (0=dense, 1=sparse) matching the
- * type structure before column data.
- *
- * This constant is used when:
- * - Server doesn't use custom serialization (hasCustomSerialization=false)
- * - Accessing child nodes that don't exist in the tree (fallback)
- * - Creating fresh state for inner decoding during sparse materialization
- */
-export const DEFAULT_DENSE_NODE: SerializationNode = { kind: 0, children: [] };
-
-/**
- * State maintained during a block deserialization.
- */
-export interface DeserializerState {
-  serNode: SerializationNode;
-  /**
-   * Tracks partial sparse groups across granules/blocks.
-   * Map key is the SerializationNode reference, value is [trailing_defaults, has_value_after_defaults].
-   */
-  sparseRuntime: Map<SerializationNode, [number, boolean]>;
-}
 
 interface BlockResult {
   columns: ColumnDef[];

@@ -3,6 +3,37 @@
  * Each codec handles a specific ClickHouse type.
  */
 
+interface NumericLikeCodec extends Codec {
+  readonly Ctor: TypedArrayConstructor<any>;
+  readonly converter?: (v: unknown) => number | bigint;
+}
+
+function isNumericLikeCodec(codec: Codec): codec is NumericLikeCodec {
+  return typeof (codec as any)?.Ctor === "function";
+}
+
+/**
+ * Shared helper for codecs whose builder just collects values then finalizes.
+ *
+ * This is intentionally simple and allocation-friendly (packed array) and keeps
+ * builder implementations consistent across codecs.
+ */
+function CollectingBuilder(
+  size: number,
+  finish: (values: unknown[]) => Column,
+): ColumnBuilder {
+  const values = new Array(size);
+  let offset = 0;
+  const builder: ColumnBuilder = {
+    append: (v: unknown) => {
+      values[offset++] = v;
+      return builder;
+    },
+    finish: () => finish(values),
+  };
+  return builder;
+}
+
 import {
   type TypedArray,
   TEXT_ENCODER,
@@ -30,7 +61,7 @@ import {
   type DeserializerState,
   type SerializationNode,
   DEFAULT_DENSE_NODE,
-} from "./index.ts";
+} from "./serialization.ts";
 import {
   type Column,
   type DiscriminatorArray,
@@ -74,6 +105,41 @@ function childState(state: DeserializerState, index: number): DeserializerState 
     ...state,
     serNode: state.serNode.children[index] ?? DEFAULT_DENSE_NODE,
   };
+}
+
+/**
+ * Read serialization kinds for wrapper codec with 1 child.
+ * Used by Array, Nullable, LowCardinality.
+ */
+function readKinds1(reader: BufferReader, child: Codec): SerializationNode {
+  const kind = reader.readU8();
+  return { kind, children: [child.readKinds(reader)] };
+}
+
+/**
+ * Read serialization kinds for wrapper codec with 2 children.
+ * Used by Map (key + value).
+ */
+function readKinds2(
+  reader: BufferReader,
+  childA: Codec,
+  childB: Codec,
+): SerializationNode {
+  const kind = reader.readU8();
+  return { kind, children: [childA.readKinds(reader), childB.readKinds(reader)] };
+}
+
+/**
+ * Read serialization kinds for wrapper codec with N children.
+ * Used by Tuple, Variant, Dynamic, JSON.
+ */
+function readKindsMany(reader: BufferReader, children: readonly Codec[]): SerializationNode {
+  const kind = reader.readU8();
+  const nodes = new Array(children.length);
+  for (let i = 0; i < children.length; i++) {
+    nodes[i] = children[i].readKinds(reader);
+  }
+  return { kind, children: nodes };
 }
 
 // Alias for brevity
@@ -1012,9 +1078,9 @@ class ArrayCodec extends BaseCodec {
     const offsets = new BigUint64Array(values.length);
 
     // Fast path for numeric inner types: build TypedArray directly
-    // Casting to NumericCodec to check for Ctor property (only NumericCodec has it)
-    const inner = this.inner as NumericCodec<TypedArray>;
-    if (inner.Ctor) {
+    // Use a type guard rather than casting to an internal codec class.
+    if (isNumericLikeCodec(this.inner)) {
+      const inner = this.inner;
       let totalCount = 0;
       for (let i = 0; i < values.length; i++) {
         totalCount += (values[i] as ArrayLike<unknown>).length;
@@ -1083,8 +1149,7 @@ class ArrayCodec extends BaseCodec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.readU8();
-    return { kind, children: [this.inner.readKinds(reader)] };
+    return readKinds1(reader, this.inner);
   }
 }
 
@@ -1184,8 +1249,7 @@ class NullableCodec extends BaseCodec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.readU8();
-    return { kind, children: [this.inner.readKinds(reader)] };
+    return readKinds1(reader, this.inner);
   }
 }
 
@@ -1319,16 +1383,7 @@ class LowCardinalityCodec extends BaseCodec {
   }
 
   builder(size: number): ColumnBuilder {
-    const values = new Array(size);
-    let offset = 0;
-    const builder: ColumnBuilder = {
-      append: (v: unknown) => {
-        values[offset++] = v;
-        return builder;
-      },
-      finish: () => this.inner.fromValues(values),
-    };
-    return builder;
+    return CollectingBuilder(size, (values) => this.inner.fromValues(values));
   }
 
   zeroValue() {
@@ -1366,8 +1421,7 @@ class LowCardinalityCodec extends BaseCodec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.readU8();
-    return { kind, children: [this.inner.readKinds(reader)] };
+    return readKinds1(reader, this.inner);
   }
 }
 
@@ -1530,14 +1584,7 @@ class MapCodec extends BaseCodec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.readU8();
-    return {
-      kind,
-      children: [
-        this.keyCodec.readKinds(reader),
-        this.valCodec.readKinds(reader),
-      ],
-    };
+    return readKinds2(reader, this.keyCodec, this.valCodec);
   }
 }
 
@@ -1653,12 +1700,7 @@ class TupleCodec extends BaseCodec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.readU8();
-    const children: SerializationNode[] = [];
-    for (const el of this.elements) {
-      children.push(el.codec.readKinds(reader));
-    }
-    return { kind, children };
+    return readKindsMany(reader, this.elements.map(e => e.codec));
   }
 }
 
@@ -1759,17 +1801,10 @@ class VariantCodec implements Codec {
 
   builder(size: number): ColumnBuilder {
     const type = this.type;
-    const values = new Array(size);
-    let offset = 0;
-    const builder: ColumnBuilder = {
-      append: (v: unknown) => {
-        values[offset++] = v;
-        return builder;
-      },
-      finish: () =>
-        new VariantColumn(type, ...this.buildVariantFromValues(values)),
-    };
-    return builder;
+    return CollectingBuilder(
+      size,
+      (values) => new VariantColumn(type, ...this.buildVariantFromValues(values)),
+    );
   }
 
   private buildVariantFromValues(
@@ -1849,12 +1884,7 @@ class VariantCodec implements Codec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.readU8();
-    const children: SerializationNode[] = [];
-    for (const codec of this.codecs) {
-      children.push(codec.readKinds(reader));
-    }
-    return { kind, children };
+    return readKindsMany(reader, this.codecs);
   }
 }
 
@@ -1981,16 +2011,7 @@ class DynamicCodec implements Codec {
   }
 
   builder(size: number): ColumnBuilder {
-    const values = new Array(size);
-    let offset = 0;
-    const builder: ColumnBuilder = {
-      append: (v: unknown) => {
-        values[offset++] = v;
-        return builder;
-      },
-      finish: () => this.fromValues(values),
-    };
-    return builder;
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -2025,12 +2046,7 @@ class DynamicCodec implements Codec {
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.readU8();
-    const children: SerializationNode[] = [];
-    for (const codec of this.codecs) {
-      children.push(codec.readKinds(reader));
-    }
-    return { kind, children };
+    return readKindsMany(reader, this.codecs);
   }
 }
 
@@ -2191,16 +2207,7 @@ class JsonCodec implements Codec {
   }
 
   builder(size: number): ColumnBuilder {
-    const values = new Array(size);
-    let offset = 0;
-    const builder: ColumnBuilder = {
-      append: (v: unknown) => {
-        values[offset++] = v;
-        return builder;
-      },
-      finish: () => this.fromValues(values),
-    };
-    return builder;
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -2213,20 +2220,12 @@ class JsonCodec implements Codec {
   } // Conservative: ~32 bytes per row
 
   readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.readU8();
-    const children: SerializationNode[] = [];
-
-    // Read kinds for typed paths (from schema, known at construction)
-    for (const tp of this.typedPaths) {
-      children.push(tp.codec.readKinds(reader));
-    }
-
-    // Read kinds for dynamic paths (populated in readPrefix, which runs before readKinds)
-    for (const codec of this.dynamicCodecs.values()) {
-      children.push(codec.readKinds(reader));
-    }
-
-    return { kind, children };
+    // Combine typed paths (from schema) and dynamic paths (from readPrefix)
+    const allCodecs = [
+      ...this.typedPaths.map(tp => tp.codec),
+      ...this.dynamicCodecs.values(),
+    ];
+    return readKindsMany(reader, allCodecs);
   }
 }
 
