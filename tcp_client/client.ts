@@ -60,12 +60,17 @@ export interface InsertOptions {
   settings?: ClickHouseSettings;
 }
 
+/** Data that can be sent as an external table */
+export type ExternalTableData = RecordBatch | Iterable<RecordBatch> | AsyncIterable<RecordBatch>;
+
 export interface QueryOptions {
   /** Per-query settings (merged with client defaults, overrides them) */
   settings?: ClickHouseSettings;
   /** Query parameters (substitution values) */
   params?: ClickHouseSettings;
   signal?: AbortSignal;
+  /** External tables to send with the query (available as temporary tables in the SQL) */
+  externalTables?: Record<string, ExternalTableData>;
 }
 
 
@@ -687,6 +692,11 @@ export class TcpClient {
         this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
         this.socket.write(queryPacket);
 
+        // Send external tables if provided
+        if (options.externalTables) {
+          await this.sendExternalTables(options.externalTables, useCompression, compressionMethod);
+        }
+
         // Send delimiter (compressed if compression is enabled)
         const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
         this.log(`[query] sending delimiter (${delimiter.length} bytes, compressed=${useCompression})`);
@@ -792,6 +802,51 @@ export class TcpClient {
       this.busy = false;
       clearQueryTimeout();
       signal?.removeEventListener("abort", abortHandler);
+    }
+  }
+
+  /** Encode a RecordBatch as a Data packet with the given table name. */
+  private encodeBatchAsDataPacket(
+    tableName: string,
+    batch: RecordBatch,
+    compress: boolean,
+    method: MethodCode
+  ): Uint8Array {
+    const encodedColumns = [];
+    for (let i = 0; i < batch.columns.length; i++) {
+      const colDef = batch.columns[i];
+      const colData = batch.columnData[i];
+      const codec = getCodec(colDef.type);
+      const writer = new BufferWriter();
+      codec.writePrefix?.(writer, colData);
+      writer.write(codec.encode(colData));
+      encodedColumns.push({ name: colDef.name, type: colDef.type, data: writer.finish() });
+    }
+    return this.writer.encodeData(tableName, batch.rowCount, encodedColumns,
+      this.serverHello!.revision, compress, method);
+  }
+
+  /** Send external tables as Data packets before the query delimiter. */
+  private async sendExternalTables(
+    tables: Record<string, ExternalTableData>,
+    compress: boolean,
+    method: MethodCode
+  ): Promise<void> {
+    for (const [name, data] of Object.entries(tables)) {
+      if (data instanceof RecordBatch) {
+        const packet = this.encodeBatchAsDataPacket(name, data, compress, method);
+        await this.writeWithBackpressure(packet);
+      } else if (Symbol.asyncIterator in data) {
+        for await (const batch of data as AsyncIterable<RecordBatch>) {
+          const packet = this.encodeBatchAsDataPacket(name, batch, compress, method);
+          await this.writeWithBackpressure(packet);
+        }
+      } else {
+        for (const batch of data as Iterable<RecordBatch>) {
+          const packet = this.encodeBatchAsDataPacket(name, batch, compress, method);
+          await this.writeWithBackpressure(packet);
+        }
+      }
     }
   }
 

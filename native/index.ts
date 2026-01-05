@@ -51,13 +51,16 @@ export { batchFromArrays, batchFromRows, batchFromCols, batchBuilder };
 export { rows, collectRows };
 export { makeBuilder, type ColumnBuilder } from "./codecs.ts";
 
-interface BlockResult {
+export interface Block {
   columns: ColumnDef[];
   columnData: Column[];
   rowCount: number;
+  decodeTimeMs?: number;
+}
+
+interface BlockResult extends Block {
   bytesConsumed: number;
   isEndMarker: boolean;
-  decodeTimeMs?: number;
 }
 
 interface BlockEstimate {
