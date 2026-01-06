@@ -4,6 +4,8 @@ import {
   decodeBlock,
   Method,
   type MethodCode,
+  zstdCompressRaw,
+  lz4CompressFrame,
 } from "./compression.ts";
 import type { ClickHouseSettings } from "./settings.ts";
 
@@ -61,6 +63,17 @@ function* chunkUint8Array(
 
 // Uint8Array helpers
 const encoder = new TextEncoder();
+
+function concatBytes(arrays: Uint8Array[]): Uint8Array {
+  const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const arr of arrays) {
+    result.set(arr, offset);
+    offset += arr.length;
+  }
+  return result;
+}
 
 function readUInt32LE(arr: Uint8Array, offset: number): number {
   return (
@@ -314,11 +327,31 @@ function streamJsonEachRow(
   })();
 }
 
+/** Data for an HTTP external table */
+export type HttpExternalTableData = string | Uint8Array | AsyncIterable<Uint8Array>;
+
+/** An external table to send via HTTP multipart/form-data */
+export interface HttpExternalTable {
+  /** Column structure, e.g. "id UInt32, name String" */
+  structure: string;
+  /** Data format (default: TabSeparated) */
+  format?: string;
+  /** The actual data */
+  data: HttpExternalTableData;
+}
+
 export interface QueryOptions {
   baseUrl?: string;
   auth?: AuthConfig;
   /** Compression method for response: "lz4" (default), "zstd", or "none" */
   compression?: Compression;
+  /**
+   * Compress query body using HTTP Content-Encoding.
+   * - "zstd": ZSTD compression (recommended, works with native and WASM)
+   * - "lz4": LZ4 frame compression (requires lz4-napi, not available in WASM builds)
+   * Requires server setting: enable_http_compression=1
+   */
+  compressQuery?: "zstd" | "lz4";
   /** AbortSignal for manual cancellation */
   signal?: AbortSignal;
   /** Request timeout in milliseconds */
@@ -329,6 +362,105 @@ export interface QueryOptions {
   settings?: ClickHouseSettings;
   /** Query params */
   params?: ClickHouseSettings;
+  /** External tables to send with the query */
+  externalTables?: Record<string, HttpExternalTable>;
+}
+
+/**
+ * Build a multipart/form-data body for external tables.
+ * Returns sync Uint8Array for string/Uint8Array data, or ReadableStream for async data.
+ */
+function buildMultipartBody(
+  tables: Record<string, HttpExternalTable>
+): { body: Uint8Array | ReadableStream<Uint8Array>; boundary: string } {
+  const boundary = `----chttpBoundary${crypto.randomUUID().replace(/-/g, '')}`;
+
+  // Check if any table has async data
+  const hasAsync = Object.values(tables).some(t =>
+    typeof t.data === 'object' && t.data !== null && Symbol.asyncIterator in t.data
+  );
+
+  if (!hasAsync) {
+    // Build complete body synchronously
+    const parts: Uint8Array[] = [];
+    for (const [name, table] of Object.entries(tables)) {
+      const header = `--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="data"\r\n\r\n`;
+      parts.push(encoder.encode(header));
+      if (typeof table.data === 'string') {
+        parts.push(encoder.encode(table.data));
+      } else {
+        parts.push(table.data as Uint8Array);
+      }
+      parts.push(encoder.encode('\r\n'));
+    }
+    parts.push(encoder.encode(`--${boundary}--\r\n`));
+    return { body: concatBytes(parts), boundary };
+  }
+
+  // Return streaming ReadableStream for async data
+  const entries = Object.entries(tables);
+  let entryIndex = 0;
+  let currentIterator: AsyncIterator<Uint8Array> | null = null;
+  let sentHeader = false;
+  let sentFooter = false;
+
+  return {
+    body: new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        // Send headers and data for each table
+        while (entryIndex < entries.length) {
+          const [name, table] = entries[entryIndex];
+
+          if (!sentHeader) {
+            const header = `--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="data"\r\n\r\n`;
+            controller.enqueue(encoder.encode(header));
+            sentHeader = true;
+
+            // For sync data, enqueue it all at once
+            if (typeof table.data === 'string') {
+              controller.enqueue(encoder.encode(table.data));
+              controller.enqueue(encoder.encode('\r\n'));
+              sentHeader = false;
+              entryIndex++;
+              continue;
+            } else if (table.data instanceof Uint8Array) {
+              controller.enqueue(table.data);
+              controller.enqueue(encoder.encode('\r\n'));
+              sentHeader = false;
+              entryIndex++;
+              continue;
+            } else {
+              // Async iterable
+              currentIterator = (table.data as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+            }
+          }
+
+          // Stream async data
+          if (currentIterator) {
+            const { done, value } = await currentIterator.next();
+            if (!done) {
+              controller.enqueue(value);
+              return;
+            }
+            // Done with this async iterable
+            controller.enqueue(encoder.encode('\r\n'));
+            currentIterator = null;
+            sentHeader = false;
+            entryIndex++;
+            continue;
+          }
+        }
+
+        // All tables done, send closing boundary
+        if (!sentFooter) {
+          controller.enqueue(encoder.encode(`--${boundary}--\r\n`));
+          sentFooter = true;
+        }
+        controller.close();
+      }
+    }),
+    boundary
+  };
 }
 
 async function* query(
@@ -349,6 +481,10 @@ async function* query(
     params.compress = "1";
   }
 
+  if (options.compressQuery) {
+    params.enable_http_compression = "1";
+  }
+
   if (options.clientVersion) {
     params.client_protocol_version = String(options.clientVersion);
   }
@@ -358,11 +494,13 @@ async function* query(
     "baseUrl",
     "auth",
     "compression",
+    "compressQuery",
     "signal",
     "timeout",
     "clientVersion",
     "settings",
     "params",
+    "externalTables",
   ];
   if (options.settings) {
     for (const [key, value] of Object.entries(options.settings)) {
@@ -380,6 +518,18 @@ async function* query(
     }
   }
 
+  // Handle external tables: query goes in URL, body is multipart
+  const hasExternalTables = options.externalTables && Object.keys(options.externalTables).length > 0;
+  if (hasExternalTables) {
+    params.query = query;
+    for (const [name, table] of Object.entries(options.externalTables!)) {
+      params[`${name}_structure`] = table.structure;
+      if (table.format) {
+        params[`${name}_format`] = table.format;
+      }
+    }
+  }
+
   const url = buildReqUrl(baseUrl, params, options.auth);
 
   const headers: Record<string, string> = {
@@ -387,12 +537,39 @@ async function* query(
     "User-Agent": `chttp/${options.clientVersion || "1.0"}`,
   };
 
-  const response = await fetch(url.toString(), {
-    method: "POST",
-    body: query,
-    headers,
-    signal: createSignal(options.signal, options.timeout),
-  });
+  let response: Response;
+  if (hasExternalTables) {
+    const { body, boundary } = buildMultipartBody(options.externalTables!);
+    headers["Content-Type"] = `multipart/form-data; boundary=${boundary}`;
+
+    // Need duplex: "half" for streaming body
+    const fetchOptions: RequestInit & { duplex?: string } = {
+      method: "POST",
+      body,
+      headers,
+      signal: createSignal(options.signal, options.timeout),
+    };
+    if (body instanceof ReadableStream) {
+      fetchOptions.duplex = "half";
+    }
+    response = await fetch(url.toString(), fetchOptions);
+  } else {
+    let body: string | Uint8Array = query;
+    if (options.compressQuery) {
+      const queryBytes = encoder.encode(query);
+      body =
+        options.compressQuery === "lz4"
+          ? lz4CompressFrame(queryBytes)
+          : zstdCompressRaw(queryBytes);
+      headers["Content-Encoding"] = options.compressQuery;
+    }
+    response = await fetch(url.toString(), {
+      method: "POST",
+      body,
+      headers,
+      signal: createSignal(options.signal, options.timeout),
+    });
+  }
 
   if (!response.ok) {
     const body = await response.text();

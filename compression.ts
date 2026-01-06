@@ -7,6 +7,7 @@ declare const BUILD_WITH_ZSTD: boolean | undefined;
 
 // Lazy-loaded compression functions - initialized by init()
 let lz4CompressFn: ((source: Uint8Array) => Uint8Array) | undefined;
+let lz4CompressFrameFn: ((source: Uint8Array) => Uint8Array) | undefined;
 let lz4DecompressFn:
   | ((source: Uint8Array, uncompressedSize: number) => Uint8Array)
   | undefined;
@@ -35,6 +36,9 @@ async function initLz4(): Promise<void> {
       // lz4-napi compressSync prepends 4-byte size prefix - strip it for raw block output
       lz4CompressFn = (d) =>
         new Uint8Array(native.compressSync(Buffer.from(d))).subarray(4);
+      // LZ4 frame format for HTTP Content-Encoding
+      lz4CompressFrameFn = (d) =>
+        new Uint8Array(native.compressFrameSync(Buffer.from(d)));
       // uncompressSync expects 4-byte size prefix - prepend it
       lz4DecompressFn = (d, size) => {
         const withPrefix = new Uint8Array(4 + d.length);
@@ -52,11 +56,12 @@ async function initLz4(): Promise<void> {
     }
   }
 
-  // WASM fallback
+  // WASM fallback - no frame support
   const lz4 = await import("./vendor/lz4/lz4.js");
   await lz4.init();
   // WASM compress prepends 4-byte size prefix - strip it for raw block output
   lz4CompressFn = (d) => lz4.compress(d).subarray(4);
+  // lz4CompressFrameFn stays undefined - WASM doesn't support frame format
   // WASM decompress expects 4-byte size prefix - prepend it
   lz4DecompressFn = (d, size) => {
     const prefix = new Uint8Array(4);
@@ -167,11 +172,29 @@ export function cityHash128LE(bytes: Uint8Array): Uint8Array {
   return concat([hash.subarray(8, 16), hash.subarray(0, 8)]);
 }
 
-function lz4Compress(raw: Uint8Array): Uint8Array {
+/**
+ * Raw LZ4 block compression (no ClickHouse block wrapper, no frame headers).
+ * Used internally for ClickHouse native block format.
+ */
+export function lz4CompressRaw(raw: Uint8Array): Uint8Array {
   if (!lz4CompressFn) {
     throw new Error("LZ4 not initialized - call init() first");
   }
   return lz4CompressFn(raw);
+}
+
+/**
+ * LZ4 frame compression for HTTP Content-Encoding.
+ * Produces standard LZ4 frame format with magic number and checksums.
+ * Only available with lz4-napi (Node.js), not in WASM builds.
+ */
+export function lz4CompressFrame(raw: Uint8Array): Uint8Array {
+  if (!lz4CompressFrameFn) {
+    throw new Error(
+      "LZ4 frame compression not available - requires lz4-napi (not available in WASM builds)",
+    );
+  }
+  return lz4CompressFrameFn(raw);
 }
 
 function lz4Decompress(
@@ -184,7 +207,11 @@ function lz4Decompress(
   return lz4DecompressFn(compressed, uncompressedSize);
 }
 
-function zstdCompress(raw: Uint8Array, level = 3): Uint8Array {
+/**
+ * Raw ZSTD compression (no ClickHouse block wrapper).
+ * Use for HTTP Content-Encoding compression.
+ */
+export function zstdCompressRaw(raw: Uint8Array, level = 3): Uint8Array {
   if (!zstdCompressFn) {
     throw new Error("ZSTD compression not available in this build variant");
   }
@@ -220,10 +247,10 @@ export function encodeBlock(
 
   switch (mode) {
     case Method.LZ4:
-      compressed = lz4Compress(raw);
+      compressed = lz4CompressRaw(raw);
       break;
     case Method.ZSTD:
-      compressed = zstdCompress(raw);
+      compressed = zstdCompressRaw(raw);
       break;
     case Method.None:
       compressed = raw;

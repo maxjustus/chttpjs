@@ -500,6 +500,92 @@ await using client = await TcpClient.connect(options);
 // automatically closed when scope exits
 ```
 
+### External Tables (TCP)
+
+Send data as temporary in-memory tables available during query execution:
+
+```ts
+import { batchFromArrays } from "@maxjustus/chttp";
+
+const users = batchFromArrays(
+  [{ name: "id", type: "UInt32" }, { name: "name", type: "String" }],
+  { id: new Uint32Array([1, 2, 3]), name: ["Alice", "Bob", "Charlie"] }
+);
+
+for await (const packet of client.query(
+  "SELECT * FROM users WHERE id > 1",
+  { externalTables: { users } }
+)) {
+  if (packet.type === "Data") {
+    for (const row of packet.batch) {
+      console.log(row.name);
+    }
+  }
+}
+
+// Multiple tables for JOINs
+const orders = batchFromArrays(
+  [{ name: "user_id", type: "UInt32" }, { name: "amount", type: "Float64" }],
+  { user_id: new Uint32Array([1, 2, 1]), amount: new Float64Array([10.5, 20.0, 15.5]) }
+);
+
+client.query(
+  "SELECT u.name, sum(o.amount) FROM users u JOIN orders o ON u.id = o.user_id GROUP BY u.name",
+  { externalTables: { users, orders } }
+);
+
+// Stream large external tables with async generators
+async function* generateBatches() {
+  for (let i = 0; i < 100; i++) {
+    yield batchFromArrays(schema, { id: new Uint32Array([i]) });
+  }
+}
+client.query("SELECT count() FROM data", { externalTables: { data: generateBatches() } });
+```
+
+## External Tables (HTTP)
+
+Send temporary tables via multipart/form-data. Schema must be specified explicitly.
+
+```ts
+import { query, collectText, encodeNative, batchFromArrays } from "@maxjustus/chttp";
+
+// Native format (recommended - compact binary encoding)
+const batch = batchFromArrays(
+  [{ name: "id", type: "UInt32" }, { name: "name", type: "String" }],
+  { id: new Uint32Array([1, 2, 3]), name: ["Alice", "Bob", "Charlie"] }
+);
+
+const result = await collectText(query(
+  "SELECT * FROM mydata ORDER BY id FORMAT JSON",
+  sessionId,
+  {
+    baseUrl, auth,
+    externalTables: {
+      mydata: {
+        structure: "id UInt32, name String",
+        format: "Native",
+        data: encodeNative(batch)
+      }
+    }
+  }
+));
+
+// Text formats work too (TabSeparated is default)
+query("SELECT sum(value) FROM numbers", sessionId, {
+  externalTables: {
+    numbers: {
+      structure: "value Int64",
+      data: "100\n200\n300\n"
+    }
+  }
+});
+```
+
+Data can be `string`, `Uint8Array`, or `AsyncIterable<Uint8Array>`. Supports any ClickHouse input format via the `format` option.
+
+**Note**: HTTP external tables do not support request body compression. Use Native or Parquet format for efficient binary encoding.
+
 ## Timeout and Cancellation
 
 Configure with `timeout` (ms) or provide an `AbortSignal` for manual cancellation:
