@@ -68,13 +68,18 @@ export class StreamingWriter {
     return this.flush();
   }
 
+  /**
+   * Encode the addendum packet sent after receiving ServerHello.
+   * @param revision - Negotiated protocol revision
+   */
   encodeAddendum(revision: bigint): Uint8Array {
     if (revision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_QUOTA_KEY) {
       this.writeString(""); // quota_key
     }
     if (revision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_CHUNKED_PACKETS) {
-      this.writeString("notchunked"); // server flags
-      this.writeString("notchunked"); // client flags
+      // Always use notchunked - chunked requires server config that users can't control
+      this.writeString("notchunked");
+      this.writeString("notchunked");
     }
     if (revision >= REVISIONS.DBMS_MIN_REVISION_WITH_VERSIONED_PARALLEL_REPLICAS_PROTOCOL) {
       this.writeVarInt(DBMS_PARALLEL_REPLICAS_PROTOCOL_VERSION);

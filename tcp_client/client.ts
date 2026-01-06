@@ -244,9 +244,10 @@ export class TcpClient {
     const patch = effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_VERSION_PATCH ? await this.reader.readVarInt() : effectiveRevision;
 
     if (effectiveRevision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_CHUNKED_PACKETS) {
-      // Chunked packets support flags (server-to-client and client-to-server)
-      await this.reader.readString();
-      await this.reader.readString();
+      // Server sends its chunked mode preferences - read and discard
+      // We always use notchunked since chunked requires server config
+      await this.reader.readString(); // server send preference
+      await this.reader.readString(); // server recv preference
     }
 
     if (effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_EXOTIC_STUFF) {
@@ -282,7 +283,15 @@ export class TcpClient {
       await this.reader.readVarInt();
     }
 
-    this._serverHello = { serverName, major, minor, revision: effectiveRevision, timezone, displayName, patch };
+    this._serverHello = {
+      serverName,
+      major,
+      minor,
+      revision: effectiveRevision,
+      timezone,
+      displayName,
+      patch,
+    };
 
     if (effectiveRevision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_QUOTA_KEY) {
       // Send addendum (quota key, etc)
@@ -319,7 +328,7 @@ export class TcpClient {
     const abortHandler = () => {
       if (!cancelled && this.socket) {
         cancelled = true;
-        this.socket.write(this.writer.encodeCancel());
+        this.socket!.write(this.writer.encodeCancel());
       }
     };
     signal?.addEventListener("abort", abortHandler);
@@ -442,7 +451,7 @@ export class TcpClient {
       }
 
       const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
-      this.socket.write(delimiter);
+      this.socket!.write(delimiter);
 
       await this.drainInsertResponses(useCompression);
       this.log(`Successfully inserted ${totalInserted} rows.`);
@@ -637,7 +646,7 @@ export class TcpClient {
           // First try graceful cancel
           if (this.socket && !cancelled) {
             cancelled = true;
-            this.socket.write(this.writer.encodeCancel());
+            this.socket!.write(this.writer.encodeCancel());
           }
           // Give server grace period to respond, then force close
           graceTimeoutId = setTimeout(() => {
@@ -663,7 +672,7 @@ export class TcpClient {
     const abortHandler = () => {
       if (!cancelled && this.socket) {
         cancelled = true;
-        this.socket.write(this.writer.encodeCancel());
+        this.socket!.write(this.writer.encodeCancel());
       }
     };
 
@@ -690,7 +699,7 @@ export class TcpClient {
           options.params ?? {},
         );
         this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
-        this.socket.write(queryPacket);
+        this.socket!.write(queryPacket);
 
         // Send external tables if provided
         if (options.externalTables) {
@@ -700,7 +709,7 @@ export class TcpClient {
         // Send delimiter (compressed if compression is enabled)
         const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
         this.log(`[query] sending delimiter (${delimiter.length} bytes, compressed=${useCompression})`);
-        this.socket.write(delimiter);
+        this.socket!.write(delimiter);
 
         this.currentSchema = null;
         this.log(`[query] waiting for response...`);
@@ -898,7 +907,7 @@ export class TcpClient {
   async ping(): Promise<void> {
     if (!this.socket || !this.reader) throw new Error("Not connected");
 
-    this.socket.write(this.writer.encodePing());
+    this.socket!.write(this.writer.encodePing());
     const packetId = Number(await this.reader.readVarInt());
     if (packetId !== ServerPacketId.Pong) {
       throw new Error(`Expected Pong (4), got packet ${packetId}`);
