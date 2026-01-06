@@ -2229,13 +2229,26 @@ class JsonCodec implements Codec {
   }
 }
 
-// Codec cache for type string -> codec instance
+// LRU codec cache. JS Maps iterate in insertion order, so deleting and
+// re-inserting moves a key to the end. Evicting map.keys().next() drops oldest.
 const CODEC_CACHE = new Map<string, Codec>();
+const CODEC_CACHE_LIMIT = 131072;
 
 export function getCodec(type: string): Codec {
-  if (CODEC_CACHE.has(type)) return CODEC_CACHE.get(type)!;
+  const cached = CODEC_CACHE.get(type);
+  if (cached !== undefined) {
+    CODEC_CACHE.delete(type);
+    CODEC_CACHE.set(type, cached);
+    return cached;
+  }
+
   const codec = createCodec(type);
   CODEC_CACHE.set(type, codec);
+
+  if (CODEC_CACHE.size > CODEC_CACHE_LIMIT) {
+    CODEC_CACHE.delete(CODEC_CACHE.keys().next().value!);
+  }
+
   return codec;
 }
 
