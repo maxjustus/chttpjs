@@ -168,7 +168,12 @@ function createRowProxy(batch: RecordBatch, rowIndex: number): Row {
     },
     getOwnPropertyDescriptor(_, prop) {
       if (typeof prop === "string" && names.includes(prop)) {
-        return { enumerable: true, configurable: true };
+        const col = batch.getColumn(prop);
+        return {
+          enumerable: true,
+          configurable: true,
+          value: col ? col.get(rowIndex) : undefined,
+        };
       }
       return undefined;
     },

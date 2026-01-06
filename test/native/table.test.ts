@@ -104,6 +104,13 @@ describe("streamDecodeNative", () => {
     // Materialization helpers should also be stable
     assert.deepStrictEqual(collected[0].toObject(), { id: 1, name: "alice" });
     assert.deepStrictEqual(collected[2].toArray(), [3, "charlie"]);
+
+    // Spread operator should copy row properties correctly
+    const spread = { ...collected[0] };
+    assert.deepStrictEqual(spread, { id: 1, name: "alice" });
+
+    // Object.keys should return column names
+    assert.deepStrictEqual(Object.keys(collected[0]), ["id", "name"]);
   });
 });
 
