@@ -26,7 +26,7 @@
     "build:full": "esbuild index.ts --bundle --format=esm --outfile=dist/chttp.js --platform=browser --target=es2022 --minify --define:BUILD_WITH_ZSTD=true --external:zstd-napi --external:lz4-napi --external:@maxjustus/chttp/native",
     "build:lz4": "esbuild index.ts --bundle --format=esm --outfile=dist/chttp-lz4.js --platform=browser --target=es2022 --minify --define:BUILD_WITH_ZSTD=false --external:zstd-napi --external:lz4-napi --external:@maxjustus/chttp/native",
     "build:tcp": "esbuild tcp_client/index.ts --bundle --format=esm --outfile=dist/tcp.js --platform=node --target=es2022 --minify --external:lz4-napi --external:zstd-napi --external:@maxjustus/chttp/native",
-    "test": "tsc --noEmit && node --experimental-strip-types --test test/*.test.ts test/native/*.test.ts",
+    "test": "tsc --noEmit && node --experimental-strip-types --test test/native/*.test.ts test/*.test.ts",
     "test:compression": "node --experimental-strip-types --test test/compression.test.ts",
     "test:integration": "node --experimental-strip-types --test test/integration.test.ts",
     "test:native": "node --experimental-strip-types --test test/native/*.test.ts",

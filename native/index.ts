@@ -17,7 +17,7 @@ import {
 
 import { BufferWriter, BufferReader } from "./io.ts";
 import { getCodec } from "./codecs.ts";
-import { type Column, DataColumn } from "./columns.ts";
+import { type Column, DataColumn, EnumColumn } from "./columns.ts";
 import { BlockInfoField } from "./constants.ts";
 import {
   type DeserializerState,
@@ -45,7 +45,7 @@ export {
 } from "./types.ts";
 
 // Re-export table helpers / types
-export { type Column, RecordBatch, RecordBatchBuilder, type Row };
+export { type Column, RecordBatch, RecordBatchBuilder, type Row, EnumColumn };
 export { batchFromArrays, batchFromRows, batchFromCols, batchBuilder };
 export { rows, collectRows };
 export { makeBuilder, getCodec, type ColumnBuilder } from "./codecs.ts";

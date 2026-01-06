@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { RecordBatch, type ColumnDef } from "../../native/index.ts";
+import { parseEnumDefinition } from "../../native/types.ts";
 import { encodeNativeRows, decodeBatch, toArrayRows } from "../test_utils.ts";
 
 describe("encodeNative", () => {
@@ -268,14 +269,39 @@ describe("additional scalar types", () => {
     assert.ok(typeof decodedRows[0][0] === "string");
   });
 
-  it("encodes Enum8", async () => {
+  it("encodes Enum8 and supports both decode modes", async () => {
     const columns: ColumnDef[] = [{ name: "e", type: "Enum8('a' = 1, 'b' = 2)" }];
     const rows = [[1], [2], [1]];
     const encoded = encodeNativeRows(columns, rows);
-    const decoded = await decodeBatch(encoded);
 
-    assert.deepStrictEqual(decoded.columns, columns);
-    assert.deepStrictEqual(toArrayRows(decoded), [[1], [2], [1]]);
+    const decodedStrings = await decodeBatch(encoded);
+    assert.deepStrictEqual(decodedStrings.columns, columns);
+    assert.deepStrictEqual(toArrayRows(decodedStrings), [["a"], ["b"], ["a"]]);
+
+    const decodedNumbers = await decodeBatch(encoded, { enumAsNumber: true });
+    assert.deepStrictEqual(decodedNumbers.columns, columns);
+    assert.deepStrictEqual(toArrayRows(decodedNumbers), [[1], [2], [1]]);
+  });
+
+  it("encodes Enum8 with string values", async () => {
+    const columns: ColumnDef[] = [{ name: "e", type: "Enum8('pending' = 0, 'active' = 1, 'done' = 2)" }];
+    const rows = [["pending"], ["active"], ["done"], ["pending"]];
+    const encoded = encodeNativeRows(columns, rows);
+
+    const decodedStrings = await decodeBatch(encoded);
+    assert.deepStrictEqual(toArrayRows(decodedStrings), [["pending"], ["active"], ["done"], ["pending"]]);
+
+    const decodedNumbers = await decodeBatch(encoded, { enumAsNumber: true });
+    assert.deepStrictEqual(toArrayRows(decodedNumbers), [[0], [1], [2], [0]]);
+  });
+
+  it("decodes Enum8 as numbers with enumAsNumber option", async () => {
+    const columns: ColumnDef[] = [{ name: "e", type: "Enum8('a' = 1, 'b' = 2)" }];
+    const rows = [[1], [2]];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded, { enumAsNumber: true });
+
+    assert.deepStrictEqual(toArrayRows(decoded), [[1], [2]]);
   });
 
   it("encodes Decimal64", async () => {
@@ -405,5 +431,76 @@ describe("DateTime64 precision edge cases", () => {
     const dt = decodedRows[0][0] as { toClosestDate(): Date };
     // 999ms truncated to seconds
     assert.strictEqual(dt.toClosestDate().getTime(), new Date("2024-01-15T10:30:00.000Z").getTime());
+  });
+});
+
+describe("parseEnumDefinition", () => {
+  it("parses Enum8 with simple values", () => {
+    const result = parseEnumDefinition("Enum8('a' = 1, 'b' = 2)");
+    assert.ok(result);
+    assert.strictEqual(result.nameToValue.get("a"), 1);
+    assert.strictEqual(result.nameToValue.get("b"), 2);
+    assert.strictEqual(result.valueToName.get(1), "a");
+    assert.strictEqual(result.valueToName.get(2), "b");
+  });
+
+  it("parses Enum16 with negative values", () => {
+    const result = parseEnumDefinition("Enum16('error' = -1, 'ok' = 0, 'pending' = 1)");
+    assert.ok(result);
+    assert.strictEqual(result.nameToValue.get("error"), -1);
+    assert.strictEqual(result.nameToValue.get("ok"), 0);
+    assert.strictEqual(result.nameToValue.get("pending"), 1);
+  });
+
+  it("parses enum with spaces in names", () => {
+    const result = parseEnumDefinition("Enum8('hello world' = 1, 'foo bar' = 2)");
+    assert.ok(result);
+    assert.strictEqual(result.nameToValue.get("hello world"), 1);
+    assert.strictEqual(result.nameToValue.get("foo bar"), 2);
+  });
+
+  it("parses enum with escaped quotes", () => {
+    const result = parseEnumDefinition("Enum8('it\\'s' = 1, 'don\\'t' = 2)");
+    assert.ok(result);
+    assert.strictEqual(result.nameToValue.get("it's"), 1);
+    assert.strictEqual(result.nameToValue.get("don't"), 2);
+  });
+
+  it("parses enum with backslash escapes from ClickHouse tests", () => {
+    const result = parseEnumDefinition("Enum8('Hello' = -100, '\\\\' = 0, '\\t\\\\t' = 111)");
+    assert.ok(result);
+    assert.strictEqual(result.nameToValue.get("Hello"), -100);
+    assert.strictEqual(result.nameToValue.get("\\"), 0);
+    assert.strictEqual(result.nameToValue.get("\t\\t"), 111);
+  });
+
+  it("preserves unknown escapes but drops backslash for special cases", () => {
+    const result = parseEnumDefinition("Enum8('a\\%b' = 1, 'a\\=b' = 2)");
+    assert.ok(result);
+    assert.strictEqual(result.nameToValue.get("a\\%b"), 1);
+    assert.strictEqual(result.nameToValue.get("a=b"), 2);
+  });
+
+  it("parses hex escapes", () => {
+    const result = parseEnumDefinition("Enum8('\\x41\\x42' = 1)");
+    assert.ok(result);
+    assert.strictEqual(result.nameToValue.get("AB"), 1);
+  });
+
+  it("parses explicit + sign", () => {
+    const result = parseEnumDefinition("Enum8('a' = +1, 'b' = -2)");
+    assert.ok(result);
+    assert.strictEqual(result.nameToValue.get("a"), 1);
+    assert.strictEqual(result.nameToValue.get("b"), -2);
+  });
+
+  it("returns null for invalid type strings", () => {
+    assert.strictEqual(parseEnumDefinition("Int32"), null);
+    assert.strictEqual(parseEnumDefinition("Enum8()"), null);
+    assert.strictEqual(parseEnumDefinition("Enum8(invalid)"), null);
+    assert.strictEqual(parseEnumDefinition("Enum8('unterminated = 1)"), null);
+    assert.strictEqual(parseEnumDefinition("Enum8('\\x4G' = 1)"), null);
+    assert.strictEqual(parseEnumDefinition("Enum8('dup' = 1, 'dup' = 2)"), null);
+    assert.strictEqual(parseEnumDefinition("Enum8('a' = 1, 'b' = 1)"), null);
   });
 });

@@ -87,6 +87,38 @@ export class DataColumn<
   }
 }
 
+export class EnumColumn extends AbstractColumn {
+  readonly type: string;
+  readonly data: Int8Array | Int16Array;
+  readonly valueToName: Map<number, string>;
+  private enumAsNumber: boolean;
+
+  constructor(
+    type: string,
+    data: Int8Array | Int16Array,
+    valueToName: Map<number, string>,
+    enumAsNumber = false,
+  ) {
+    super();
+    this.type = type;
+    this.data = data;
+    this.valueToName = valueToName;
+    this.enumAsNumber = enumAsNumber;
+  }
+
+  get length() {
+    return this.data.length;
+  }
+
+  get(index: number): string | number {
+    const num = this.data[index];
+    if (this.enumAsNumber) return num;
+    const name = this.valueToName.get(num);
+    if (name === undefined) throw new Error(`Unknown enum value: ${num}`);
+    return name;
+  }
+}
+
 export class TupleColumn extends AbstractColumn {
   readonly type: string;
   readonly elements: { name: string | null }[];

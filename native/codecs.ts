@@ -36,10 +36,12 @@ function CollectingBuilder(
 
 import {
   type TypedArray,
+  type EnumMapping,
   TEXT_ENCODER,
   ClickHouseDateTime64,
   parseTypeList,
   parseTupleElements,
+  parseEnumDefinition,
   ipv6ToBytes,
   bytesToIpv6,
   readBigInt128,
@@ -66,6 +68,7 @@ import {
   type Column,
   type DiscriminatorArray,
   DataColumn,
+  EnumColumn,
   TupleColumn,
   MapColumn,
   VariantColumn,
@@ -432,6 +435,95 @@ class NumericCodec<T extends TypedArray> extends BaseCodec {
     return 0;
   }
   estimateSize(rows: number) {
+    return rows * this.Ctor.BYTES_PER_ELEMENT;
+  }
+}
+
+class EnumCodec extends BaseCodec {
+  readonly type: string;
+  private Ctor: typeof Int8Array | typeof Int16Array;
+  private mapping: EnumMapping;
+  private min: number;
+  private max: number;
+
+  constructor(type: string) {
+    super();
+    this.type = type;
+    this.Ctor = type.startsWith("Enum8") ? Int8Array : Int16Array;
+    this.min = this.Ctor === Int8Array ? -128 : -32768;
+    this.max = this.Ctor === Int8Array ? 127 : 32767;
+    const parsed = parseEnumDefinition(type);
+    if (!parsed) throw new Error(`Failed to parse enum definition: ${type}`);
+    this.mapping = parsed;
+  }
+
+  private toEnumValue(val: unknown): number {
+    if (typeof val === "string") {
+      const num = this.mapping.nameToValue.get(val);
+      if (num === undefined) throw new Error(`Invalid enum value: ${val}`);
+      return num;
+    }
+    let num: number;
+    if (typeof val === "number") {
+      num = val;
+    } else if (typeof val === "bigint") {
+      if (val < BigInt(this.min) || val > BigInt(this.max))
+        throw new Error(`Enum value out of range: ${val}`);
+      num = Number(val);
+    } else {
+      throw new Error(`Invalid enum value: ${val}`);
+    }
+
+    if (!Number.isInteger(num)) throw new Error(`Invalid enum value: ${val}`);
+    if (num < this.min || num > this.max)
+      throw new Error(`Enum value out of range: ${val}`);
+    return num;
+  }
+
+  encode(col: Column): Uint8Array {
+    // Fast path: underlying typed array matches - zero-copy
+    const underlying =
+      col instanceof EnumColumn ? col.data :
+      col instanceof DataColumn ? col.data : null;
+    if (underlying instanceof this.Ctor) {
+      return new Uint8Array(underlying.buffer, underlying.byteOffset, underlying.byteLength);
+    }
+    const len = col.length;
+    const arr = new this.Ctor(len);
+    for (let i = 0; i < len; i++) {
+      arr[i] = this.toEnumValue(col.get(i));
+    }
+    return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
+  }
+
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
+    const arr = this.Ctor === Int8Array
+      ? reader.readTypedArray(Int8Array, rows)
+      : reader.readTypedArray(Int16Array, rows);
+    return new EnumColumn(this.type, arr, this.mapping.valueToName, reader.options?.enumAsNumber ?? false);
+  }
+
+  fromValues(values: unknown[]): EnumColumn {
+    const arr = new this.Ctor(values.length);
+    for (let i = 0; i < values.length; i++) arr[i] = this.toEnumValue(values[i]);
+    return new EnumColumn(this.type, arr, this.mapping.valueToName, false);
+  }
+
+  builder(size: number): ColumnBuilder {
+    const arr = new this.Ctor(size);
+    let offset = 0;
+    const b: ColumnBuilder = {
+      append: (v: unknown) => { arr[offset++] = this.toEnumValue(v); return b; },
+      finish: () => new EnumColumn(this.type, arr, this.mapping.valueToName, false),
+    };
+    return b;
+  }
+
+  zeroValue(): number {
+    return Math.min(...this.mapping.valueToName.keys());
+  }
+
+  estimateSize(rows: number): number {
     return rows * this.Ctor.BYTES_PER_ELEMENT;
   }
 }
@@ -2364,10 +2456,7 @@ function createCodec(type: string): Codec {
       return new BigIntCodec(type, 32, false);
   }
 
-  if (type.startsWith("Enum"))
-    return type.startsWith("Enum8")
-      ? new NumericCodec(type, Int8Array, toNumber)
-      : new NumericCodec(type, Int16Array, toNumber);
+  if (type.startsWith("Enum")) return new EnumCodec(type);
 
   // Decimal types
   if (type.startsWith("Decimal")) return new DecimalCodec(type);

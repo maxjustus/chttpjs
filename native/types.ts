@@ -29,6 +29,143 @@ export interface DecodeOptions {
   mapAsArray?: boolean;
   /** Client version or protocol revision (e.g. 54454) */
   clientVersion?: number;
+  /** Decode Enum types as numeric values instead of string names (default: false = strings) */
+  enumAsNumber?: boolean;
+}
+
+export interface EnumMapping {
+  nameToValue: Map<string, number>;
+  valueToName: Map<number, string>;
+}
+
+function isAsciiWhitespace(code: number): boolean {
+  // "good enough" for type strings emitted by ClickHouse (space/newlines/tabs).
+  return code === 9 || code === 10 || code === 13 || code === 32;
+}
+
+function isControlASCII(code: number): boolean {
+  return code < 0x20 || code === 0x7f;
+}
+
+function hexNibble(code: number): number {
+  if (code >= 48 && code <= 57) return code - 48;       // '0'-'9'
+  if (code >= 65 && code <= 70) return code - 65 + 10;  // 'A'-'F'
+  if (code >= 97 && code <= 102) return code - 97 + 10; // 'a'-'f'
+  return -1;
+}
+
+/** Parse a single-quoted string with ClickHouse escape sequences. Returns [value, newIndex] or null. */
+function parseQuotedString(s: string, start: number): [string, number] | null {
+  if (s[start] !== "'") return null;
+  let i = start + 1;
+  const len = s.length;
+  let result = "";
+
+  while (i < len) {
+    const ch = s[i];
+    if (ch === "'") return [result, i + 1];
+    if (ch !== "\\") { result += s[i++]; continue; }
+
+    i++;
+    if (i >= len) return null;
+    const esc = s[i++];
+    switch (esc) {
+      case "'": result += "'"; break;
+      case "\\": result += "\\"; break;
+      case "n": result += "\n"; break;
+      case "r": result += "\r"; break;
+      case "t": result += "\t"; break;
+      case "b": result += "\b"; break;
+      case "f": result += "\f"; break;
+      case "0": result += "\0"; break;
+      case "v": result += "\v"; break;
+      case "a": result += "\x07"; break;
+      case "e": result += "\x1B"; break;
+      case "N": break; // \N = empty string
+      case "x":
+        if (i + 2 > len) return null;
+        const hi = hexNibble(s.charCodeAt(i));
+        const lo = hexNibble(s.charCodeAt(i + 1));
+        if (hi < 0 || lo < 0) return null;
+        result += String.fromCharCode((hi << 4) | lo);
+        i += 2;
+        break;
+      default:
+        // Preserve backslash for unknown escapes (e.g. \%), drop for special chars
+        const code = esc.charCodeAt(0);
+        if (esc !== "\\" && esc !== "'" && esc !== '"' && esc !== "`" &&
+            esc !== "/" && esc !== "=" && !isControlASCII(code)) {
+          result += "\\";
+        }
+        result += esc;
+    }
+  }
+  return null; // unclosed quote
+}
+
+export function parseEnumDefinition(type: string): EnumMapping | null {
+  const is8 = type.startsWith("Enum8(");
+  const is16 = type.startsWith("Enum16(");
+  if (!is8 && !is16) return null;
+  if (!type.endsWith(")")) return null;
+
+  const nameToValue = new Map<string, number>();
+  const valueToName = new Map<number, string>();
+  const content = type.slice(is8 ? 6 : 7, -1);
+  if (content.length === 0) return null;
+  const min = is8 ? -128 : -32768;
+  const max = is8 ? 127 : 32767;
+
+  let i = 0;
+  const len = content.length;
+  while (i < len) {
+    // Skip whitespace and commas
+    while (i < len && (content[i] === "," || isAsciiWhitespace(content.charCodeAt(i)))) i++;
+    if (i >= len) break;
+
+    // Parse quoted name
+    const parsed = parseQuotedString(content, i);
+    if (!parsed) return null;
+    const [name, nextIdx] = parsed;
+    i = nextIdx;
+
+    // Skip whitespace
+    while (i < len && isAsciiWhitespace(content.charCodeAt(i))) i++;
+
+    // Expect =
+    if (content[i] !== "=") return null;
+    i++;
+
+    // Skip whitespace
+    while (i < len && isAsciiWhitespace(content.charCodeAt(i))) i++;
+
+    // Read numeric value (possibly negative)
+    let sign = 1;
+    if (content[i] === "-") { sign = -1; i++; }
+    else if (content[i] === "+") { i++; }
+    let value = 0;
+    let digits = 0;
+    while (i < len) {
+      const code = content.charCodeAt(i);
+      if (code >= 48 && code <= 57) {
+        value = value * 10 + (code - 48);
+        digits++;
+        i++;
+      } else {
+        break;
+      }
+    }
+    if (digits === 0) return null;
+    value *= sign;
+    if (value < min || value > max) return null;
+
+    if (nameToValue.has(name) || valueToName.has(value)) return null;
+    nameToValue.set(name, value);
+    valueToName.set(value, name);
+  }
+
+  if (nameToValue.size === 0) return null;
+  return { nameToValue, valueToName };
 }
 
 export interface Cursor {

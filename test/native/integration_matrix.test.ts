@@ -99,8 +99,8 @@ describe("Native integration type matrix", { timeout: 120000 }, () => {
       assert.strictEqual(decoded.rowCount, 2);
       assert.strictEqual(decodedRows[0][0], 1);
       assert.strictEqual(decodedRows[1][0], 2);
-      assert.strictEqual(decodedRows[0][1], 1);
-      assert.strictEqual(decodedRows[1][1], 2);
+      assert.strictEqual(decodedRows[0][1], "a");
+      assert.strictEqual(decodedRows[1][1], "b");
       assert.strictEqual(decoder.decode(decodedRows[0][2] as Uint8Array), "ab12");
       assert.strictEqual(decoder.decode(decodedRows[1][2] as Uint8Array), "wxyz");
       assert.strictEqual(decodedRows[0][3], "12345.678901");
