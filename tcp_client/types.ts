@@ -1,4 +1,4 @@
-import { RecordBatch } from "../native/table.ts";
+import { RecordBatch } from "@maxjustus/chttp/native";
 
 // Modern revision. We rely on the default server settings for serialization.
 export const DBMS_TCP_PROTOCOL_VERSION = 54479n;

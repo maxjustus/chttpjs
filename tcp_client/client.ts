@@ -14,13 +14,30 @@ import {
   REVISIONS,
   ProfileEventType,
 } from "./types.ts";
-import { getCodec } from "../native/codecs.ts";
-import { BufferWriter, BufferUnderflowError } from "../native/io.ts";
-import { RecordBatch } from "../native/table.ts";
-import { decodeNativeBlock } from "../native/index.ts";
-import { type ColumnDef } from "../native/types.ts";
+import {
+  getCodec,
+  BufferWriter,
+  BufferUnderflowError,
+  RecordBatch,
+  decodeNativeBlock,
+  type ColumnDef,
+} from "@maxjustus/chttp/native";
 import { init as initCompression, Method, type MethodCode } from "../compression.ts";
 import type { ClickHouseSettings } from "../settings.ts";
+
+/**
+ * Duck-type check for RecordBatch-like objects.
+ * Using instanceof fails across bundle boundaries (each bundle has its own class).
+ */
+function isRecordBatch(obj: unknown): obj is RecordBatch {
+  return (
+    obj !== null &&
+    typeof obj === "object" &&
+    "columns" in obj &&
+    "columnData" in obj &&
+    "rowCount" in obj
+  );
+}
 
 export interface TcpClientOptions {
   host: string;
@@ -408,7 +425,7 @@ export class TcpClient {
       };
 
       // Single RecordBatch - fast path
-      if (data instanceof RecordBatch) {
+      if (isRecordBatch(data)) {
         await sendBatch(data);
       } else {
         // Get iterator (sync or async)
@@ -421,7 +438,7 @@ export class TcpClient {
         if (!firstResult.done) {
           const first = firstResult.value;
 
-          if (first instanceof RecordBatch) {
+          if (isRecordBatch(first)) {
             // RecordBatch mode
             await sendBatch(first);
             while (true) {
@@ -842,7 +859,7 @@ export class TcpClient {
     method: MethodCode
   ): Promise<void> {
     for (const [name, data] of Object.entries(tables)) {
-      if (data instanceof RecordBatch) {
+      if (isRecordBatch(data)) {
         const packet = this.encodeBatchAsDataPacket(name, data, compress, method);
         await this.writeWithBackpressure(packet);
       } else if (Symbol.asyncIterator in data) {

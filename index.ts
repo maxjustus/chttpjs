@@ -38,4 +38,4 @@ export {
   ClickHouseDateTime64,
   type ColumnDef,
   type DecodeResult,
-} from "./native/index.ts";
+} from "@maxjustus/chttp/native";

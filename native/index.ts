@@ -10,9 +10,7 @@
 
 import {
   type ColumnDef,
-  type DecodeResult,
   type DecodeOptions,
-  ClickHouseDateTime64,
   parseTypeList,
   parseTupleElements,
 } from "./types.ts";
@@ -43,13 +41,20 @@ export {
   type DecodeResult,
   type DecodeOptions,
   ClickHouseDateTime64,
-};
+  TEXT_DECODER,
+} from "./types.ts";
 
 // Re-export table helpers / types
 export { type Column, RecordBatch, RecordBatchBuilder, type Row };
 export { batchFromArrays, batchFromRows, batchFromCols, batchBuilder };
 export { rows, collectRows };
-export { makeBuilder, type ColumnBuilder } from "./codecs.ts";
+export { makeBuilder, getCodec, type ColumnBuilder } from "./codecs.ts";
+
+// Re-export IO utilities needed by tcp_client
+export { BufferWriter, BufferReader, BufferUnderflowError, readVarInt64 } from "./io.ts";
+
+// Re-export constants needed by tcp_client
+export { BlockInfoField, Compression } from "./constants.ts";
 
 export interface Block {
   columns: ColumnDef[];

@@ -12,7 +12,7 @@
     // "noPropertyAccessFromIndexSignature": true,
     // "allowUnusedLabels": false,
     // "allowUnreachableCode": false,
-    // 
+    //
     // // Module resolution strictness
     // "isolatedModules": true,
     // "verbatimModuleSyntax": true,
@@ -24,8 +24,12 @@
     "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@maxjustus/chttp/native": ["./native/index.ts"]
+    }
   },
-  "include": ["*.ts", "test/**/*.ts", "tcp_client/**/*.ts", "types.d.ts", "scripts/**/*.ts"],
+  "include": ["*.ts", "native/**/*.ts", "test/**/*.ts", "tcp_client/**/*.ts", "types.d.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules"]
 }

@@ -19,7 +19,7 @@ export {
   type ColumnDef,
   type DecodeResult,
   ClickHouseDateTime64,
-} from "./native/index.ts";
+} from "@maxjustus/chttp/native";
 
 export type Compression = "lz4" | "zstd" | "none";
 

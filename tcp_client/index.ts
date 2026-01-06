@@ -9,7 +9,7 @@ export {
   ClickHouseException,
 } from "./types.ts";
 import { type Packet } from "./types.ts";
-import { type RecordBatch } from "../native/table.ts";
+import { type RecordBatch } from "@maxjustus/chttp/native";
 
 /**
  * Extract RecordBatches from Data packets.
