@@ -5,6 +5,12 @@ import { getCodec, makeBuilder, type ColumnBuilder } from "./codecs.ts";
 
 /**
  * A Row object is a Proxy that lazily accesses column data.
+ *
+ * Performance note: Each `row.field` access goes through a Proxy trap and
+ * Map lookup. For hot loops, prefer:
+ * - `batch.toArray()` for full materialization
+ * - `batch.getColumn(name)` + column iteration for columnar access
+ * - `batch.getAt(rowIndex, colIndex)` for direct value access
  */
 export type Row = Record<string, unknown> & {
   /** Materialize row to a plain object. */

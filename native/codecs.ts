@@ -269,71 +269,71 @@ function readSparse(
     false,
   ];
 
-  let trailingDefaults = initialTrailing;
-  let hasValueAfterDefaults = hasValueAfter;
+  let trailingDefaultCount = initialTrailing;
+  let hasValueAfterTrailing = hasValueAfter;
 
   const indices: number[] = [];
-  let totalRows = trailingDefaults;
-  let tmpOffset = 0; // We don't support partial read requests yet, so tmpOffset is always 0
+  let totalRows = trailingDefaultCount;
+  let readOffset = 0; // We don't support partial read requests yet, so readOffset is always 0
   let skippedValuesRows = 0;
-  let first = true;
+  let isFirstValue = true;
 
-  if (hasValueAfterDefaults) {
-    if (trailingDefaults >= tmpOffset) {
-      indices.push(trailingDefaults - tmpOffset);
-      tmpOffset = 0;
-      first = false;
+  if (hasValueAfterTrailing) {
+    if (trailingDefaultCount >= readOffset) {
+      indices.push(trailingDefaultCount - readOffset);
+      readOffset = 0;
+      isFirstValue = false;
     } else {
       skippedValuesRows += 1;
-      tmpOffset -= trailingDefaults + 1;
+      readOffset -= trailingDefaultCount + 1;
     }
-    trailingDefaults = 0;
+    trailingDefaultCount = 0;
     totalRows += 1;
   }
 
   // Read offset stream: VarInts encode gaps between non-default values
   // Each VarInt = defaults before next non-default. END flag marks last entry.
   while (true) {
-    let v = BigInt(reader.readVarInt64());
-    const end = (v & Sparse.END_OF_GRANULE_FLAG) !== 0n;
+    let offsetValue = BigInt(reader.readVarInt64());
+    const end = (offsetValue & Sparse.END_OF_GRANULE_FLAG) !== 0n;
     if (end) {
-      v &= ~Sparse.END_OF_GRANULE_FLAG;
+      offsetValue &= ~Sparse.END_OF_GRANULE_FLAG;
     }
 
-    let groupSize = Number(v);
-    let nextTotalRows = totalRows + groupSize;
+    let defaultsBeforeValue = Number(offsetValue);
+    let nextTotalRows = totalRows + defaultsBeforeValue;
 
     // Check if we've exceeded the requested rows
     if (nextTotalRows >= rows) {
-      trailingDefaults = nextTotalRows - rows;
-      hasValueAfterDefaults = !end;
+      trailingDefaultCount = nextTotalRows - rows;
+      hasValueAfterTrailing = !end;
       break;
     }
 
     // END flag with remaining defaults
     if (end) {
-      hasValueAfterDefaults = false;
-      trailingDefaults = groupSize;
+      hasValueAfterTrailing = false;
+      trailingDefaultCount = defaultsBeforeValue;
       break;
     }
 
-    // This VarInt represents a non-default value at position (startOfGroup + groupSize)
+    // This VarInt represents a non-default value at position (startOfGroup + defaultsBeforeValue)
     const startOfGroup =
-      !first && indices.length > 0 ? indices[indices.length - 1] + 1 : 0;
-    if (groupSize >= tmpOffset) {
-      indices.push(startOfGroup + groupSize - tmpOffset);
-      tmpOffset = 0;
-      first = false;
+      !isFirstValue && indices.length > 0 ? indices[indices.length - 1] + 1 : 0;
+    if (defaultsBeforeValue >= readOffset) {
+      indices.push(startOfGroup + defaultsBeforeValue - readOffset);
+      readOffset = 0;
+      isFirstValue = false;
     } else {
       skippedValuesRows += 1;
-      tmpOffset -= groupSize + 1;
+      readOffset -= defaultsBeforeValue + 1;
     }
 
-    trailingDefaults = 0;
+    trailingDefaultCount = 0;
     totalRows = nextTotalRows + 1;
   }
 
-  state.sparseRuntime.set(node, [trailingDefaults, hasValueAfterDefaults]);
+  state.sparseRuntime.set(node, [trailingDefaultCount, hasValueAfterTrailing]);
 
   const zero = codec.zeroValue();
   const decodeFn = (r: BufferReader, n: number) =>
