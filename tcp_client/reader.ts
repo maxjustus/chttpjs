@@ -4,10 +4,15 @@ import { decodeBlock } from "../compression.ts";
 import { ClickHouseException } from "./types.ts";
 import { readVarInt64, BufferUnderflowError } from "../native/io.ts";
 import { Compression } from "../native/constants.ts";
+import { ChunkedReadState } from "./chunk.ts";
 
 /**
  * A streaming byte reader that handles async buffering and optional ClickHouse compression.
  * Optimized to avoid O(N^2) copies during buffering.
+ *
+ * Supports chunked transfer encoding (Protocol Revision 54470+).
+ * When chunked mode is enabled, incoming bytes are unwrapped from chunk framing
+ * before being processed.
  */
 export class StreamingReader {
   private source: AsyncIterator<Uint8Array>;
@@ -15,6 +20,8 @@ export class StreamingReader {
   private offset: number = 0;
   private done: boolean = false;
   private compressionEnabled: boolean = false;
+  private chunkedEnabled: boolean = false;
+  private chunkedState: ChunkedReadState | null = null;
 
   constructor(iterable: AsyncIterable<Uint8Array>) {
     this.source = iterable[Symbol.asyncIterator]();
@@ -22,6 +29,17 @@ export class StreamingReader {
 
   setCompression(enabled: boolean) {
     this.compressionEnabled = enabled;
+  }
+
+  /**
+   * Enable or disable chunked transfer encoding.
+   * When enabled, all incoming data is unwrapped from chunk framing.
+   */
+  setChunked(enabled: boolean) {
+    this.chunkedEnabled = enabled;
+    if (enabled && !this.chunkedState) {
+      this.chunkedState = new ChunkedReadState();
+    }
   }
 
   private async ensure(n: number): Promise<void> {
@@ -43,7 +61,18 @@ export class StreamingReader {
       this.done = true;
       return;
     }
-    this.feed(value);
+
+    if (this.chunkedEnabled && this.chunkedState) {
+      // Unwrap chunk framing before feeding to buffer
+      const unwrapped = this.chunkedState.feed(value);
+      if (unwrapped.length > 0) {
+        this.feed(unwrapped);
+      }
+      // If no payload was extracted, we need more data
+      // The caller will retry via ensure() loop
+    } else {
+      this.feed(value);
+    }
   }
 
   private async pullCompressedBlock(): Promise<void> {
@@ -67,7 +96,15 @@ export class StreamingReader {
     while (this.buffer.length - this.offset < n) {
       const { value, done } = await this.source.next();
       if (done) throw new Error("EOF while reading compressed block header");
-      this.feed(value);
+
+      if (this.chunkedEnabled && this.chunkedState) {
+        const unwrapped = this.chunkedState.feed(value);
+        if (unwrapped.length > 0) {
+          this.feed(unwrapped);
+        }
+      } else {
+        this.feed(value);
+      }
     }
     const res = this.buffer.subarray(this.offset, this.offset + n);
     this.offset += n;
@@ -114,7 +151,15 @@ export class StreamingReader {
       this.done = true;
       return false;
     }
-    this.feed(value);
+
+    if (this.chunkedEnabled && this.chunkedState) {
+      const unwrapped = this.chunkedState.feed(value);
+      if (unwrapped.length > 0) {
+        this.feed(unwrapped);
+      }
+    } else {
+      this.feed(value);
+    }
     return true;
   }
 

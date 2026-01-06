@@ -13,7 +13,11 @@ import {
   DBMS_TCP_PROTOCOL_VERSION,
   REVISIONS,
   ProfileEventType,
+  ChunkedProtocolMode,
+  parseChunkedMode,
+  negotiateChunkedMode,
 } from "./types.ts";
+import { wrapChunk } from "./chunk.ts";
 import { getCodec } from "../native/codecs.ts";
 import { BufferWriter, BufferUnderflowError } from "../native/io.ts";
 import { RecordBatch } from "../native/table.ts";
@@ -43,6 +47,14 @@ export interface TcpClientOptions {
   cancelGracePeriodMs?: number;
   /** Default settings applied to all queries and inserts (can be overridden per-call) */
   settings?: ClickHouseSettings;
+  /**
+   * Chunked transfer encoding mode (Protocol Revision 54470+).
+   * - 'chunked': Require chunked mode
+   * - 'chunked_optional': Prefer chunked, but accept non-chunked (default)
+   * - 'notchunked': Require non-chunked mode
+   * - 'notchunked_optional': Prefer non-chunked, but accept chunked
+   */
+  chunkedMode?: ChunkedProtocolMode;
 }
 
 export interface ColumnSchema {
@@ -73,7 +85,6 @@ export interface QueryOptions {
   externalTables?: Record<string, ExternalTableData>;
 }
 
-
 /** Validates that expected schema matches server schema exactly. */
 function validateSchema(expected: ColumnDef[], actual: ColumnSchema[]): void {
   if (expected.length !== actual.length) {
@@ -98,6 +109,8 @@ export class TcpClient {
   private _serverHello: ServerHello | null = null;
   private currentSchema: ColumnSchema[] | null = null;
   private sessionTimezone: string | null = null;
+  /** Whether chunked transfer encoding is active for client->server direction */
+  private chunkedSendActive: boolean = false;
   private busy: boolean = false;
 
   private log(...args: any[]) {
@@ -108,9 +121,16 @@ export class TcpClient {
 
   /** Write with backpressure - waits for drain if socket buffer is full */
   private async writeWithBackpressure(data: Uint8Array): Promise<void> {
-    if (!this.socket!.write(data)) {
+    const toWrite = this.chunkedSendActive ? wrapChunk(data) : data;
+    if (!this.socket!.write(toWrite)) {
       await new Promise<void>(resolve => this.socket!.once('drain', resolve));
     }
+  }
+
+  /** Write packet data, wrapping in chunk frame if chunked mode is active */
+  private writePacket(data: Uint8Array): void {
+    const toWrite = this.chunkedSendActive ? wrapChunk(data) : data;
+    this.socket!.write(toWrite);
   }
 
   /** Server info from handshake, available after connect() */
@@ -243,11 +263,25 @@ export class TcpClient {
     const displayName = effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_SERVER_DISPLAY_NAME ? await this.reader.readString() : "";
     const patch = effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_VERSION_PATCH ? await this.reader.readVarInt() : effectiveRevision;
 
+    // Chunked protocol negotiation (Protocol Revision 54470+)
+    let chunkedSend: ChunkedProtocolMode = ChunkedProtocolMode.NotChunked;
+    let chunkedRecv: ChunkedProtocolMode = ChunkedProtocolMode.NotChunked;
+
     if (effectiveRevision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_CHUNKED_PACKETS) {
-      // Server sends its chunked mode preferences - read and discard
-      // We always use notchunked since chunked requires server config
-      await this.reader.readString(); // server send preference
-      await this.reader.readString(); // server recv preference
+      // Server sends its chunked mode preferences
+      const serverChunkedSend = parseChunkedMode(await this.reader.readString());
+      const serverChunkedRecv = parseChunkedMode(await this.reader.readString());
+
+      // Client's preferred mode (default to chunked_optional to enable when server supports)
+      const clientMode = this.options.chunkedMode ?? ChunkedProtocolMode.ChunkedOptional;
+
+      // Negotiate modes
+      // chunkedSend = client->server direction (we send, server receives)
+      // chunkedRecv = server->client direction (server sends, we receive)
+      chunkedSend = negotiateChunkedMode(serverChunkedRecv, clientMode, 'send');
+      chunkedRecv = negotiateChunkedMode(serverChunkedSend, clientMode, 'recv');
+
+      this.log(`Chunked negotiation: send=${chunkedSend}, recv=${chunkedRecv}`);
     }
 
     if (effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_EXOTIC_STUFF) {
@@ -291,12 +325,24 @@ export class TcpClient {
       timezone,
       displayName,
       patch,
+      chunkedSend,
+      chunkedRecv,
     };
 
     if (effectiveRevision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_QUOTA_KEY) {
-      // Send addendum (quota key, etc)
-      const addendum = this.writer.encodeAddendum(effectiveRevision);
+      // Send addendum with negotiated chunked modes
+      const addendum = this.writer.encodeAddendum(effectiveRevision, chunkedSend, chunkedRecv);
       this.socket.write(addendum);
+
+      // Enable chunked mode after addendum is sent
+      if (chunkedSend === ChunkedProtocolMode.Chunked) {
+        this.chunkedSendActive = true;
+        this.log("Chunked send mode activated");
+      }
+      if (chunkedRecv === ChunkedProtocolMode.Chunked) {
+        this.reader!.setChunked(true);
+        this.log("Chunked recv mode activated");
+      }
     }
     this.log("Handshake: Complete!");
   }
@@ -328,7 +374,7 @@ export class TcpClient {
     const abortHandler = () => {
       if (!cancelled && this.socket) {
         cancelled = true;
-        this.socket!.write(this.writer.encodeCancel());
+        this.writePacket(this.writer.encodeCancel());
       }
     };
     signal?.addEventListener("abort", abortHandler);
@@ -451,7 +497,7 @@ export class TcpClient {
       }
 
       const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
-      this.socket!.write(delimiter);
+      this.writePacket(delimiter);
 
       await this.drainInsertResponses(useCompression);
       this.log(`Successfully inserted ${totalInserted} rows.`);
@@ -473,10 +519,10 @@ export class TcpClient {
     isCancelled: () => boolean
   ): Promise<ColumnSchema[]> {
     const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello!.revision, settings, useCompression, {});
-    this.socket!.write(queryPacket);
+    this.writePacket(queryPacket);
 
     const delimiter = this.writer.encodeData("", 0, [], this.serverHello!.revision, useCompression, compressionMethod);
-    this.socket!.write(delimiter);
+    this.writePacket(delimiter);
 
     while (true) {
       if (isCancelled()) throw new Error("Insert cancelled");
@@ -646,7 +692,7 @@ export class TcpClient {
           // First try graceful cancel
           if (this.socket && !cancelled) {
             cancelled = true;
-            this.socket!.write(this.writer.encodeCancel());
+            this.writePacket(this.writer.encodeCancel());
           }
           // Give server grace period to respond, then force close
           graceTimeoutId = setTimeout(() => {
@@ -672,7 +718,7 @@ export class TcpClient {
     const abortHandler = () => {
       if (!cancelled && this.socket) {
         cancelled = true;
-        this.socket!.write(this.writer.encodeCancel());
+        this.writePacket(this.writer.encodeCancel());
       }
     };
 
@@ -699,7 +745,7 @@ export class TcpClient {
           options.params ?? {},
         );
         this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
-        this.socket!.write(queryPacket);
+        this.writePacket(queryPacket);
 
         // Send external tables if provided
         if (options.externalTables) {
@@ -709,7 +755,7 @@ export class TcpClient {
         // Send delimiter (compressed if compression is enabled)
         const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
         this.log(`[query] sending delimiter (${delimiter.length} bytes, compressed=${useCompression})`);
-        this.socket!.write(delimiter);
+        this.writePacket(delimiter);
 
         this.currentSchema = null;
         this.log(`[query] waiting for response...`);
@@ -907,7 +953,7 @@ export class TcpClient {
   async ping(): Promise<void> {
     if (!this.socket || !this.reader) throw new Error("Not connected");
 
-    this.socket!.write(this.writer.encodePing());
+    this.writePacket(this.writer.encodePing());
     const packetId = Number(await this.reader.readVarInt());
     if (packetId !== ServerPacketId.Pong) {
       throw new Error(`Expected Pong (4), got packet ${packetId}`);

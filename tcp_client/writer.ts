@@ -8,6 +8,7 @@ import {
   Interface,
   CLIENT_VERSION,
   DBMS_PARALLEL_REPLICAS_PROTOCOL_VERSION,
+  type ChunkedProtocolMode,
 } from "./types.ts";
 import { BlockInfoField } from "../native/constants.ts";
 import { encodeBlock, Method, type MethodCode } from "../compression.ts";
@@ -71,15 +72,23 @@ export class StreamingWriter {
   /**
    * Encode the addendum packet sent after receiving ServerHello.
    * @param revision - Negotiated protocol revision
+   * @param chunkedSend - Negotiated mode for client->server direction (default: 'notchunked')
+   * @param chunkedRecv - Negotiated mode for server->client direction (default: 'notchunked')
    */
-  encodeAddendum(revision: bigint): Uint8Array {
+  encodeAddendum(
+    revision: bigint,
+    chunkedSend: ChunkedProtocolMode = 'notchunked',
+    chunkedRecv: ChunkedProtocolMode = 'notchunked'
+  ): Uint8Array {
     if (revision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_QUOTA_KEY) {
       this.writeString(""); // quota_key
     }
     if (revision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_CHUNKED_PACKETS) {
-      // Always use notchunked - chunked requires server config that users can't control
-      this.writeString("notchunked");
-      this.writeString("notchunked");
+      // Note: In the addendum, we send our negotiated modes back to server
+      // chunkedSend = what client will send (client->server)
+      // chunkedRecv = what client expects to receive (server->client)
+      this.writeString(chunkedSend);
+      this.writeString(chunkedRecv);
     }
     if (revision >= REVISIONS.DBMS_MIN_REVISION_WITH_VERSIONED_PARALLEL_REPLICAS_PROTOCOL) {
       this.writeVarInt(DBMS_PARALLEL_REPLICAS_PROTOCOL_VERSION);

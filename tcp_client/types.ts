@@ -65,6 +65,65 @@ export const Interface = {
   GRPC: 3,
 } as const;
 
+/** Chunked transfer encoding mode for TCP protocol (Protocol Revision 54470+) */
+export const ChunkedProtocolMode = {
+  Chunked: 'chunked',
+  ChunkedOptional: 'chunked_optional',
+  NotChunked: 'notchunked',
+  NotChunkedOptional: 'notchunked_optional',
+} as const;
+export type ChunkedProtocolMode = typeof ChunkedProtocolMode[keyof typeof ChunkedProtocolMode];
+
+/** Parse chunked mode string from server */
+export function parseChunkedMode(s: string): ChunkedProtocolMode {
+  switch (s) {
+    case 'chunked': return ChunkedProtocolMode.Chunked;
+    case 'chunked_optional': return ChunkedProtocolMode.ChunkedOptional;
+    case 'notchunked': return ChunkedProtocolMode.NotChunked;
+    case 'notchunked_optional': return ChunkedProtocolMode.NotChunkedOptional;
+    default: throw new Error(`Unknown chunked protocol mode: ${s}`);
+  }
+}
+
+/**
+ * Negotiate chunked protocol between client and server.
+ * Based on ClickHouse C++ is_chunked function.
+ */
+export function negotiateChunkedMode(
+  serverMode: ChunkedProtocolMode,
+  clientMode: ChunkedProtocolMode,
+  direction: 'send' | 'recv'
+): ChunkedProtocolMode {
+  const serverChunked = serverMode === ChunkedProtocolMode.Chunked ||
+                        serverMode === ChunkedProtocolMode.ChunkedOptional;
+  const serverOptional = serverMode === ChunkedProtocolMode.ChunkedOptional ||
+                         serverMode === ChunkedProtocolMode.NotChunkedOptional;
+  const clientChunked = clientMode === ChunkedProtocolMode.Chunked ||
+                        clientMode === ChunkedProtocolMode.ChunkedOptional;
+  const clientOptional = clientMode === ChunkedProtocolMode.ChunkedOptional ||
+                         clientMode === ChunkedProtocolMode.NotChunkedOptional;
+
+  let resultChunked: boolean;
+
+  if (serverOptional) {
+    // Server is flexible, use client preference
+    resultChunked = clientChunked;
+  } else if (clientOptional) {
+    // Client is flexible, use server preference
+    resultChunked = serverChunked;
+  } else if (clientChunked !== serverChunked) {
+    // Both sides are strict and incompatible
+    throw new Error(
+      `Incompatible protocol: ${direction} set to ${clientChunked ? 'chunked' : 'notchunked'}, ` +
+      `server requires ${serverChunked ? 'chunked' : 'notchunked'}`
+    );
+  } else {
+    resultChunked = serverChunked;
+  }
+
+  return resultChunked ? ChunkedProtocolMode.Chunked : ChunkedProtocolMode.NotChunked;
+}
+
 export interface ServerHello {
   serverName: string;
   major: bigint;
@@ -73,6 +132,10 @@ export interface ServerHello {
   timezone?: string;
   displayName?: string;
   patch: bigint;
+  /** Negotiated chunked mode for server->client (send) direction */
+  chunkedSend?: ChunkedProtocolMode;
+  /** Negotiated chunked mode for client->server (recv) direction */
+  chunkedRecv?: ChunkedProtocolMode;
 }
 
 export interface Progress {

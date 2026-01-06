@@ -7,6 +7,7 @@ export {
   type LogEntry,
   type ServerHello,
   ClickHouseException,
+  ChunkedProtocolMode,
 } from "./types.ts";
 import { type Packet } from "./types.ts";
 import { type RecordBatch } from "../native/table.ts";
