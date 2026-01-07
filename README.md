@@ -608,6 +608,72 @@ await insert(query, data, sessionId, {
 
 Requires Node.js 20+ or modern browsers (Chrome 116+, Firefox 124+, Safari 17.4+) for `AbortSignal.any()`.
 
+## Error Handling
+
+### HTTP Client
+
+The HTTP client throws standard `Error` objects with the HTTP status and response body:
+
+```ts
+try {
+  for await (const _ of query("SELECT * FROM nonexistent", session, config)) {}
+} catch (err) {
+  // err.message: "Query failed: 404 - Code: 60. DB::Exception: Table ... doesn't exist..."
+}
+```
+
+Insert errors follow the same pattern:
+
+```ts
+try {
+  await insert("INSERT INTO t FORMAT JSONEachRow", data, session, config);
+} catch (err) {
+  // err.message: "Insert failed: 400 - Code: 27. DB::Exception: Cannot parse..."
+}
+```
+
+### TCP Client
+
+The TCP client throws `ClickHouseException` for server errors, which includes structured details:
+
+```ts
+import { TcpClient, ClickHouseException } from "@maxjustus/chttp/tcp";
+
+try {
+  for await (const _ of client.query("SELECT * FROM nonexistent")) {}
+} catch (err) {
+  if (err instanceof ClickHouseException) {
+    console.log(err.code);            // 60 (UNKNOWN_TABLE)
+    console.log(err.exceptionName);   // "DB::Exception"
+    console.log(err.message);         // "Table ... doesn't exist"
+    console.log(err.serverStackTrace); // Full server-side stack trace
+    console.log(err.nested);          // Nested exception if present
+  }
+}
+```
+
+Connection and protocol errors throw standard `Error`:
+
+```ts
+try {
+  await client.connect();
+} catch (err) {
+  // err.message: "Connection timeout after 10000ms"
+  // err.message: "Not connected"
+  // err.message: "Connection busy - cannot run concurrent operations..."
+}
+```
+
+### Common Error Codes
+
+| Code | Name | Description |
+|------|------|-------------|
+| 60 | UNKNOWN_TABLE | Table does not exist |
+| 62 | SYNTAX_ERROR | SQL syntax error |
+| 27 | CANNOT_PARSE_INPUT_ASSERTION_FAILED | Data type mismatch |
+| 117 | UNKNOWN_COLUMN | Column does not exist |
+| 164 | READONLY | Cannot execute in readonly mode |
+
 ## Compression
 
 Set `compression` in options:
