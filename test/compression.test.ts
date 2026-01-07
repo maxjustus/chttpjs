@@ -9,30 +9,14 @@ import {
   Method,
   usingNativeLz4,
   usingNativeZstd,
+  concat,
+  readUInt32LE,
 } from "../compression.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-function concat(arrays: Uint8Array<ArrayBufferLike>[]): Uint8Array {
-  const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const arr of arrays) {
-    result.set(arr, offset);
-    offset += arr.length;
-  }
-  return result;
-}
 
-function readUInt32LE(arr: Uint8Array, offset: number): number {
-  return (
-    arr[offset] |
-    (arr[offset + 1] << 8) |
-    (arr[offset + 2] << 16) |
-    ((arr[offset + 3] << 24) >>> 0)
-  );
-}
 
 describe("Compression", () => {
   before(async () => {

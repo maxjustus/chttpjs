@@ -1,16 +1,26 @@
-import { test, describe } from "node:test";
+import { test, describe, before, after } from "node:test";
 import assert from "node:assert";
 import { TcpClient } from "../client.ts";
 import { ClickHouseException } from "../types.ts";
 import { RecordBatch } from "../../native/table.ts";
+import { startClickHouse, stopClickHouse } from "../../test/setup.ts";
 
 describe("TCP Client Reliability", () => {
-  const options = {
-    host: "localhost",
-    port: 9000,
-    user: "default",
-    password: ""
-  };
+  let options: { host: string; port: number; user: string; password: string };
+
+  before(async () => {
+    const ch = await startClickHouse();
+    options = {
+      host: ch.host,
+      port: ch.tcpPort,
+      user: ch.username,
+      password: ch.password
+    };
+  });
+
+  after(async () => {
+    await stopClickHouse();
+  });
 
   async function withClient<T>(fn: (client: TcpClient) => Promise<T>): Promise<T> {
     const client = new TcpClient(options);
@@ -30,9 +40,49 @@ describe("TCP Client Reliability", () => {
       assert.ok(err instanceof ClickHouseException, "Should be ClickHouseException");
       assert.strictEqual(err.code, 60, "Should have error code 60 (UNKNOWN_TABLE)");
       assert.strictEqual(err.exceptionName, "DB::Exception", "Should have exception name");
-      assert.ok(err.message.includes("does not exist"), "Message should mention table does not exist");
+      // Message format varies by ClickHouse version: "does not exist" or "Unknown table expression identifier"
+      assert.ok(
+        err.message.includes("does not exist") || err.message.includes("Unknown table"),
+        `Message should mention unknown/missing table, got: ${err.message}`
+      );
       assert.ok(err.serverStackTrace.length > 0, "Should have stack trace");
     }
+  }));
+
+  test("should allow subsequent queries after exception", () => withClient(async (client) => {
+    // First query: trigger an exception
+    try {
+      for await (const _ of client.query("SELECT * FROM nonexistent_table_xyz123")) {}
+      assert.fail("Should have thrown an exception");
+    } catch (err) {
+      assert.ok(err instanceof ClickHouseException, "First query should throw ClickHouseException");
+    }
+
+    // Second query: should work on same connection
+    let result: number | null = null;
+    for await (const packet of client.query("SELECT 42 as answer")) {
+      if (packet.type === "Data" && packet.batch.rowCount > 0) {
+        result = Number(packet.batch.getAt(0, 0));
+      }
+    }
+    assert.strictEqual(result, 42, "Second query should return correct result");
+
+    // Third query: another error, connection should still recover
+    try {
+      for await (const _ of client.query("INVALID SQL SYNTAX HERE")) {}
+      assert.fail("Should have thrown an exception");
+    } catch (err) {
+      assert.ok(err instanceof ClickHouseException, "Third query should throw ClickHouseException");
+    }
+
+    // Fourth query: verify connection still works
+    let finalResult: number | null = null;
+    for await (const packet of client.query("SELECT 123 as value")) {
+      if (packet.type === "Data" && packet.batch.rowCount > 0) {
+        finalResult = Number(packet.batch.getAt(0, 0));
+      }
+    }
+    assert.strictEqual(finalResult, 123, "Fourth query should return correct result");
   }));
 
   test("should ping and receive pong", () => withClient(async (client) => {

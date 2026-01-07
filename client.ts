@@ -21,6 +21,8 @@ export {
   ClickHouseDateTime64,
 } from "@maxjustus/chttp/native";
 
+import { StreamBuffer } from "@maxjustus/chttp/native";
+
 export type Compression = "lz4" | "zstd" | "none";
 
 // AbortSignal.any() added in Node 20+, ES2024
@@ -82,6 +84,16 @@ function readUInt32LE(arr: Uint8Array, offset: number): number {
     (arr[offset + 2] << 16) |
     ((arr[offset + 3] << 24) >>> 0)
   );
+}
+
+function mergeParams(
+  target: Record<string, string>,
+  source?: Record<string, unknown>
+): void {
+  if (!source) return;
+  for (const [key, value] of Object.entries(source)) {
+    target[key] = String(value);
+  }
 }
 
 interface AuthConfig {
@@ -168,16 +180,8 @@ async function insert(
     query: query,
     decompress: "1",
   };
-  if (options.settings) {
-    for (const [key, value] of Object.entries(options.settings)) {
-      params[key] = String(value);
-    }
-  }
-  if (options.params) {
-    for (const [key, value] of Object.entries(options.params)) {
-      params[key] = String(value);
-    }
-  }
+  mergeParams(params, options.settings);
+  mergeParams(params, options.params);
 
   // Normalize all input types to Iterable<Uint8Array>
   // This ensures consistent chunking behavior (1MB threshold) for all inputs
@@ -189,7 +193,7 @@ async function insert(
   } else if (Array.isArray(data)) {
     // Array of Uint8Arrays - yield chunks from each
     const chunks = data as Uint8Array[];
-    inputData = (function* () {
+    inputData = (function*() {
       for (const chunk of chunks) {
         yield* chunkUint8Array(chunk, threshold);
       }
@@ -306,21 +310,23 @@ async function insert(
  * Convert objects to JSONEachRow format as Uint8Array chunks.
  * Use with insert() for JSON data.
  */
-function streamJsonEachRow(data: Iterable<unknown>): Generator<Uint8Array>;
-function streamJsonEachRow(
+function streamEncodeJsonEachRow(
+  data: Iterable<unknown>,
+): Generator<Uint8Array>;
+function streamEncodeJsonEachRow(
   data: AsyncIterable<unknown>,
 ): AsyncGenerator<Uint8Array>;
-function streamJsonEachRow(
+function streamEncodeJsonEachRow(
   data: Iterable<unknown> | AsyncIterable<unknown>,
 ): Generator<Uint8Array> | AsyncGenerator<Uint8Array> {
   if (Symbol.asyncIterator in data) {
-    return (async function* () {
+    return (async function*() {
       for await (const row of data) {
         yield encoder.encode(JSON.stringify(row) + "\n");
       }
     })();
   }
-  return (function* () {
+  return (function*() {
     for (const row of data as Iterable<unknown>) {
       yield encoder.encode(JSON.stringify(row) + "\n");
     }
@@ -502,16 +508,8 @@ async function* query(
     "params",
     "externalTables",
   ];
-  if (options.settings) {
-    for (const [key, value] of Object.entries(options.settings)) {
-      params[key] = String(value);
-    }
-  }
-  if (options.params) {
-    for (const [key, value] of Object.entries(options.params)) {
-      params[key] = String(value);
-    }
-  }
+  mergeParams(params, options.settings);
+  mergeParams(params, options.params);
   for (const [key, value] of Object.entries(options)) {
     if (!reserved.includes(key) && value !== undefined) {
       params[key] = String(value);
@@ -590,36 +588,23 @@ async function* query(
       yield value;
     }
   } else {
-    // For compressed, decompress blocks as they arrive
-    // Use growing buffer to avoid O(n²) concat allocations
-    let buffer = new Uint8Array(64 * 1024);
-    let bufferLen = 0;
+    const streamBuffer = new StreamBuffer(64 * 1024);
 
     while (true) {
       const { done, value } = await reader.read();
 
-      if (value) {
-        // Grow buffer if needed
-        if (bufferLen + value.length > buffer.length) {
-          const newSize = Math.max(buffer.length * 2, bufferLen + value.length);
-          const newBuffer = new Uint8Array(newSize);
-          newBuffer.set(buffer.subarray(0, bufferLen));
-          buffer = newBuffer;
-        }
-        buffer.set(value, bufferLen);
-        bufferLen += value.length;
-      }
+      if (value)  streamBuffer.append(value);
 
-      // Process complete blocks from buffer
-      let consumed = 0;
-      while (bufferLen - consumed >= 25) {
-        const compressedSize = readUInt32LE(buffer, consumed + 17);
+      // process complete blocks
+      while (streamBuffer.available >= 25) {
+        const bufferView = streamBuffer.view;
+
+        const compressedSize = readUInt32LE(bufferView, 17);
         const blockSize = 16 + compressedSize;
 
-        if (bufferLen - consumed < blockSize) break;
+        if (streamBuffer.available < blockSize) break;
 
-        const block = buffer.subarray(consumed, consumed + blockSize);
-        consumed += blockSize;
+        const block = bufferView.subarray(0, blockSize);
 
         try {
           const decompressed = decodeBlock(block);
@@ -628,15 +613,17 @@ async function* query(
           const message = err instanceof Error ? err.message : String(err);
           throw new Error(`Block decompression failed: ${message}`);
         }
+
+        streamBuffer.consume(blockSize);
       }
 
-      // Shift remaining data to front
-      if (consumed > 0) {
-        buffer.copyWithin(0, consumed, bufferLen);
-        bufferLen -= consumed;
-      }
+      if (done) {
+        if (streamBuffer.available > 0) {
+          throw new Error("Incomplete block");
+        }
 
-      if (done) break;
+        break;
+      }
     }
   }
 }
@@ -670,11 +657,11 @@ async function* streamLines(
  * Use with query() for JSONEachRow format.
  *
  * @example
- * for await (const row of streamJsonLines(query("SELECT * FROM t FORMAT JSONEachRow", session, config))) {
+ * for await (const row of streamDecodeJsonEachRow(query("SELECT * FROM t FORMAT JSONEachRow", session, config))) {
  *   console.log(row.id, row.name);
  * }
  */
-async function* streamJsonLines<T = unknown>(
+async function* streamDecodeJsonEachRow<T = unknown>(
   chunks: AsyncIterable<Uint8Array>,
 ): AsyncGenerator<T> {
   for await (const line of streamLines(chunks)) {
@@ -742,15 +729,32 @@ async function collectText(chunks: AsyncIterable<Uint8Array>): Promise<string> {
   return result;
 }
 
+/**
+ * collect all JSON lines into an array of objects.
+ *
+ * @example
+ * const rows = await collectJsonEachRow<{ id: number; name: string }>(query("SELECT * FROM t FORMAT JSONEachRow", session, config));
+ */
+async function collectJsonEachRow<T = unknown>(
+  chunks: AsyncIterable<Uint8Array>,
+): Promise<T[]> {
+  const result: T[] = [];
+  for await (const row of streamDecodeJsonEachRow<T>(chunks)) {
+    result.push(row);
+  }
+  return result;
+}
+
 export {
   init,
   insert,
   query,
   buildReqUrl,
-  streamJsonEachRow,
+  streamEncodeJsonEachRow,
   streamText,
   streamLines,
-  streamJsonLines,
+  streamDecodeJsonEachRow,
   collectBytes,
   collectText,
+  collectJsonEachRow,
 };

@@ -6,7 +6,7 @@ import {
   init,
   insert,
   query,
-  streamJsonEachRow,
+  streamEncodeJsonEachRow,
   streamText,
   collectText,
 } from "../client.ts";
@@ -40,7 +40,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth, compression: "none" },
       ));
 
-      // Insert data using streamJsonEachRow helper
+      // Insert data using streamEncodeJsonEachRow helper
       const data = [
         { id: 1, name: "Alice" },
         { id: 2, name: "Bob" },
@@ -49,7 +49,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       await insert(
         "INSERT INTO test_basic FORMAT JSONEachRow",
-        streamJsonEachRow(data),
+        streamEncodeJsonEachRow(data),
         sessionId,
         { baseUrl, auth },
       );
@@ -77,85 +77,44 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   });
 
   describe("Compression methods", () => {
-    it("should insert with LZ4 compression", async () => {
-      // Create table
-      await consume(query(
-        "CREATE TABLE IF NOT EXISTS test_lz4 (value String) ENGINE = Memory",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      ));
+    for (const compression of ["none", "lz4", "zstd"] as const) {
+      it(`should insert with ${compression} compression`, async () => {
+        await consume(query(
+          "CREATE TABLE IF NOT EXISTS test_compression (value String) ENGINE = Memory",
+          sessionId,
+          { baseUrl, auth, compression },
+        ));
 
-      // Use raw Uint8Array for this test
-      const rows = Array.from({ length: 1000 }, (_, i) => ({
-        value: `test_${i}`,
-      }));
-      const data = encoder.encode(
-        rows.map((r) => JSON.stringify(r)).join("\n") + "\n",
-      );
+        const rows = Array.from({ length: 1000 }, (_, i) => ({
+          value: `test_${i}`,
+        }));
+        const data = encoder.encode(
+          rows.map((r) => JSON.stringify(r)).join("\n") + "\n",
+        );
 
-      await insert("INSERT INTO test_lz4 FORMAT JSONEachRow", data, sessionId, {
-        baseUrl,
-        auth,
-        compression: "lz4",
+        await insert(`INSERT INTO test_compression FORMAT JSONEachRow`, data, sessionId, {
+          baseUrl,
+          auth,
+          compression,
+        });
+
+        const result = await collectText(
+          query("SELECT count(*) as cnt FROM test_compression FORMAT JSON", sessionId, {
+            baseUrl,
+            auth,
+          }),
+        );
+
+        const parsed = JSON.parse(result);
+        assert.strictEqual(Number(parsed.data[0].cnt), 1000);
+
+        await consume(query("DROP TABLE test_compression", sessionId, {
+          baseUrl,
+          auth,
+          compression,
+        }));
       });
-
-      // Verify count
-      const result = await collectText(
-        query("SELECT count(*) as cnt FROM test_lz4 FORMAT JSON", sessionId, {
-          baseUrl,
-          auth,
-        }),
-      );
-
-      const parsed = JSON.parse(result);
-      assert.strictEqual(Number(parsed.data[0].cnt), 1000);
-
-      // Clean up
-      await consume(query("DROP TABLE test_lz4", sessionId, {
-        baseUrl,
-        auth,
-        compression: "none",
-      }));
-    });
-
-    it("should insert with ZSTD compression", async () => {
-      // Create table
-      await consume(query(
-        "CREATE TABLE IF NOT EXISTS test_zstd (value String) ENGINE = Memory",
-        sessionId,
-        { baseUrl, auth, compression: "none" },
-      ));
-
-      // Use streamJsonEachRow helper for ZSTD test
-      const rows = Array.from({ length: 1000 }, (_, i) => ({
-        value: `test_${i}`,
-      }));
-
-      await insert(
-        "INSERT INTO test_zstd FORMAT JSONEachRow",
-        streamJsonEachRow(rows),
-        sessionId,
-        { baseUrl, auth, compression: "zstd" },
-      );
-
-      // Verify count
-      const result = await collectText(
-        query("SELECT count(*) as cnt FROM test_zstd FORMAT JSON", sessionId, {
-          baseUrl,
-          auth,
-        }),
-      );
-
-      const parsed = JSON.parse(result);
-      assert.strictEqual(Number(parsed.data[0].cnt), 1000);
-
-      // Clean up
-      await consume(query("DROP TABLE test_zstd", sessionId, {
-        baseUrl,
-        auth,
-        compression: "none",
-      }));
-    });
+    }
   });
 
   describe("Streaming inserts with generators", () => {
@@ -170,13 +129,14 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       // Generator that yields byte batches
       async function* generateBatches() {
         for (let batch = 0; batch < 10; batch++) {
-          const batchData = [];
+          const batchData: { id: number, value: string }[] = [];
           for (let i = 0; i < 100; i++) {
             batchData.push({
               id: batch * 100 + i,
               value: `batch_${batch}_item_${i}`,
             });
           }
+
           yield encoder.encode(
             batchData.map((r) => JSON.stringify(r)).join("\n") + "\n",
           );
@@ -229,7 +189,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         { baseUrl, auth, compression: "none" },
       ));
 
-      // Use streamJsonEachRow with async generator
+      // Use streamEncodeJsonEachRow with async generator
       async function* generateSingle() {
         for (let i = 0; i < 500; i++) {
           yield { id: i };
@@ -238,7 +198,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       await insert(
         "INSERT INTO test_single FORMAT JSONEachRow",
-        streamJsonEachRow(generateSingle()),
+        streamEncodeJsonEachRow(generateSingle()),
         sessionId,
         { baseUrl, auth, compression: "zstd" },
       );
@@ -277,7 +237,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       const rows = Array.from({ length: 10000 }, (_, i) => ({ id: i }));
       await insert(
         "INSERT INTO test_stream FORMAT JSONEachRow",
-        streamJsonEachRow(rows),
+        streamEncodeJsonEachRow(rows),
         sessionId,
         { baseUrl, auth },
       );
@@ -344,7 +304,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         const error = err as Error;
         assert.ok(
           error.message.includes("UNKNOWN_TABLE") ||
-            error.message.includes("doesn't exist"),
+          error.message.includes("doesn't exist"),
         );
       }
     });
@@ -374,7 +334,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         const error = err as Error;
         assert.ok(
           error.message.includes("TYPE_MISMATCH") ||
-            error.message.includes("Cannot parse"),
+          error.message.includes("Cannot parse"),
         );
       }
 
@@ -461,8 +421,8 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         const error = err as Error;
         assert.ok(
           error.name === "AbortError" ||
-            error.message.includes("abort") ||
-            error.message.includes("cancelled"),
+          error.message.includes("abort") ||
+          error.message.includes("cancelled"),
         );
       }
 

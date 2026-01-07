@@ -37,7 +37,7 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
     `);
 
     // Insert 10000 rows, only 2 non-zero
-    const rows = [];
+    const rows: any[] = [];
     const rowCount = 10000;
     for (let i = 0; i < rowCount; i++) {
       if (i === 10) rows.push(`(${i}, 123456789)`);
@@ -53,49 +53,43 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
     await stopClickHouse();
   });
 
-  async function runSparseTest(compression: boolean) {
-    const client = new TcpClient({
-      host: chConfig.host,
-      port: chConfig.tcpPort,
-      user: chConfig.username,
-      password: chConfig.password,
-      compression,
-      debug: true,
-    });
-    await client.connect();
+  for (const compression of [false, true]) {
+    it(`reads sparse data ${compression ? "with" : "without"} compression`, async () => {
+      const client = new TcpClient({
+        host: chConfig.host,
+        port: chConfig.tcpPort,
+        user: chConfig.username,
+        password: chConfig.password,
+        compression,
+        debug: true,
+      });
+      await client.connect();
 
-    try {
-      const packets = client.query(
-        `SELECT * FROM test_tcp_sparse ORDER BY id`,
-      );
+      try {
+        const packets = client.query(
+          `SELECT * FROM test_tcp_sparse ORDER BY id`,
+        );
 
-      let totalRows = 0;
-      for await (const packet of packets) {
-        if (packet.type === "Data") {
-          const batch = packet.batch;
-          const decodedRows = toArrayRows(batch);
-          totalRows += batch.rowCount;
+        let totalRows = 0;
+        for await (const packet of packets) {
+          if (packet.type === "Data") {
+            const batch = packet.batch;
+            const decodedRows = toArrayRows(batch);
+            totalRows += batch.rowCount;
 
-          // Check specific values if we have enough rows
-          if (decodedRows.length > 10) {
-            assert.strictEqual(decodedRows[10][1], 123456789n, "Row 10 should have value 123456789");
-          }
-          if (decodedRows.length > 5000) {
-            assert.strictEqual(decodedRows[5000][1], 987654321n, "Row 5000 should have value 987654321");
+            // Check specific values if we have enough rows
+            if (decodedRows.length > 10) {
+              assert.strictEqual(decodedRows[10][1], 123456789n, "Row 10 should have value 123456789");
+            }
+            if (decodedRows.length > 5000) {
+              assert.strictEqual(decodedRows[5000][1], 987654321n, "Row 5000 should have value 987654321");
+            }
           }
         }
+        assert.strictEqual(totalRows, 10000, "Should receive 10000 rows total");
+      } finally {
+        client.close();
       }
-      assert.strictEqual(totalRows, 10000, "Should receive 10000 rows total");
-    } finally {
-      client.close();
-    }
+    });
   }
-
-  it("reads sparse data without compression", async () => {
-    await runSparseTest(false);
-  });
-
-  it("reads sparse data with compression", async () => {
-    await runSparseTest(true);
-  });
 });

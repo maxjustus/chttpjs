@@ -7,6 +7,7 @@ import {
   type ColumnDef,
   type DecodeOptions,
 } from "../native/index.ts";
+import { TcpClient } from "../tcp_client/client.ts";
 
 // Async iterable helpers
 export async function consume(s: AsyncIterable<unknown>): Promise<void> {
@@ -86,4 +87,40 @@ export async function decodeBatch(data: Uint8Array, options?: DecodeOptions): Pr
 
 export function generateSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+// TCP client helpers
+
+export type TcpConfig = {
+  host: string;
+  tcpPort: number;
+  username: string;
+  password: string;
+};
+
+export function connectTcpClient(
+  config: TcpConfig,
+  opts?: Omit<Parameters<typeof TcpClient.connect>[0], "host" | "port" | "user" | "password">
+) {
+  return TcpClient.connect({
+    host: config.host,
+    port: config.tcpPort,
+    user: config.username,
+    password: config.password,
+    ...opts,
+  });
+}
+
+export async function collectQueryResults(
+  client: TcpClient,
+  sql: string,
+  options?: Parameters<TcpClient["query"]>[1]
+): Promise<unknown[][]> {
+  const allRows: unknown[][] = [];
+  for await (const packet of client.query(sql, options)) {
+    if (packet.type === "Data") {
+      allRows.push(...toArrayRows(packet.batch));
+    }
+  }
+  return allRows;
 }

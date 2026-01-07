@@ -57,6 +57,68 @@ const BufferSize: {
   UTF8_MAX_BYTES_PER_CHAR: 3,
 };
 
+/**
+ * Growable buffer for streaming decode. Replaces chunk array + flattenChunks().
+ * Amortized O(n) vs O(n²) for many small chunks.
+ */
+export class StreamBuffer {
+  private buffer: Uint8Array;
+  private readOffset = 0;
+  private writeOffset = 0;
+
+  constructor(initialSize = 2 * 1024 * 1024) {
+    this.buffer = new Uint8Array(initialSize);
+  }
+
+  get available(): number {
+    return this.writeOffset - this.readOffset;
+  }
+
+  append(chunk: Uint8Array): void {
+    const needed = this.writeOffset + chunk.length;
+    if (needed > this.buffer.length) {
+      this.grow(needed);
+    }
+    this.buffer.set(chunk, this.writeOffset);
+    this.writeOffset += chunk.length;
+  }
+
+  get view(): Uint8Array {
+    return this.buffer.subarray(this.readOffset, this.writeOffset);
+  }
+
+  consume(bytes: number): void {
+    this.readOffset += bytes;
+    // Compact when >50% consumed
+    if (this.readOffset > this.buffer.length / 2) {
+      this.compact();
+    }
+  }
+
+  private compact(): void {
+    const remaining = this.writeOffset - this.readOffset;
+    if (remaining > 0 && this.readOffset > 0) {
+      this.buffer.copyWithin(0, this.readOffset, this.writeOffset);
+    }
+    this.writeOffset = remaining;
+    this.readOffset = 0;
+  }
+
+  private grow(minCapacity: number): void {
+    if (this.readOffset > 0) {
+      this.compact();
+      if (this.buffer.length >= minCapacity) return;
+    }
+    let newSize = this.buffer.length;
+    while (newSize < minCapacity) {
+      newSize = Math.min(newSize * 2, newSize + 64 * 1024 * 1024);
+    }
+    const newBuffer = new Uint8Array(newSize);
+    newBuffer.set(this.buffer.subarray(0, this.writeOffset));
+    this.buffer = newBuffer;
+  }
+}
+
 export class BufferUnderflowError extends Error {
   constructor(message: string) {
     super(message);

@@ -655,6 +655,7 @@ export class TcpClient {
     let cancelled = false;
 
     let reachedEndOfStream = false;
+    let receivedException = false;
 
     const startTimeout = () => {
       if (queryTimeout > 0) {
@@ -804,6 +805,7 @@ export class TcpClient {
               yield { type: "EndOfStream" };
               return;
             case ServerPacketId.Exception:
+              receivedException = true;
               throw await this.reader.readException();
             default:
               throw new Error(`Unknown packet ID: ${packetId}. Cannot proceed.`);
@@ -817,8 +819,9 @@ export class TcpClient {
       }
     } finally {
       // If generator was abandoned early (before EndOfStream), drain remaining packets
-      // to keep the connection in a clean state for subsequent queries
-      if (!reachedEndOfStream && this.socket && this.reader) {
+      // to keep the connection in a clean state for subsequent queries.
+      // Skip draining if we received an exception - server sends nothing after exception.
+      if (!reachedEndOfStream && !receivedException && this.socket && this.reader) {
         try {
           await this.drainPackets(useCompression);
         } catch {

@@ -3,6 +3,7 @@
 // Tests encoding/decoding performance for both formats with various data types.
 
 import { init, encodeBlock, Method } from "../compression.ts";
+import { collectBytes } from "../client.ts";
 import {
   encodeNative,
   streamEncodeNative,
@@ -63,21 +64,6 @@ async function* chunkedStream(
   for (let i = 0; i < data.length; i += chunkSize) {
     yield data.subarray(i, Math.min(i + chunkSize, data.length));
   }
-}
-
-async function collectChunks(
-  gen: AsyncIterable<Uint8Array>,
-): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-  for await (const chunk of gen) chunks.push(chunk);
-  const total = chunks.reduce((sum, c) => sum + c.length, 0);
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return result;
 }
 
 async function collectNative(
@@ -555,7 +541,7 @@ async function main() {
   }
 
   const streamEnc = await benchAsync("Stream encode", async () => {
-    await collectChunks(streamEncodeNative(batchGenerator()));
+    await collectBytes(streamEncodeNative(batchGenerator()));
   }, { ...benchOptions, iterations: ITERATIONS });
   console.log(formatResult(streamEnc, ROWS));
 

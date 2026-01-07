@@ -6,6 +6,49 @@ import {
 } from "@maxjustus/chttp/native";
 import { decodeBlock } from "../compression.ts";
 import { ClickHouseException } from "./types.ts";
+import type * as net from "node:net";
+
+/**
+ * Wraps a socket's async iterator to ensure errors are propagated to pending next() calls.
+ * Without this wrapper, socket errors may be emitted as events without rejecting pending reads.
+ */
+function createErrorPropagatingIterator(socket: net.Socket): AsyncIterator<Uint8Array> {
+  const baseIterator = (socket as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
+  let pendingReject: ((err: Error) => void) | null = null;
+  let socketError: Error | null = null;
+
+  socket.on('error', (err) => {
+    socketError = err;
+    if (pendingReject) {
+      pendingReject(err);
+      pendingReject = null;
+    }
+  });
+
+  return {
+    async next(): Promise<IteratorResult<Uint8Array>> {
+      // If socket already errored, reject immediately
+      if (socketError) {
+        throw socketError;
+      }
+
+      // Race the base iterator with error handling
+      return new Promise((resolve, reject) => {
+        pendingReject = reject;
+        baseIterator.next().then(
+          (result) => {
+            pendingReject = null;
+            resolve(result);
+          },
+          (err) => {
+            pendingReject = null;
+            reject(err);
+          }
+        );
+      });
+    }
+  };
+}
 
 /**
  * A streaming byte reader that handles async buffering and optional ClickHouse compression.
@@ -18,8 +61,8 @@ export class StreamingReader {
   private done: boolean = false;
   private compressionEnabled: boolean = false;
 
-  constructor(iterable: AsyncIterable<Uint8Array>) {
-    this.source = iterable[Symbol.asyncIterator]();
+  constructor(socket: net.Socket) {
+    this.source = createErrorPropagatingIterator(socket);
   }
 
   setCompression(enabled: boolean) {

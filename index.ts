@@ -6,12 +6,13 @@ export {
   type Compression,
   type InsertOptions,
   type QueryOptions,
-  streamJsonEachRow,
+  streamEncodeJsonEachRow,
   streamText,
   streamLines,
-  streamJsonLines,
+  streamDecodeJsonEachRow,
   collectBytes,
   collectText,
+  collectJsonEachRow,
 } from "./client.ts";
 export type { ClickHouseSettings } from "./settings.ts";
 export {

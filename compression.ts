@@ -117,7 +117,7 @@ export async function init(): Promise<void> {
 }
 
 // Uint8Array helpers
-function concat(arrays: Uint8Array[]): Uint8Array {
+export function concat(arrays: Uint8Array<ArrayBufferLike>[]): Uint8Array {
   const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0);
   const result = new Uint8Array(totalLength);
   let offset = 0;
@@ -128,7 +128,7 @@ function concat(arrays: Uint8Array[]): Uint8Array {
   return result;
 }
 
-function readUInt32LE(arr: Uint8Array, offset: number): number {
+export function readUInt32LE(arr: Uint8Array, offset: number): number {
   return (
     arr[offset] |
     (arr[offset + 1] << 8) |

@@ -3,13 +3,12 @@
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
-import { TcpClient } from "../tcp_client/client.ts";
 import { batchFromArrays, RecordBatch, type ColumnDef } from "../native/index.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { toArrayRows } from "./test_utils.ts";
+import { connectTcpClient, collectQueryResults, type TcpConfig } from "./test_utils.ts";
 
 describe("TCP external tables", { timeout: 120000 }, () => {
-  let chConfig: { host: string; tcpPort: number; username: string; password: string };
+  let chConfig: TcpConfig;
 
   before(async () => {
     const ch = await startClickHouse();
@@ -21,23 +20,8 @@ describe("TCP external tables", { timeout: 120000 }, () => {
     await stopClickHouse();
   });
 
-  async function collectQueryResults(client: TcpClient, sql: string, options?: Parameters<TcpClient['query']>[1]): Promise<unknown[][]> {
-    const allRows: unknown[][] = [];
-    for await (const packet of client.query(sql, options)) {
-      if (packet.type === "Data") {
-        allRows.push(...toArrayRows(packet.batch));
-      }
-    }
-    return allRows;
-  }
-
   it("queries a single external table (object form)", async () => {
-    await using client = await TcpClient.connect({
-      host: chConfig.host,
-      port: chConfig.tcpPort,
-      user: chConfig.username,
-      password: chConfig.password,
-    });
+    await using client = await connectTcpClient(chConfig);
 
     const schema: ColumnDef[] = [
       { name: "id", type: "UInt32" },
@@ -62,12 +46,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   });
 
   it("aggregates external table data", async () => {
-    await using client = await TcpClient.connect({
-      host: chConfig.host,
-      port: chConfig.tcpPort,
-      user: chConfig.username,
-      password: chConfig.password,
-    });
+    await using client = await connectTcpClient(chConfig);
 
     const schema: ColumnDef[] = [
       { name: "value", type: "Int64" },
@@ -87,12 +66,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   });
 
   it("queries with multiple external tables", async () => {
-    await using client = await TcpClient.connect({
-      host: chConfig.host,
-      port: chConfig.tcpPort,
-      user: chConfig.username,
-      password: chConfig.password,
-    });
+    await using client = await connectTcpClient(chConfig);
 
     const usersSchema: ColumnDef[] = [
       { name: "user_id", type: "UInt32" },
@@ -132,12 +106,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   });
 
   it("handles multiple batches for single external table (sync iterable)", async () => {
-    await using client = await TcpClient.connect({
-      host: chConfig.host,
-      port: chConfig.tcpPort,
-      user: chConfig.username,
-      password: chConfig.password,
-    });
+    await using client = await connectTcpClient(chConfig);
 
     const schema: ColumnDef[] = [{ name: "n", type: "UInt32" }];
 
@@ -157,12 +126,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   });
 
   it("handles async iterable for external table", async () => {
-    await using client = await TcpClient.connect({
-      host: chConfig.host,
-      port: chConfig.tcpPort,
-      user: chConfig.username,
-      password: chConfig.password,
-    });
+    await using client = await connectTcpClient(chConfig);
 
     const schema: ColumnDef[] = [{ name: "x", type: "UInt32" }];
 
@@ -185,13 +149,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   });
 
   it("works with compression enabled", async () => {
-    await using client = await TcpClient.connect({
-      host: chConfig.host,
-      port: chConfig.tcpPort,
-      user: chConfig.username,
-      password: chConfig.password,
-      compression: "lz4",
-    });
+    await using client = await connectTcpClient(chConfig, { compression: "lz4" });
 
     const schema: ColumnDef[] = [
       { name: "id", type: "UInt32" },
@@ -220,12 +178,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   });
 
   it("handles empty external table", async () => {
-    await using client = await TcpClient.connect({
-      host: chConfig.host,
-      port: chConfig.tcpPort,
-      user: chConfig.username,
-      password: chConfig.password,
-    });
+    await using client = await connectTcpClient(chConfig);
 
     const schema: ColumnDef[] = [
       { name: "id", type: "UInt32" },
@@ -243,12 +196,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   });
 
   it("filters external table data in query", async () => {
-    await using client = await TcpClient.connect({
-      host: chConfig.host,
-      port: chConfig.tcpPort,
-      user: chConfig.username,
-      password: chConfig.password,
-    });
+    await using client = await connectTcpClient(chConfig);
 
     const schema: ColumnDef[] = [
       { name: "id", type: "UInt32" },
@@ -272,12 +220,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   });
 
   it("uses external table in subquery", async () => {
-    await using client = await TcpClient.connect({
-      host: chConfig.host,
-      port: chConfig.tcpPort,
-      user: chConfig.username,
-      password: chConfig.password,
-    });
+    await using client = await connectTcpClient(chConfig);
 
     const schema: ColumnDef[] = [{ name: "val", type: "UInt32" }];
     const batch = batchFromArrays(schema, {

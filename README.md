@@ -8,26 +8,20 @@ ClickHouse HTTP client with native compression (LZ4/ZSTD).
 npm install @maxjustus/chttp
 ```
 
-For smaller bundle (LZ4 only, no ZSTD):
-
-```ts
-import { ... } from "@maxjustus/chttp/lz4";
-```
-
 ## Quick Start
 
 ```ts
-import { insert, query, streamJsonEachRow } from "@maxjustus/chttp";
+import { insert, query, streamEncodeJsonEachRow } from "@maxjustus/chttp";
 
 const config = {
   baseUrl: "http://localhost:8123/",
   auth: { username: "default", password: "" },
 };
 
-// Insert with JSON data (using streamJsonEachRow helper)
+// Insert with JSON data (using streamEncodeJsonEachRow helper)
 await insert(
   "INSERT INTO table FORMAT JSONEachRow",
-  streamJsonEachRow([{ id: 1, name: "test" }]),
+  streamEncodeJsonEachRow([{ id: 1, name: "test" }]),
   "session123",
   config, // compression defaults to "lz4"
 );
@@ -59,7 +53,7 @@ for await (const _ of query("CREATE TABLE ...", "session123", config)) {
 
 ## Streaming Large Inserts
 
-The `insert` function accepts `Uint8Array`, `Uint8Array[]`, or `AsyncIterable<Uint8Array>`. Use `streamJsonEachRow` for JSON data:
+The `insert` function accepts `Uint8Array`, `Uint8Array[]`, or `AsyncIterable<Uint8Array>`. Use `streamEncodeJsonEachRow` for JSON data:
 
 ```ts
 // Streaming JSON objects
@@ -71,7 +65,7 @@ async function* generateRows() {
 
 await insert(
   "INSERT INTO large_table FORMAT JSONEachRow",
-  streamJsonEachRow(generateRows()),
+  streamEncodeJsonEachRow(generateRows()),
   "session123",
   {
     compression: "zstd",
@@ -108,17 +102,22 @@ import {
   query,
   streamText,
   streamLines,
-  streamJsonLines,
+  streamDecodeJsonEachRow,
+  collectJsonEachRow,
   collectText,
   collectBytes,
 } from "@maxjustus/chttp";
 
 // JSONEachRow - streaming parsed objects
-for await (const row of streamJsonLines(
+for await (const row of streamDecodeJsonEachRow(
   query("SELECT * FROM t FORMAT JSONEachRow", session, config),
 )) {
   console.log(row.id, row.name);
 }
+
+const res = await collectJsonEachRow(
+  query("SELECT * FROM t FORMAT JSONEachRow", session, config),
+);
 
 // CSV/TSV - streaming raw lines
 for await (const line of streamLines(
