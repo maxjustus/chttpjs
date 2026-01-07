@@ -1,15 +1,27 @@
 {
   "name": "@maxjustus/chttp",
-  "version": "1.7.5",
+  "version": "1.7.6",
   "description": "ClickHouse HTTP client with native compression (LZ4/ZSTD)",
   "type": "module",
   "main": "./dist/chttp.js",
   "exports": {
-    ".": "./dist/chttp.js",
-    "./lz4": "./dist/chttp-lz4.js",
-    "./native": "./dist/native.js",
+    ".": {
+      "import": "./dist/chttp.js",
+      "require": "./dist/chttp.cjs"
+    },
+    "./lz4": {
+      "import": "./dist/chttp-lz4.js",
+      "require": "./dist/chttp-lz4.cjs"
+    },
+    "./native": {
+      "import": "./dist/native.js",
+      "require": "./dist/native.cjs"
+    },
     "./source": "./index.ts",
-    "./tcp": "./dist/tcp.js"
+    "./tcp": {
+      "import": "./dist/tcp.js",
+      "require": "./dist/tcp.cjs"
+    }
   },
   "files": [
     "dist",
@@ -21,11 +33,15 @@
   ],
   "scripts": {
     "prepublishOnly": "npm run build",
-    "build": "npm run build:native && npm run build:full && npm run build:lz4 && npm run build:tcp",
+    "build": "npm run build:native && npm run build:native:cjs && npm run build:full && npm run build:full:cjs && npm run build:lz4 && npm run build:lz4:cjs && npm run build:tcp && npm run build:tcp:cjs",
     "build:native": "esbuild native/index.ts --bundle --format=esm --outfile=dist/native.js --platform=neutral --target=es2022 --minify --external:lz4-napi --external:zstd-napi",
+    "build:native:cjs": "esbuild native/index.ts --bundle --format=cjs --outfile=dist/native.cjs --platform=node --target=es2022 --minify --external:lz4-napi --external:zstd-napi",
     "build:full": "esbuild index.ts --bundle --format=esm --outfile=dist/chttp.js --platform=browser --target=es2022 --minify --define:BUILD_WITH_ZSTD=true --external:zstd-napi --external:lz4-napi --external:@maxjustus/chttp/native",
+    "build:full:cjs": "esbuild index.ts --bundle --format=cjs --outfile=dist/chttp.cjs --platform=node --target=es2022 --minify --define:BUILD_WITH_ZSTD=true --external:zstd-napi --external:lz4-napi --external:@maxjustus/chttp/native",
     "build:lz4": "esbuild index.ts --bundle --format=esm --outfile=dist/chttp-lz4.js --platform=browser --target=es2022 --minify --define:BUILD_WITH_ZSTD=false --external:zstd-napi --external:lz4-napi --external:@maxjustus/chttp/native",
+    "build:lz4:cjs": "esbuild index.ts --bundle --format=cjs --outfile=dist/chttp-lz4.cjs --platform=node --target=es2022 --minify --define:BUILD_WITH_ZSTD=false --external:zstd-napi --external:lz4-napi --external:@maxjustus/chttp/native",
     "build:tcp": "esbuild tcp_client/index.ts --bundle --format=esm --outfile=dist/tcp.js --platform=node --target=es2022 --minify --external:lz4-napi --external:zstd-napi --external:@maxjustus/chttp/native",
+    "build:tcp:cjs": "esbuild tcp_client/index.ts --bundle --format=cjs --outfile=dist/tcp.cjs --platform=node --target=es2022 --minify --external:lz4-napi --external:zstd-napi --external:@maxjustus/chttp/native",
     "test": "tsc --noEmit && node --experimental-strip-types --test test/native/*.test.ts test/*.test.ts",
     "test:compression": "node --experimental-strip-types --test test/compression.test.ts",
     "test:integration": "node --experimental-strip-types --test test/integration.test.ts",
