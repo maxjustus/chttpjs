@@ -40,12 +40,6 @@ export const ServerPacketId = {
   TimezoneUpdate: 17,
 } as const;
 
-/** ProfileEvents event type codes */
-export const ProfileEventType = {
-  Increment: 1, // Counter that accumulates across packets
-  Gauge: 2, // Point-in-time measurement (use latest value)
-} as const;
-
 export const QueryProcessingStage = {
   FetchColumns: 0,
   WithMergeableState: 1,

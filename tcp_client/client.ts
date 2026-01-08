@@ -12,7 +12,6 @@ import {
   type LogEntry,
   DBMS_TCP_PROTOCOL_VERSION,
   REVISIONS,
-  ProfileEventType,
 } from "./types.ts";
 import {
   getCodec,
@@ -327,8 +326,8 @@ export class TcpClient {
     this.log("Handshake: Complete!");
   }
 
-  async execute(sql: string): Promise<void> {
-    for await (const _ of this.query(sql)) { }
+  async execute(sql: string, options: QueryOptions = {}): Promise<void> {
+    for await (const _ of this.query(sql, options)) { }
   }
 
   /** Insert a single RecordBatch. */
@@ -780,11 +779,11 @@ export class TcpClient {
                 for (let i = 0; i < batch.rowCount; i++) {
                   const name = nameCol.get(i) as string;
                   const value = valueCol.get(i) as bigint;
-                  const eventType = typeCol.get(i) as number;
-                  if (eventType === ProfileEventType.Increment) {
+                  const eventType = typeCol.get(i) as string;
+                  if (eventType === "Increment") {
                     profileEventsAccumulated.set(name, (profileEventsAccumulated.get(name) ?? 0n) + value);
                   } else {
-                    // ProfileEventType.Gauge: use latest value
+                    // Gauge: use latest value
                     profileEventsAccumulated.set(name, value);
                   }
                 }
