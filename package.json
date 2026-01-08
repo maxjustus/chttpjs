@@ -1,6 +1,6 @@
 {
   "name": "@maxjustus/chttp",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "ClickHouse HTTP client with native compression (LZ4/ZSTD)",
   "type": "module",
   "main": "./dist/chttp.js",
