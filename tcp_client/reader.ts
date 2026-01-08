@@ -173,7 +173,9 @@ export class StreamingReader {
         return val;
       } catch (err) {
         if (err instanceof BufferUnderflowError) {
-          if (this.done) throw err;
+          if (this.done) {
+            throw new Error("Connection closed unexpectedly while reading response");
+          }
           if (this.compressionEnabled) await this.pullCompressedBlock();
           else await this.pullRawChunk();
           continue;

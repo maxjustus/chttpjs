@@ -75,6 +75,8 @@ export interface InsertOptions {
   schema?: ColumnDef[];
   /** Per-insert settings (merged with client defaults, overrides them) */
   settings?: ClickHouseSettings;
+  /** Custom query ID for tracking in system.query_log and KILL QUERY */
+  queryId?: string;
 }
 
 /** Data that can be sent as an external table */
@@ -88,6 +90,8 @@ export interface QueryOptions {
   signal?: AbortSignal;
   /** External tables to send with the query (available as temporary tables in the SQL) */
   externalTables?: Record<string, ExternalTableData>;
+  /** Custom query ID for tracking in system.query_log and KILL QUERY */
+  queryId?: string;
 }
 
 
@@ -315,6 +319,12 @@ export class TcpClient {
       const addendum = this.writer.encodeAddendum(effectiveRevision);
       this.socket.write(addendum);
     }
+
+    // Yield to event loop to allow pending socket I/O to be processed.
+    // Without this, rapid connect() -> query() sequences over high-latency
+    // connections can fail with "Connection closed unexpectedly".
+    await new Promise(resolve => setImmediate(resolve));
+
     this.log("Handshake: Complete!");
   }
 
@@ -356,7 +366,7 @@ export class TcpClient {
       // Merge settings: client defaults < per-insert overrides
       const mergedSettings = { ...this.defaultSettings, ...options.settings };
 
-      const serverSchema = await this.sendInsertQueryAndGetSchema(sql, useCompression, compressionMethod, mergedSettings, () => cancelled);
+      const serverSchema = await this.sendInsertQueryAndGetSchema(sql, useCompression, compressionMethod, mergedSettings, () => cancelled, options.queryId);
 
       // Validate schema if provided
       if (options.schema) {
@@ -487,9 +497,10 @@ export class TcpClient {
     useCompression: boolean,
     compressionMethod: MethodCode,
     settings: Record<string, string | number | boolean>,
-    isCancelled: () => boolean
+    isCancelled: () => boolean,
+    queryId?: string
   ): Promise<ColumnSchema[]> {
-    const queryPacket = this.writer.encodeQuery(randomUUID(), sql, this.serverHello!.revision, settings, useCompression, {});
+    const queryPacket = this.writer.encodeQuery(queryId ?? randomUUID(), sql, this.serverHello!.revision, settings, useCompression, {});
     this.socket!.write(queryPacket);
 
     const delimiter = this.writer.encodeData("", 0, [], this.serverHello!.revision, useCompression, compressionMethod);
@@ -709,7 +720,7 @@ export class TcpClient {
           ...settings,
         };
         const queryPacket = this.writer.encodeQuery(
-          randomUUID(),
+          options.queryId ?? randomUUID(),
           sql,
           this.serverHello.revision,
           baseSettings,
@@ -824,8 +835,10 @@ export class TcpClient {
       if (!reachedEndOfStream && !receivedException && this.socket && this.reader) {
         try {
           await this.drainPackets(useCompression);
-        } catch {
-          // Ignore errors during drain - connection may be closing
+        } catch (err) {
+          // Drain failed - connection is in unknown state, close it to prevent corruption
+          this.log(`[query] drain failed, closing connection: ${err instanceof Error ? err.message : err}`);
+          this.close();
         }
       }
       this.busy = false;
@@ -944,6 +957,7 @@ export class TcpClient {
   }
 
   close() {
+    this.busy = false;
     this.socket?.destroy();
     this.socket = null;
   }

@@ -25,6 +25,9 @@ import { StreamBuffer } from "@maxjustus/chttp/native";
 
 export type Compression = "lz4" | "zstd" | "none";
 
+/** Query parameters for parameterized queries like SELECT {x:UInt64} */
+export type QueryParams = Record<string, string | number | boolean | bigint>;
+
 // AbortSignal.any() added in Node 20+, ES2024
 const AbortSignalAny = AbortSignal as typeof AbortSignal & {
   any(signals: AbortSignal[]): AbortSignal;
@@ -96,6 +99,17 @@ function mergeParams(
   }
 }
 
+/** Merge query parameters with param_ prefix for ClickHouse parameterized queries */
+function mergeQueryParams(
+  target: Record<string, string>,
+  source?: QueryParams
+): void {
+  if (!source) return;
+  for (const [key, value] of Object.entries(source)) {
+    target[`param_${key}`] = String(value);
+  }
+}
+
 interface AuthConfig {
   username?: string;
   password?: string;
@@ -149,8 +163,10 @@ export interface InsertOptions {
   timeout?: number;
   /** ClickHouse settings applied to this insert */
   settings?: ClickHouseSettings;
-  /** Query params */
-  params?: ClickHouseSettings;
+  /** Query parameters for parameterized queries like SELECT {x:UInt64} */
+  params?: QueryParams;
+  /** Custom query ID for tracking in system.query_log and KILL QUERY */
+  queryId?: string;
 }
 
 type InsertData =
@@ -180,8 +196,11 @@ async function insert(
     query: query,
     decompress: "1",
   };
+  if (options.queryId) {
+    params.query_id = options.queryId;
+  }
   mergeParams(params, options.settings);
-  mergeParams(params, options.params);
+  mergeQueryParams(params, options.params);
 
   // Normalize all input types to Iterable<Uint8Array>
   // This ensures consistent chunking behavior (1MB threshold) for all inputs
@@ -366,10 +385,12 @@ export interface QueryOptions {
   clientVersion?: string | number;
   /** ClickHouse settings applied to this query */
   settings?: ClickHouseSettings;
-  /** Query params */
-  params?: ClickHouseSettings;
+  /** Query parameters for parameterized queries like SELECT {x:UInt64} */
+  params?: QueryParams;
   /** External tables to send with the query */
   externalTables?: Record<string, HttpExternalTable>;
+  /** Custom query ID for tracking in system.query_log and KILL QUERY */
+  queryId?: string;
 }
 
 /**
@@ -495,6 +516,10 @@ async function* query(
     params.client_protocol_version = String(options.clientVersion);
   }
 
+  if (options.queryId) {
+    params.query_id = options.queryId;
+  }
+
   // Include any other settings/params passed in options
   const reserved = [
     "baseUrl",
@@ -507,9 +532,10 @@ async function* query(
     "settings",
     "params",
     "externalTables",
+    "queryId",
   ];
   mergeParams(params, options.settings);
-  mergeParams(params, options.params);
+  mergeQueryParams(params, options.params);
   for (const [key, value] of Object.entries(options)) {
     if (!reserved.includes(key) && value !== undefined) {
       params[key] = String(value);

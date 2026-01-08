@@ -51,6 +51,41 @@ for await (const _ of query("CREATE TABLE ...", "session123", config)) {
 }
 ```
 
+## Query Parameters
+
+Use ClickHouse's native query parameters to safely inject values:
+
+```ts
+import { query, collectText } from "@maxjustus/chttp";
+
+// Single parameter
+const result = await collectText(
+  query("SELECT {id:UInt64} as id, {name:String} as name FORMAT JSON", sessionId, {
+    ...config,
+    params: { id: 42, name: "Alice" },
+  }),
+);
+
+// Multiple parameters with different types
+const filtered = await collectText(
+  query(
+    "SELECT * FROM users WHERE age > {min_age:UInt32} AND status = {status:String} FORMAT JSON",
+    sessionId,
+    { ...config, params: { min_age: 18, status: "active" } },
+  ),
+);
+
+// BigInt for large integers
+const big = await collectText(
+  query("SELECT {value:UInt64} FORMAT JSON", sessionId, {
+    ...config,
+    params: { value: 9007199254740993n },
+  }),
+);
+```
+
+Parameters are type-safe and prevent SQL injection. The type annotation (e.g., `{name:String}`) tells ClickHouse how to parse the value.
+
 ## Streaming Large Inserts
 
 The `insert` function accepts `Uint8Array`, `Uint8Array[]`, or `AsyncIterable<Uint8Array>`. Use `streamEncodeJsonEachRow` for JSON data:
@@ -398,6 +433,38 @@ const client = new TcpClient({
   queryTimeout: 30000, // ms
   tls: true, // or tls.ConnectionOptions
 });
+```
+
+### Query Parameters
+
+Use parameterized queries to safely inject values:
+
+```ts
+// UInt64 parameter
+for await (const packet of client.query(
+  "SELECT {value:UInt64} as v",
+  { params: { value: 42 } }
+)) {
+  if (packet.type === "Data") {
+    console.log(packet.batch.getColumn("v")?.get(0)); // 42n
+  }
+}
+
+// String parameter
+for await (const packet of client.query(
+  "SELECT {name:String} as s",
+  { params: { name: "hello world" } }
+)) {
+  // ...
+}
+
+// Multiple parameters
+for await (const packet of client.query(
+  "SELECT * FROM users WHERE age > {min_age:UInt32} AND status = {status:String}",
+  { params: { min_age: 18, status: "active" } }
+)) {
+  // ...
+}
 ```
 
 ### Streaming Results

@@ -516,4 +516,64 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.ok(blocksDetected >= 1, "Should process at least one block");
     });
   });
+
+  describe("Query parameters", () => {
+    it("should use query parameters with UInt64", async () => {
+      const result = await collectText(
+        query("SELECT {value:UInt64} as v FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { value: 42 },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(Number(parsed.data[0].v), 42);
+    });
+
+    it("should use query parameters with String", async () => {
+      const result = await collectText(
+        query("SELECT {name:String} as s FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { name: "hello world" },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data[0].s, "hello world");
+    });
+
+    it("should use query parameters with multiple values", async () => {
+      const result = await collectText(
+        query(
+          "SELECT {a:UInt32} + {b:UInt32} as sum, {msg:String} as msg FORMAT JSON",
+          sessionId,
+          {
+            baseUrl,
+            auth,
+            params: { a: 10, b: 32, msg: "test" },
+          },
+        ),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(Number(parsed.data[0].sum), 42);
+      assert.strictEqual(parsed.data[0].msg, "test");
+    });
+
+    it("should use query parameters with BigInt", async () => {
+      // Use JSONStringsEachRow to preserve precision for large integers
+      const result = await collectText(
+        query("SELECT {big:UInt64} as v FORMAT JSONStringsEachRow", sessionId, {
+          baseUrl,
+          auth,
+          params: { big: 9007199254740993n },
+        }),
+      );
+
+      const parsed = JSON.parse(result.trim());
+      assert.strictEqual(parsed.v, "9007199254740993");
+    });
+  });
 });
