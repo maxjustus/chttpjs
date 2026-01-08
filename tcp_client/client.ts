@@ -315,15 +315,14 @@ export class TcpClient {
     };
 
     if (effectiveRevision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_QUOTA_KEY) {
-      // Send addendum (quota key, etc)
+      // Send addendum (quota key, etc) - await to ensure it's flushed before returning.
+      // Without this, rapid connect() -> query() can fail because Query packet
+      // may be written before addendum is actually sent.
       const addendum = this.writer.encodeAddendum(effectiveRevision);
-      this.socket.write(addendum);
+      await new Promise<void>((resolve, reject) => {
+        this.socket!.write(addendum, (err) => (err ? reject(err) : resolve()));
+      });
     }
-
-    // Yield to event loop to allow pending socket I/O to be processed.
-    // Without this, rapid connect() -> query() sequences over high-latency
-    // connections can fail with "Connection closed unexpectedly".
-    await new Promise(resolve => setImmediate(resolve));
 
     this.log("Handshake: Complete!");
   }
