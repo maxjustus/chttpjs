@@ -69,6 +69,7 @@ export interface ServerHello {
   patch: bigint;
 }
 
+/** Raw progress delta from a single Progress packet */
 export interface Progress {
   readRows: bigint;
   readBytes: bigint;
@@ -77,6 +78,19 @@ export interface Progress {
   writtenRows?: bigint;
   writtenBytes?: bigint;
   elapsedNs?: bigint;
+}
+
+/** Accumulated progress across all Progress packets */
+export interface AccumulatedProgress {
+  readRows: bigint;
+  readBytes: bigint;
+  totalRowsToRead: bigint;
+  totalBytesToRead: bigint;
+  writtenRows: bigint;
+  writtenBytes: bigint;
+  elapsedNs: bigint;
+  /** Percentage complete (0-100) based on rows read vs total rows */
+  percent: number;
 }
 
 export interface ProfileInfo {
@@ -106,7 +120,7 @@ export type Packet =
   | { type: "Totals", batch: RecordBatch }
   | { type: "Extremes", batch: RecordBatch }
   | { type: "Log", entries: LogEntry[] }
-  | { type: "Progress", progress: Progress }
+  | { type: "Progress", progress: Progress, accumulated: AccumulatedProgress }
   | { type: "ProfileInfo", info: ProfileInfo }
   | { type: "ProfileEvents", batch: RecordBatch, accumulated: Map<string, bigint> }
   | { type: "EndOfStream" };

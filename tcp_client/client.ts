@@ -6,6 +6,7 @@ import { StreamingWriter } from "./writer.ts";
 import {
   ServerPacketId,
   type Progress,
+  type AccumulatedProgress,
   type ServerHello,
   type ProfileInfo,
   type Packet,
@@ -744,6 +745,18 @@ export class TcpClient {
         // Accumulate ProfileEvents deltas
         const profileEventsAccumulated = new Map<string, bigint>();
 
+        // Accumulate Progress deltas
+        const progressAccumulated: AccumulatedProgress = {
+          readRows: 0n,
+          readBytes: 0n,
+          totalRowsToRead: 0n,
+          totalBytesToRead: 0n,
+          writtenRows: 0n,
+          writtenBytes: 0n,
+          elapsedNs: 0n,
+          percent: 0,
+        };
+
         while (true) {
           this.log(`[query] reading packet id...`);
           const packetId = Number(await this.reader.readVarInt());
@@ -762,9 +775,21 @@ export class TcpClient {
               if (batch.rowCount > 0) yield { type: "Data", batch };
               break;
             }
-            case ServerPacketId.Progress:
-              yield { type: "Progress", progress: await this.readProgress() };
+            case ServerPacketId.Progress: {
+              const progress = await this.readProgress();
+              progressAccumulated.readRows += progress.readRows;
+              progressAccumulated.readBytes += progress.readBytes;
+              progressAccumulated.totalRowsToRead += progress.totalRowsToRead;
+              progressAccumulated.totalBytesToRead += progress.totalBytesToRead ?? 0n;
+              progressAccumulated.writtenRows += progress.writtenRows ?? 0n;
+              progressAccumulated.writtenBytes += progress.writtenBytes ?? 0n;
+              progressAccumulated.elapsedNs += progress.elapsedNs ?? 0n;
+              progressAccumulated.percent = progressAccumulated.totalRowsToRead > 0n
+                ? Number(progressAccumulated.readRows * 100n / progressAccumulated.totalRowsToRead)
+                : 0;
+              yield { type: "Progress", progress, accumulated: progressAccumulated };
               break;
+            }
             case ServerPacketId.ProfileInfo:
               yield { type: "ProfileInfo", info: await this.readProfileInfo() };
               break;

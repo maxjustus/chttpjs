@@ -3,6 +3,7 @@ export type { ClickHouseSettings } from "../settings.ts";
 export {
   type Packet,
   type Progress,
+  type AccumulatedProgress,
   type ProfileInfo,
   type LogEntry,
   type ServerHello,
