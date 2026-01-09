@@ -780,7 +780,7 @@ export class TcpClient {
                   const name = nameCol.get(i) as string;
                   const value = valueCol.get(i) as bigint;
                   const eventType = typeCol.get(i) as string;
-                  if (eventType === "Increment") {
+                  if (eventType === "increment") {
                     profileEventsAccumulated.set(name, (profileEventsAccumulated.get(name) ?? 0n) + value);
                   } else {
                     // Gauge: use latest value
