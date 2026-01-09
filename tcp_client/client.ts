@@ -784,8 +784,11 @@ export class TcpClient {
               progressAccumulated.writtenRows += progress.writtenRows ?? 0n;
               progressAccumulated.writtenBytes += progress.writtenBytes ?? 0n;
               progressAccumulated.elapsedNs += progress.elapsedNs ?? 0n;
-              progressAccumulated.percent = progressAccumulated.totalRowsToRead > 0n
-                ? Number(progressAccumulated.readRows * 100n / progressAccumulated.totalRowsToRead)
+              const progressDenom = progressAccumulated.readRows > progressAccumulated.totalRowsToRead
+                ? progressAccumulated.readRows
+                : progressAccumulated.totalRowsToRead;
+              progressAccumulated.percent = progressDenom > 0n
+                ? Number(progressAccumulated.readRows * 100n / progressDenom)
                 : 0;
               yield { type: "Progress", progress, accumulated: progressAccumulated };
               break;
