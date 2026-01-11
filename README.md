@@ -384,6 +384,34 @@ Supports all ClickHouse types including integers (Int8-Int256, UInt8-UInt256), f
 
 **Limitation**: `Dynamic` and `JSON` types require V3 flattened format. On ClickHouse 25.6+, set `output_format_native_use_flattened_dynamic_and_json_serialization=1`.
 
+### BigInt
+
+ClickHouse integer types (Int64, UInt64, Int128, etc.) are returned as JavaScript BigInt values via the Native format to preserve full precision.
+By default, `JSON.stringify()` throws when trying to serialize BigInts.
+Add this code so it runs once at startup to enable serialization of BigInts to strings as a global default (matching ClickHouse's default behavior for JSON encoding):
+
+```typescript
+BigInt.prototype.toJSON = function() { return this.toString(); };
+```
+
+as awful as it might seem to monkeypatch built-ins this is actually a "blessed"/suggested approach:
+https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt#use_within_json
+
+Alternatively you can pass `{ bigIntAsString: true }` to convert bigints to strings when materializing rows:
+
+```ts
+// On row access
+const row = batch.get(0, { bigIntAsString: true });
+console.log(row.largeId); // "9223372036854775807" (string)
+
+// On toObject/toArray
+const obj = row.toObject({ bigIntAsString: true });
+const arr = row.toArray({ bigIntAsString: true });
+
+// On batch materialization
+const allRows = batch.toArray({ bigIntAsString: true });
+```
+
 ## TCP Client (Experimental)
 
 Direct TCP protocol for lower latency. Single connection per client - use separate clients for concurrent operations.

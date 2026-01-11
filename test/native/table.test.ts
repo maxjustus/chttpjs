@@ -595,3 +595,84 @@ describe("Complex types via makeBuilder", () => {
     assert.deepStrictEqual(toArrayRows(decoded), toArrayRows(table));
   });
 });
+
+describe("bigIntAsString option", () => {
+  it("batch.get() converts bigint to string when option is set", () => {
+    const batch = batchFromArrays(
+      [{ name: "id", type: "Int64" }, { name: "name", type: "String" }],
+      { id: [1n, 9223372036854775807n], name: ["small", "max"] }
+    );
+
+    const row1 = batch.get(1);
+    assert.strictEqual(typeof row1.id, "bigint");
+    assert.strictEqual(row1.id, 9223372036854775807n);
+
+    const row2 = batch.get(1, { bigIntAsString: true });
+    assert.strictEqual(typeof row2.id, "string");
+    assert.strictEqual(row2.id, "9223372036854775807");
+    assert.strictEqual(row2.name, "max");
+  });
+
+  it("row.toObject() converts bigint to string when option is set", () => {
+    const batch = batchFromArrays(
+      [{ name: "val", type: "UInt64" }],
+      { val: [18446744073709551615n] }
+    );
+    const row = batch.get(0);
+
+    assert.strictEqual(typeof row.toObject().val, "bigint");
+
+    const obj = row.toObject({ bigIntAsString: true });
+    assert.strictEqual(typeof obj.val, "string");
+    assert.strictEqual(obj.val, "18446744073709551615");
+  });
+
+  it("row.toArray() converts bigint to string when option is set", () => {
+    const batch = batchFromArrays(
+      [{ name: "a", type: "Int64" }, { name: "b", type: "Int32" }],
+      { a: [123n], b: [456] }
+    );
+    const row = batch.get(0);
+
+    assert.strictEqual(typeof row.toArray()[0], "bigint");
+
+    const arr = row.toArray({ bigIntAsString: true });
+    assert.strictEqual(typeof arr[0], "string");
+    assert.strictEqual(arr[0], "123");
+    assert.strictEqual(arr[1], 456);
+  });
+
+  it("batch.toArray() converts bigint to string when option is set", () => {
+    const batch = batchFromArrays(
+      [{ name: "big", type: "Int128" }],
+      { big: [170141183460469231731687303715884105727n] }
+    );
+
+    assert.strictEqual(typeof batch.toArray()[0].big, "bigint");
+
+    const rows = batch.toArray({ bigIntAsString: true });
+    assert.strictEqual(typeof rows[0].big, "string");
+    assert.strictEqual(rows[0].big, "170141183460469231731687303715884105727");
+  });
+
+  it("option set on batch.get() applies to row property access", () => {
+    const batch = batchFromArrays(
+      [{ name: "x", type: "Int64" }],
+      { x: [42n] }
+    );
+    const row = batch.get(0, { bigIntAsString: true });
+    assert.strictEqual(typeof row.x, "string");
+    assert.strictEqual(row.x, "42");
+  });
+
+  it("option can be overridden in toObject/toArray", () => {
+    const batch = batchFromArrays(
+      [{ name: "n", type: "UInt64" }],
+      { n: [999n] }
+    );
+    const row = batch.get(0, { bigIntAsString: true });
+
+    assert.strictEqual(typeof row.toObject({ bigIntAsString: false }).n, "bigint");
+    assert.strictEqual(typeof row.toArray({ bigIntAsString: false })[0], "bigint");
+  });
+});

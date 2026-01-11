@@ -3,6 +3,17 @@ import { type Column, DataColumn } from "./columns.ts";
 import { type Block } from "./index.ts";
 import { getCodec, makeBuilder, type ColumnBuilder } from "./codecs.ts";
 
+/** Options for materializing row data. */
+export interface MaterializeOptions {
+  /** Convert bigint values (Int64, UInt64, Int128, etc.) to strings. */
+  bigIntAsString?: boolean;
+}
+
+function maybeStringify(val: unknown, opts?: MaterializeOptions): unknown {
+  if (opts?.bigIntAsString && typeof val === "bigint") return val.toString();
+  return val;
+}
+
 /**
  * A Row object is a Proxy that lazily accesses column data.
  *
@@ -14,9 +25,9 @@ import { getCodec, makeBuilder, type ColumnBuilder } from "./codecs.ts";
  */
 export type Row = Record<string, unknown> & {
   /** Materialize row to a plain object. */
-  toObject(): Record<string, unknown>;
+  toObject(options?: MaterializeOptions): Record<string, unknown>;
   /** Materialize row to a plain array in column order. */
-  toArray(): unknown[];
+  toArray(options?: MaterializeOptions): unknown[];
 };
 
 /**
@@ -95,11 +106,11 @@ export class RecordBatch implements Iterable<Row> {
   }
 
   /** Get row at index (returns a lazy Proxy). */
-  get(index: number): Row {
+  get(index: number, options?: MaterializeOptions): Row {
     if (index < 0 || index >= this.rowCount) {
       throw new RangeError(`Index out of bounds: ${index}`);
     }
-    return createRowProxy(this, index);
+    return createRowProxy(this, index, options);
   }
 
   /** Iterate over rows lazily. Default iterator creates new proxies per row (safe to store/collect). */
@@ -110,7 +121,7 @@ export class RecordBatch implements Iterable<Row> {
   }
 
   /** Materialize all rows to plain objects. */
-  toArray(): Record<string, unknown>[] {
+  toArray(options?: MaterializeOptions): Record<string, unknown>[] {
     const result = new Array(this.rowCount);
     const numCols = this.columns.length;
     const names = this.columnNames;
@@ -118,7 +129,7 @@ export class RecordBatch implements Iterable<Row> {
     for (let i = 0; i < this.rowCount; i++) {
       const row: Record<string, unknown> = {};
       for (let j = 0; j < numCols; j++) {
-        row[names[j]] = this.columnData[j].get(i);
+        row[names[j]] = maybeStringify(this.columnData[j].get(i), options);
       }
       result[i] = row;
     }
@@ -134,12 +145,17 @@ export class RecordBatch implements Iterable<Row> {
 /**
  * internal helper to create a lazy row proxy.
  */
-function createRowProxy(batch: RecordBatch, rowIndex: number): Row {
+function createRowProxy(
+  batch: RecordBatch,
+  rowIndex: number,
+  options?: MaterializeOptions,
+): Row {
   const names = batch.columnNames;
-  const materialize = () => {
+  const materialize = (opts?: MaterializeOptions) => {
+    const o = opts ?? options;
     const obj: Record<string, unknown> = {};
     for (let j = 0; j < batch.numCols; j++) {
-      obj[names[j]] = batch.columnData[j].get(rowIndex);
+      obj[names[j]] = maybeStringify(batch.columnData[j].get(rowIndex), o);
     }
     return obj;
   };
@@ -149,17 +165,18 @@ function createRowProxy(batch: RecordBatch, rowIndex: number): Row {
         return materialize;
       }
       if (prop === "toArray") {
-        return () => {
+        return (opts?: MaterializeOptions) => {
+          const o = opts ?? options;
           const arr = new Array(batch.numCols);
           for (let j = 0; j < batch.numCols; j++) {
-            arr[j] = batch.columnData[j].get(rowIndex);
+            arr[j] = maybeStringify(batch.columnData[j].get(rowIndex), o);
           }
           return arr;
         };
       }
       if (typeof prop === "string") {
         const col = batch.getColumn(prop);
-        if (col) return col.get(rowIndex);
+        if (col) return maybeStringify(col.get(rowIndex), options);
       }
       return undefined;
     },
@@ -172,7 +189,7 @@ function createRowProxy(batch: RecordBatch, rowIndex: number): Row {
         return {
           enumerable: true,
           configurable: true,
-          value: col ? col.get(rowIndex) : undefined,
+          value: col ? maybeStringify(col.get(rowIndex), options) : undefined,
         };
       }
       return undefined;

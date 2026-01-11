@@ -28,6 +28,7 @@ import {
   RecordBatch,
   RecordBatchBuilder,
   type Row,
+  type MaterializeOptions,
   batchFromArrays,
   batchFromRows,
   batchFromCols,
@@ -45,7 +46,7 @@ export {
 } from "./types.ts";
 
 // Re-export table helpers / types
-export { type Column, RecordBatch, RecordBatchBuilder, type Row, EnumColumn };
+export { type Column, RecordBatch, RecordBatchBuilder, type Row, type MaterializeOptions, EnumColumn };
 export { batchFromArrays, batchFromRows, batchFromCols, batchBuilder };
 export { rows, collectRows };
 export { makeBuilder, getCodec, type ColumnBuilder } from "./codecs.ts";
