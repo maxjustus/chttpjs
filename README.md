@@ -60,7 +60,7 @@ import { query, collectText } from "@maxjustus/chttp";
 
 // Single parameter
 const result = await collectText(
-  query("SELECT {id:UInt64} as id, {name:String} as name FORMAT JSON", sessionId, {
+  query("SELECT {id: UInt64} as id, {name: String} as name FORMAT JSON", sessionId, {
     ...config,
     params: { id: 42, name: "Alice" },
   }),
@@ -69,7 +69,7 @@ const result = await collectText(
 // Multiple parameters with different types
 const filtered = await collectText(
   query(
-    "SELECT * FROM users WHERE age > {min_age:UInt32} AND status = {status:String} FORMAT JSON",
+    "SELECT * FROM users WHERE age > {min_age: UInt32} AND status = {status: String} FORMAT JSON",
     sessionId,
     { ...config, params: { min_age: 18, status: "active" } },
   ),
@@ -77,14 +77,14 @@ const filtered = await collectText(
 
 // BigInt for large integers
 const big = await collectText(
-  query("SELECT {value:UInt64} FORMAT JSON", sessionId, {
+  query("SELECT {value: UInt64} FORMAT JSON", sessionId, {
     ...config,
     params: { value: 9007199254740993n },
   }),
 );
 ```
 
-Parameters are type-safe and prevent SQL injection. The type annotation (e.g., `{name:String}`) tells ClickHouse how to parse the value.
+Parameters are type-safe and prevent SQL injection. The type annotation (e.g., `{name: String}`) tells ClickHouse how to parse the value.
 
 ## Streaming Large Inserts
 
@@ -470,7 +470,7 @@ Use parameterized queries to safely inject values:
 ```ts
 // UInt64 parameter
 for await (const packet of client.query(
-  "SELECT {value:UInt64} as v",
+  "SELECT {value: UInt64} as v",
   { params: { value: 42 } }
 )) {
   if (packet.type === "Data") {
@@ -480,7 +480,7 @@ for await (const packet of client.query(
 
 // String parameter
 for await (const packet of client.query(
-  "SELECT {name:String} as s",
+  "SELECT {name: String} as s",
   { params: { name: "hello world" } }
 )) {
   // ...
@@ -488,7 +488,7 @@ for await (const packet of client.query(
 
 // Multiple parameters
 for await (const packet of client.query(
-  "SELECT * FROM users WHERE age > {min_age:UInt32} AND status = {status:String}",
+  "SELECT * FROM users WHERE age > {min_age: UInt32} AND status = {status: String}",
   { params: { min_age: 18, status: "active" } }
 )) {
   // ...
