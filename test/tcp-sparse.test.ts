@@ -53,7 +53,7 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
     await stopClickHouse();
   });
 
-  for (const compression of [false, true]) {
+  for (const compression of [false, 'lz4'] as const) {
     it(`reads sparse data ${compression ? "with" : "without"} compression`, async () => {
       const client = new TcpClient({
         host: chConfig.host,

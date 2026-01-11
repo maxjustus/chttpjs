@@ -37,7 +37,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query(
         "CREATE TABLE IF NOT EXISTS test_basic (id UInt32, name String) ENGINE = Memory",
         sessionId,
-        { baseUrl, auth, compression: "none" },
+        { baseUrl, auth, compression: false },
       ));
 
       // Insert data using streamEncodeJsonEachRow helper
@@ -71,13 +71,13 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query("DROP TABLE test_basic", sessionId, {
         baseUrl,
         auth,
-        compression: "none",
+        compression: false,
       }));
     });
   });
 
   describe("Compression methods", () => {
-    for (const compression of ["none", "lz4", "zstd"] as const) {
+    for (const compression of [false, "lz4", "zstd"] as const) {
       it(`should insert with ${compression} compression`, async () => {
         await consume(query(
           "CREATE TABLE IF NOT EXISTS test_compression (value String) ENGINE = Memory",
@@ -123,7 +123,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query(
         "CREATE TABLE IF NOT EXISTS test_generator (id UInt32, value String) ENGINE = Memory",
         sessionId,
-        { baseUrl, auth, compression: "none" },
+        { baseUrl, auth, compression: false },
       ));
 
       // Generator that yields byte batches
@@ -177,7 +177,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query("DROP TABLE test_generator", sessionId, {
         baseUrl,
         auth,
-        compression: "none",
+        compression: false,
       }));
     });
 
@@ -186,7 +186,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query(
         "CREATE TABLE IF NOT EXISTS test_single (id UInt32) ENGINE = Memory",
         sessionId,
-        { baseUrl, auth, compression: "none" },
+        { baseUrl, auth, compression: false },
       ));
 
       // Use streamEncodeJsonEachRow with async generator
@@ -219,7 +219,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query("DROP TABLE test_single", sessionId, {
         baseUrl,
         auth,
-        compression: "none",
+        compression: false,
       }));
     });
   });
@@ -230,7 +230,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query(
         "CREATE TABLE IF NOT EXISTS test_stream (id UInt32) ENGINE = Memory",
         sessionId,
-        { baseUrl, auth, compression: "none" },
+        { baseUrl, auth, compression: false },
       ));
 
       // Insert test data
@@ -264,7 +264,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query("DROP TABLE test_stream", sessionId, {
         baseUrl,
         auth,
-        compression: "none",
+        compression: false,
       }));
     });
 
@@ -297,7 +297,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         await consume(query(
           "SELECT * FROM non_existent_table",
           sessionId,
-          { baseUrl, auth, compression: "none" },
+          { baseUrl, auth, compression: false },
         ));
         assert.fail("Should have thrown an error");
       } catch (err) {
@@ -314,7 +314,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query(
         "CREATE TABLE IF NOT EXISTS test_error (id UInt32) ENGINE = Memory",
         sessionId,
-        { baseUrl, auth, compression: "none" },
+        { baseUrl, auth, compression: false },
       ));
 
       // Try to insert wrong data type
@@ -342,7 +342,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query("DROP TABLE test_error", sessionId, {
         baseUrl,
         auth,
-        compression: "none",
+        compression: false,
       }));
     });
   });
@@ -353,7 +353,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query(
         "CREATE TABLE IF NOT EXISTS test_stream_error (id UInt32, value String) ENGINE = Memory",
         sessionId,
-        { baseUrl, auth, compression: "none" },
+        { baseUrl, auth, compression: false },
       ));
 
       // Generator that throws after some items
@@ -384,7 +384,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query(
         "DROP TABLE test_stream_error",
         sessionId,
-        { baseUrl, auth, compression: "none" },
+        { baseUrl, auth, compression: false },
       ));
     });
 
@@ -393,7 +393,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query(
         "CREATE TABLE IF NOT EXISTS test_abort (id UInt32) ENGINE = Memory",
         sessionId,
-        { baseUrl, auth, compression: "none" },
+        { baseUrl, auth, compression: false },
       ));
 
       const controller = new AbortController();
@@ -430,7 +430,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query("DROP TABLE test_abort", sessionId, {
         baseUrl,
         auth,
-        compression: "none",
+        compression: false,
       }));
     });
 
@@ -439,7 +439,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query(
         "CREATE TABLE IF NOT EXISTS test_progress (id UInt32) ENGINE = Memory",
         sessionId,
-        { baseUrl, auth, compression: "none" },
+        { baseUrl, auth, compression: false },
       ));
 
       const progressEvents: any[] = [];
@@ -483,7 +483,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       await consume(query("DROP TABLE test_progress", sessionId, {
         baseUrl,
         auth,
-        compression: "none",
+        compression: false,
       }));
     });
   });

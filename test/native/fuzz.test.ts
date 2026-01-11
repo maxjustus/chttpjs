@@ -564,7 +564,7 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
             query(
               `CREATE TABLE ${srcTable} ENGINE = MergeTree ORDER BY tuple() AS SELECT * FROM generateRandom('${escapedStructure}') LIMIT ${rowCount}`,
               sessionId,
-              { baseUrl, auth, compression: "none" },
+              { baseUrl, auth, compression: false },
             ),
           );
 
@@ -573,7 +573,7 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
             query(`CREATE TABLE ${dstTable} EMPTY AS ${srcTable}`, sessionId, {
               baseUrl,
               auth,
-              compression: "none",
+              compression: false,
             }),
           );
 
@@ -708,14 +708,14 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
             query(`DROP TABLE IF EXISTS ${srcTable}`, insertSessionId, {
               baseUrl,
               auth,
-              compression: "none",
+              compression: false,
             }),
           );
           await consume(
             query(`DROP TABLE IF EXISTS ${dstTable}`, insertSessionId, {
               baseUrl,
               auth,
-              compression: "none",
+              compression: false,
             }),
           );
         }

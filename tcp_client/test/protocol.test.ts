@@ -62,7 +62,7 @@ describe("TCP Client Protocol Features", () => {
   });
 
   test("should use LZ4 compression by default when enabled", async () => {
-    const client = new TcpClient({ ...options, compression: true });
+    const client = new TcpClient({ ...options, compression: 'lz4' });
     await client.connect();
     try {
       let rows = 0;
@@ -76,7 +76,7 @@ describe("TCP Client Protocol Features", () => {
   });
 
   test("should insert with LZ4 compression", async () => {
-    const client = new TcpClient({ ...options, compression: true });
+    const client = new TcpClient({ ...options, compression: 'lz4' });
     await client.connect();
     try {
       const tableName = `test_insert_lz4_${Date.now()}`;

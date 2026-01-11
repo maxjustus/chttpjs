@@ -23,7 +23,7 @@ export {
 
 import { StreamBuffer } from "@maxjustus/chttp/native";
 
-export type Compression = "lz4" | "zstd" | "none";
+export type Compression = 'lz4' | 'zstd' | false;
 
 /** Query parameters for parameterized queries like SELECT {x:UInt64} */
 export type QueryParams = Record<string, string | number | boolean | bigint>;
@@ -49,7 +49,7 @@ function compressionToMethod(compression: Compression): MethodCode {
       return Method.LZ4;
     case "zstd":
       return Method.ZSTD;
-    case "none":
+    case false:
       return Method.None;
   }
 }
@@ -149,7 +149,7 @@ interface ProgressInfo {
 
 export interface InsertOptions {
   baseUrl?: string;
-  /** Compression method: "lz4" (default), "zstd", or "none" */
+  /** Compression method: "lz4" (default), "zstd", or false */
   compression?: Compression;
   /** Size in bytes for the compression buffer (default: 1MB) */
   bufferSize?: number;
@@ -368,7 +368,7 @@ export interface HttpExternalTable {
 export interface QueryOptions {
   baseUrl?: string;
   auth?: AuthConfig;
-  /** Compression method for response: "lz4" (default), "zstd", or "none" */
+  /** Compression method for response: "lz4" (default), "zstd", or false */
   compression?: Compression;
   /**
    * Compress query body using HTTP Content-Encoding.
@@ -498,7 +498,7 @@ async function* query(
   await init();
   const baseUrl = options.baseUrl || "http://localhost:8123/";
   const compression = options.compression ?? "lz4";
-  const compressed = compression !== "none";
+  const compressed = compression !== false;
   const params: Record<string, string> = {
     session_id: sessionId,
     default_format: "JSONEachRowWithProgress",

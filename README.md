@@ -746,7 +746,7 @@ Set `compression` in options:
 
 - `"lz4"` - fast, native in Node.js with WASM fallback (default)
 - `"zstd"` - ~2x better compression, native in Node.js with WASM fallback
-- `"none"` - no compression
+- `false` - no compression
 
 ZSTD and LZ4 use native bindings in Node.js when available, falling back to WASM in browsers. Run `npm run bench` to see compression ratios and speeds for your data.
 

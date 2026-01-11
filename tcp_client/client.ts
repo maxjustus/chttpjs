@@ -46,8 +46,8 @@ export interface TcpClientOptions {
   user?: string;
   password?: string;
   debug?: boolean;
-  /** Compression: true/'lz4' for LZ4, 'zstd' for ZSTD, false to disable */
-  compression?: boolean | 'lz4' | 'zstd';
+  /** Compression: 'lz4', 'zstd', or false to disable */
+  compression?: 'lz4' | 'zstd' | false;
   /** Connection timeout in ms (default: 10000) */
   connectTimeout?: number;
   /** Query timeout in ms (default: 30000) */
