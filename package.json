@@ -1,6 +1,6 @@
 {
   "name": "@maxjustus/chttp",
-  "version": "1.8.3",
+  "version": "1.9.0",
   "description": "ClickHouse HTTP client with native compression (LZ4/ZSTD)",
   "type": "module",
   "main": "./dist/chttp.js",
@@ -55,7 +55,7 @@
     "vendor:lz4": "npx jsr add @nick/lz4 && cp node_modules/@nick/lz4/lib/lz4.js node_modules/@nick/lz4/lib/lz4.internal.js vendor/lz4/ && rm -rf node_modules/@nick"
   },
   "author": "maxjustus",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@bokuweb/zstd-wasm": "^0.0.27",
     "ch-city-wasm": "^0.1.1"
