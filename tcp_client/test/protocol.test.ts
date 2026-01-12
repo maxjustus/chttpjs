@@ -37,7 +37,7 @@ describe("TCP Client Protocol Features", () => {
       let gotExtremes = false;
       for await (const packet of client.query(
         "SELECT number FROM numbers(100)",
-        { settings: { extremes: 1 } }
+        { settings: { extremes: true } }
       )) {
         if (packet.type === "Extremes") gotExtremes = true;
       }
@@ -176,7 +176,7 @@ describe("TCP Client Protocol Features", () => {
       // Use frequent profile events to get multiple packets
       for await (const packet of client.query(
         "SELECT sleep(0.05), number FROM numbers(10)",
-        { settings: { send_profile_events: 1, profile_events_delay_ms: 25 } }
+        { settings: { send_profile_events: true, profile_events_delay_ms: 25 } }
       )) {
         if (packet.type === "ProfileEvents") {
           packetCount++;

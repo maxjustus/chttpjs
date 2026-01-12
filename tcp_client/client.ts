@@ -495,7 +495,7 @@ export class TcpClient {
     sql: string,
     useCompression: boolean,
     compressionMethod: MethodCode,
-    settings: Record<string, string | number | boolean>,
+    settings: Record<string, unknown>,
     isCancelled: () => boolean,
     queryId?: string
   ): Promise<ColumnSchema[]> {

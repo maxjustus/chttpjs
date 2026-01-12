@@ -1,1 +1,1 @@
-export type ClickHouseSettings = Record<string, string | number | boolean>;
+export type { ClickHouseSettings } from "./settings.generated.ts";
