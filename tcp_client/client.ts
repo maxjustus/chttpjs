@@ -755,6 +755,10 @@ export class TcpClient {
           writtenBytes: 0n,
           elapsedNs: 0n,
           percent: 0,
+          memoryUsage: 0n,
+          peakMemoryUsage: 0n,
+          cpuTimeMicroseconds: 0n,
+          cpuUsage: 0,
         };
 
         while (true) {
@@ -803,17 +807,49 @@ export class TcpClient {
               const nameCol = batch.getColumn("name");
               const valueCol = batch.getColumn("value");
               const typeCol = batch.getColumn("type");
+              const threadIdCol = batch.getColumn("thread_id");
               if (nameCol && valueCol && typeCol) {
                 for (let i = 0; i < batch.rowCount; i++) {
                   const name = nameCol.get(i) as string;
                   const value = valueCol.get(i) as bigint;
                   const eventType = typeCol.get(i) as string;
+                  // Only process query-level aggregates (thread_id == 0), not per-thread stats
+                  const threadId = threadIdCol ? threadIdCol.get(i) as bigint : 0n;
                   if (eventType === "increment") {
                     profileEventsAccumulated.set(name, (profileEventsAccumulated.get(name) ?? 0n) + value);
                   } else {
                     // Gauge: use latest value
                     profileEventsAccumulated.set(name, value);
                   }
+                  // Extract memory/CPU metrics for query-level aggregates only
+                  if (threadId === 0n) {
+                    switch (name) {
+                      case "MemoryTrackerUsage":
+                        // Current memory - use latest value
+                        progressAccumulated.memoryUsage = value;
+                        break;
+                      case "MemoryTrackerPeakUsage":
+                        // Use max for peak memory across all hosts
+                        if (value > progressAccumulated.peakMemoryUsage) {
+                          progressAccumulated.peakMemoryUsage = value;
+                        }
+                        break;
+                      case "UserTimeMicroseconds":
+                      case "SystemTimeMicroseconds":
+                        // CPU time is incremental, accumulate it
+                        if (eventType === "increment") {
+                          progressAccumulated.cpuTimeMicroseconds += value;
+                        }
+                        break;
+                    }
+                  }
+                }
+                // Recalculate CPU usage (equivalent CPUs busy)
+                if (progressAccumulated.elapsedNs > 0n) {
+                  const elapsedMicros = progressAccumulated.elapsedNs / 1000n;
+                  progressAccumulated.cpuUsage = elapsedMicros > 0n
+                    ? Number(progressAccumulated.cpuTimeMicroseconds) / Number(elapsedMicros)
+                    : 0;
                 }
               }
               yield { type: "ProfileEvents", batch, accumulated: profileEventsAccumulated };

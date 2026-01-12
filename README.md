@@ -522,6 +522,47 @@ for await (const packet of client.query(sql, { settings: { send_logs_level: "tra
 }
 ```
 
+### Progress Tracking
+
+Progress packets contain **delta values** (increments since the last packet). The client accumulates these into running totals available via `packet.accumulated`:
+
+```ts
+for await (const packet of client.query(sql)) {
+  if (packet.type === "Progress") {
+    const { accumulated } = packet;
+    console.log(`${accumulated.percent}% complete`);
+    console.log(`Read: ${accumulated.readRows} rows, ${accumulated.readBytes} bytes`);
+    console.log(`Elapsed: ${Number(accumulated.elapsedNs) / 1e9}s`);
+  }
+}
+```
+
+The percentage calculation uses `max(readRows, totalRowsToRead)` as denominator to handle cases where the server's estimate is low.
+
+### ProfileEvents and Resource Metrics
+
+ProfileEvents packets provide detailed execution metrics (memory usage, CPU time, I/O stats). Memory and CPU stats are automatically merged into the accumulated progress:
+
+```ts
+for await (const packet of client.query(sql)) {
+  if (packet.type === "Progress") {
+    const { accumulated } = packet;
+    console.log(`Memory: ${accumulated.memoryUsage} bytes`);
+    console.log(`Peak memory: ${accumulated.peakMemoryUsage} bytes`);
+    console.log(`CPU time: ${accumulated.cpuTimeMicroseconds}µs`);
+    console.log(`CPU cores utilized: ${accumulated.cpuUsage.toFixed(1)}`);
+  }
+
+  if (packet.type === "ProfileEvents") {
+    // Raw accumulated event counters
+    console.log(`Selected rows: ${packet.accumulated.get("SelectedRows")}`);
+    console.log(`Read bytes: ${packet.accumulated.get("ReadCompressedBytes")}`);
+  }
+}
+```
+
+`memoryUsage` reflects current memory (latest value), while `peakMemoryUsage` tracks the highest seen (max). CPU time is summed. The `cpuUsage` field shows equivalent CPUs utilized (1.0 = one full CPU, 4.0 = four CPUs busy).
+
 ### Insert API
 
 The `insert()` method accepts RecordBatches or row objects:
