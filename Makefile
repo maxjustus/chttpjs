@@ -1,4 +1,4 @@
-.PHONY: build test test-tcp fuzz fuzz-tcp bench bench-formats bench-profile profile-complex profile-variant profile-dynamic profile-json publish
+.PHONY: build test test-tcp fuzz fuzz-tcp bench bench-formats bench-profile profile-complex profile-variant profile-dynamic profile-json publish update-settings
 
 build:
 	npm run build
@@ -46,3 +46,8 @@ profile-json:
 
 publish:
 	npm publish --access=public
+
+# Update ClickHouse settings types from official source
+# Re-run periodically to pick up new ClickHouse releases
+update-settings:
+	node --experimental-strip-types scripts/generate-settings-types.ts

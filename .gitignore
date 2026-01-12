@@ -3,3 +3,4 @@ clickhouse-rs
 .claude/
 dist/
 reference/
+settings-versions.json

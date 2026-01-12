@@ -1,14 +1,15 @@
 import { test, describe } from "node:test";
 import assert from "node:assert";
 import { TcpClient } from "../client.ts";
+import type { ClickHouseSettings } from "../../settings.ts";
 
 // Settings for complex/experimental types
 const QUERY_SETTINGS = {
-  "use_variant_as_common_type": "1",
-  "allow_experimental_variant_type": "1",
-  "allow_experimental_dynamic_type": "1",
-  "allow_experimental_json_type": "1",
-  "output_format_native_use_flattened_dynamic_and_json_serialization": "1",
+  use_variant_as_common_type: true,
+  allow_experimental_variant_type: true,
+  allow_experimental_dynamic_type: true,
+  allow_experimental_json_type: true,
+  output_format_native_use_flattened_dynamic_and_json_serialization: true,
 };
 
 describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
@@ -59,7 +60,7 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
   async function consumeQuery(
     client: TcpClient,
     sql: string,
-    settings?: Record<string, string>
+    settings?: ClickHouseSettings
   ): Promise<{ totalRows: number; blocks: number }> {
     let totalRows = 0, blocks = 0;
     const verbose = !!process.env.VERBOSE;
@@ -81,7 +82,7 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
     writeClient: TcpClient,
     srcTable: string,
     dstTable: string,
-    settings?: Record<string, string>
+    settings?: ClickHouseSettings
   ): Promise<number> {
     let rowsRead = 0;
     const stream = (async function* () {
@@ -103,7 +104,7 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
     client: TcpClient,
     srcTable: string,
     dstTable: string,
-    settings?: Record<string, string>
+    settings?: ClickHouseSettings
   ): Promise<void> {
     let srcCount = 0n, dstCount = 0n;
     for await (const p of client.query(`SELECT count() as c FROM ${srcTable}`, { settings: settings ?? QUERY_SETTINGS })) {
@@ -124,14 +125,14 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
   }
 
   /** Execute a statement (DDL/DML) with optional settings via query() */
-  async function exec(client: TcpClient, sql: string, settings?: Record<string, string>): Promise<void> {
+  async function exec(client: TcpClient, sql: string, settings?: ClickHouseSettings): Promise<void> {
     for await (const _ of client.query(sql, { settings })) { /* drain */ }
   }
 
   async function getRandomStructure(
     client: TcpClient,
     numColumns?: number,
-    settings?: Record<string, string>
+    settings?: ClickHouseSettings
   ): Promise<string> {
     const query = numColumns
       ? `SELECT generateRandomStructure(${numColumns}) AS s`

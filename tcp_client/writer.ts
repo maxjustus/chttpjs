@@ -86,7 +86,7 @@ export class StreamingWriter {
     return this.flush();
   }
 
-  encodeQuery(qid: string, query: string, revision: bigint, settings: Record<string, string | number | boolean> = {}, compression: boolean = false, params: Record<string, string | number | boolean> = {}): Uint8Array {
+  encodeQuery(qid: string, query: string, revision: bigint, settings: Record<string, unknown> = {}, compression: boolean = false, params: Record<string, unknown> = {}): Uint8Array {
     this.writeVarInt(ClientPacketId.Query);
     this.writeString(qid);
 
