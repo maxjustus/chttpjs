@@ -42,16 +42,16 @@
     "build:lz4:cjs": "esbuild index.ts --bundle --format=cjs --outfile=dist/chttp-lz4.cjs --platform=node --target=es2022 --minify --define:BUILD_WITH_ZSTD=false --external:zstd-napi --external:lz4-napi --external:@maxjustus/chttp/native",
     "build:tcp": "esbuild tcp_client/index.ts --bundle --format=esm --outfile=dist/tcp.js --platform=node --target=es2022 --minify --external:lz4-napi --external:zstd-napi --external:@maxjustus/chttp/native",
     "build:tcp:cjs": "esbuild tcp_client/index.ts --bundle --format=cjs --outfile=dist/tcp.cjs --platform=node --target=es2022 --minify --external:lz4-napi --external:zstd-napi --external:@maxjustus/chttp/native",
-    "test": "tsc --noEmit && node --experimental-strip-types --test test/native/*.test.ts test/*.test.ts",
-    "test:compression": "node --experimental-strip-types --test test/compression.test.ts",
-    "test:integration": "node --experimental-strip-types --test test/integration.test.ts",
-    "test:native": "node --experimental-strip-types --test test/native/*.test.ts",
+    "test": "tsc --noEmit && tsx --test test/native/*.test.ts test/*.test.ts",
+    "test:compression": "tsx --test test/compression.test.ts",
+    "test:integration": "tsx --test test/integration.test.ts",
+    "test:native": "tsx --test test/native/*.test.ts",
     "test:dist": "npm run build && node test/test-dist.mjs",
-    "test:fuzz": "node --experimental-strip-types --test test/native/fuzz.test.ts",
-    "test:tcp": "node --experimental-strip-types --test tcp_client/test/*.test.ts",
-    "test:tcp-fuzz": "node --experimental-strip-types --test tcp_client/test/fuzz.test.ts",
-    "bench": "node --experimental-strip-types bench/compression.ts",
-    "bench:insert": "node --experimental-strip-types bench/insert.ts",
+    "test:fuzz": "tsx --test test/native/fuzz.test.ts",
+    "test:tcp": "tsx --test tcp_client/test/*.test.ts",
+    "test:tcp-fuzz": "tsx --test tcp_client/test/fuzz.test.ts",
+    "bench": "tsx bench/compression.ts",
+    "bench:insert": "tsx bench/insert.ts",
     "vendor:lz4": "npx jsr add @nick/lz4 && cp node_modules/@nick/lz4/lib/lz4.js node_modules/@nick/lz4/lib/lz4.internal.js vendor/lz4/ && rm -rf node_modules/@nick"
   },
   "author": "maxjustus",
@@ -68,6 +68,7 @@
     "@testcontainers/clickhouse": "^11.5.1",
     "esbuild": "^0.27.0",
     "testcontainers": "^11.5.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }
