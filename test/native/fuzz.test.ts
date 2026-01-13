@@ -760,7 +760,9 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
       return "";
     }
 
-    const client = new TcpClient({ host: "localhost", port: 9000, user: "default", password: "" });
+    // Start ClickHouse container
+    const ch = await startClickHouse();
+    const client = new TcpClient({ host: ch.host, port: ch.tcpPort, user: ch.username, password: ch.password });
     await client.connect();
 
     try {
@@ -855,6 +857,7 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
       }
     } finally {
       client.close();
+      await stopClickHouse();
     }
   });
 });
