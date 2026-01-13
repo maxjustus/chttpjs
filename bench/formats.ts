@@ -36,6 +36,10 @@ function formatResult(stats: { name: string; meanMs: number }, rows: number): st
   return `  ${stats.name.padEnd(30)} ${stats.meanMs.toFixed(3).padStart(8)}ms  ${(rowsPerSec / 1_000_000).toFixed(2).padStart(6)}M rows/sec`;
 }
 
+function formatKB(bytes: number): string {
+  return `${(bytes / 1024).toFixed(1)}KB`;
+}
+
 // --- JSON helpers ---
 
 const encoder = new TextEncoder();
@@ -115,7 +119,7 @@ async function runScenario(
 
   const pct = (val: number, base: number) => ((val / base) * 100).toFixed(1);
   console.log(
-    `  Encoded sizes: JSON=${jsonEncoded.length}, Native=${nativeEncoded.length} (${pct(nativeEncoded.length, jsonEncoded.length)}%)\n`,
+    `  Encoded sizes: JSON=${formatKB(jsonEncoded.length)}, Native=${formatKB(nativeEncoded.length)} (${pct(nativeEncoded.length, jsonEncoded.length)}%)\n`,
   );
 
   // Encoding
@@ -147,23 +151,23 @@ async function runScenario(
   console.log(formatResult(nativeDec, rows));
 
   // Compression
-  const jsonComp = encodeBlock(jsonEncoded, Method.LZ4);
-  const nativeComp = encodeBlock(nativeEncoded, Method.LZ4);
+  const jsonComp = encodeBlock(jsonEncoded, Method.ZSTD);
+  const nativeComp = encodeBlock(nativeEncoded, Method.ZSTD);
   console.log(
-    `\nCompressed sizes: JSON+LZ4=${jsonComp.length}, Native+LZ4=${nativeComp.length} (${pct(nativeComp.length, jsonComp.length)}%)`,
+    `\nCompressed sizes: JSON+ZSTD=${formatKB(jsonComp.length)}, Native+ZSTD=${formatKB(nativeComp.length)} (${pct(nativeComp.length, jsonComp.length)}%)`,
   );
 
   // Full path
-  console.log("\nFull path (encode + LZ4 compress):");
+  console.log("\nFull path (encode + ZSTD compress):");
   const jsonFull = benchSync(
-    "JSONEachRow + LZ4",
-    () => encodeBlock(encodeJsonEachRow(scenario.jsonData), Method.LZ4),
+    "JSONEachRow + ZSTD",
+    () => encodeBlock(encodeJsonEachRow(scenario.jsonData), Method.ZSTD),
     { ...benchOptions, iterations },
   );
   console.log(formatResult(jsonFull, rows));
   const nativeFull = benchSync(
-    "Native + LZ4",
-    () => encodeBlock(encodeNativeRows(scenario.columns, scenario.rowsArray), Method.LZ4),
+    "Native + ZSTD",
+    () => encodeBlock(encodeNativeRows(scenario.columns, scenario.rowsArray), Method.ZSTD),
     { ...benchOptions, iterations },
   );
   console.log(formatResult(nativeFull, rows));
@@ -499,7 +503,7 @@ async function main() {
     console.log(`  Encode: ${fmtSpeed(r.encode.json, r.encode.native)}`);
     console.log(`  Decode: ${fmtSpeed(r.decode.json, r.decode.native)}`);
     console.log(`  Size:   ${fmtSize(r.size.json, r.size.native)}`);
-    console.log(`  +LZ4:   ${fmtSize(r.compressed.json, r.compressed.native)}`);
+    console.log(`  +ZSTD:  ${fmtSize(r.compressed.json, r.compressed.native)}`);
     console.log("");
   }
 
