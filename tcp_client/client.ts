@@ -89,7 +89,7 @@ export interface QueryOptions {
   /** Per-query settings (merged with client defaults, overrides them) */
   settings?: ClickHouseSettings;
   /** Query parameters (substitution values) */
-  params?: ClickHouseSettings;
+  params?: Record<string, string | number | boolean | bigint>;
   signal?: AbortSignal;
   /** External tables to send with the query (available as temporary tables in the SQL) */
   externalTables?: Record<string, ExternalTableData>;

@@ -1,4 +1,4 @@
-import { type RecordBatch, type Row } from "./table.ts";
+import { type RecordBatch, type Row, type MaterializeOptions } from "./table.ts";
 
 /**
  * Iterate rows from a stream of RecordBatches.
@@ -32,11 +32,12 @@ export async function* rows(
  */
 export async function collectRows(
   batches: AsyncIterable<RecordBatch>,
+  options?: MaterializeOptions,
 ): Promise<Record<string, unknown>[]> {
   const result: Record<string, unknown>[] = [];
   for await (const batch of batches) {
     for (const row of batch) {
-      result.push(row.toObject());
+      result.push(row.toObject(options));
     }
   }
   return result;
