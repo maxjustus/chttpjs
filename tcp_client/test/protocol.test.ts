@@ -143,6 +143,25 @@ describe("TCP Client Protocol Features", () => {
     }
   });
 
+  test("should handle bigint settings", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      // Use a bigint value larger than Number.MAX_SAFE_INTEGER
+      const largeValue = 9007199254740993n; // 2^53 + 1
+      let rows = 0;
+      for await (const packet of client.query(
+        "SELECT * FROM numbers(5)",
+        { settings: { max_memory_usage: largeValue } }
+      )) {
+        if (packet.type === "Data") rows += packet.batch.rowCount;
+      }
+      assert.strictEqual(rows, 5, "Should work with bigint settings");
+    } finally {
+      client.close();
+    }
+  });
+
   test("should handle Log packets when send_logs_level is set", async () => {
     const client = new TcpClient(options);
     await client.connect();

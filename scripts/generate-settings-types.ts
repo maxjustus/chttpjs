@@ -40,9 +40,9 @@ interface VersionCache {
 // Type mapping from C++ to TypeScript
 const TYPE_MAP: Record<string, string> = {
   Bool: "boolean",
-  UInt64: "number",
-  Int64: "number",
-  NonZeroUInt64: "number",
+  UInt64: "bigint",
+  Int64: "bigint",
+  NonZeroUInt64: "bigint",
   Float: "number",
   Double: "number",
   String: "string",

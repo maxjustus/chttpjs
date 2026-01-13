@@ -36,12 +36,12 @@ export interface ClickHouseSettings {
   /**
    * Maximal size of block in bytes accumulated during aggregation in order of primary key. Lower block size allows to parallelize more final merge stage of aggregation.
    */
-  aggregation_in_order_max_block_bytes?: number;
+  aggregation_in_order_max_block_bytes?: bigint;
 
   /**
    * Number of threads to use for merge intermediate aggregation results in memory efficient mode. When bigger, then more memory is consumed. 0 means - same as 'max_threads'.
    */
-  aggregation_memory_efficient_merge_threads?: number;
+  aggregation_memory_efficient_merge_threads?: bigint;
 
   /**
    * Enable independent aggregation of partitions on separate threads when partition key suits group by key. Beneficial when number of partitions close to number of cores and partitions have roughly the same size
@@ -233,7 +233,7 @@ export interface ClickHouseSettings {
   /**
    * Use up to `max_parallel_replicas` the number of replicas from each shard for SELECT query execution. Reading is parallelized and coordinated dynamically. 0 - disabled, 1 - enabled, silently disable them in case of failure, 2 - enabled, throw an exception in case of failure
    */
-  allow_experimental_parallel_reading_from_replicas?: number;
+  allow_experimental_parallel_reading_from_replicas?: bigint;
 
   /**
    * Enable PRQL - an alternative to SQL.
@@ -454,7 +454,7 @@ export interface ClickHouseSettings {
   /**
    * Allows to set up waiting for actions to be executed on replicas by [ALTER](../../sql-reference/statements/alter/index.md), [OPTIMIZE](../../sql-reference/statements/optimize.md) or [TRUNCATE](../../sql-reference/statements/truncate.md) queries. Possible values: - `0` — Do not wait. - `1` — Wait for own execution. - `2` — Wait for everyone. Cloud default value: `1`. :::note `alter_sync` is applicable to `Replicated` tables only, it does nothing to alters of not `Replicated` tables. :::
    */
-  alter_sync?: number;
+  alter_sync?: bigint;
 
   /**
    * A mode for `ALTER` queries that have the `UPDATE` commands. Possible values: - `heavy` - run regular mutation. - `lightweight` - run lightweight update if possible, run regular mutation otherwise. - `lightweight_force` - run lightweight update if possible, throw otherwise.
@@ -503,7 +503,7 @@ export interface ClickHouseSettings {
    * The number of buckets in the temporary cache for applying patch parts in Join mode.
    * @since 25.9
    */
-  apply_patch_parts_join_cache_buckets?: number;
+  apply_patch_parts_join_cache_buckets?: bigint;
 
   /**
    * When enabled, PREWHERE conditions are applied after FINAL processing for ReplacingMergeTree and similar engines. This can be useful when PREWHERE references columns that may have different values across duplicate rows, and you want FINAL to select the winning row before filtering. When disabled, PREWHERE is applied during reading. Note: If apply_row_level_security_after_final is enabled and row policy uses non-sorting-key columns, PREWHERE will also be deferred to maintain correct execution order (row policy must be applied before PREWHERE).
@@ -572,12 +572,12 @@ export interface ClickHouseSettings {
   /**
    * Maximum size in bytes of unparsed data collected per query before being inserted
    */
-  async_insert_max_data_size?: number;
+  async_insert_max_data_size?: bigint;
 
   /**
    * Maximum number of insert queries before being inserted. Only takes effect if setting [`async_insert_deduplicate`](#async_insert_deduplicate) is 1.
    */
-  async_insert_max_query_number?: number;
+  async_insert_max_query_number?: bigint;
 
   /**
    * Timeout for polling data from asynchronous insert queue
@@ -603,13 +603,13 @@ export interface ClickHouseSettings {
    * Threshold of bytes to read per replica to enable parallel replicas automatically (applies only when `automatic_parallel_replicas_mode`=1). 0 means no threshold.
    * @since 26.1
    */
-  automatic_parallel_replicas_min_bytes_per_replica?: number;
+  automatic_parallel_replicas_min_bytes_per_replica?: bigint;
 
   /**
    * 🚨 HIGHLY EXPERIMENTAL 🚨 Enable automatic switching to execution with parallel replicas based on collected statistics. Requires enabling `parallel_replicas_local_plan` and providing `cluster_for_parallel_replicas`. 0 - disabled, 1 - enabled, 2 - only statistics collection is enabled (switching to execution with parallel replicas is disabled).
    * @since 26.1
    */
-  automatic_parallel_replicas_mode?: number;
+  automatic_parallel_replicas_mode?: bigint;
 
   /**
    * Use multiple threads for azure multipart upload.
@@ -626,7 +626,7 @@ export interface ClickHouseSettings {
    * Connection timeout for host from azure disks.
    * @since 25.9
    */
-  azure_connect_timeout_ms?: number;
+  azure_connect_timeout_ms?: bigint;
 
   /**
    * Enables or disables creating a new file on each insert in azure engine tables
@@ -641,98 +641,98 @@ export interface ClickHouseSettings {
   /**
    * Maximum number of files that could be returned in batch by ListObject request
    */
-  azure_list_object_keys_size?: number;
+  azure_list_object_keys_size?: bigint;
 
   /**
    * Maximum number of blocks in multipart upload for Azure.
    */
-  azure_max_blocks_in_multipart_upload?: number;
+  azure_max_blocks_in_multipart_upload?: bigint;
 
   /**
    * Max number of requests that can be issued simultaneously before hitting request per second limit. By default (0) equals to `azure_max_get_rps`
    * @since 25.9
    */
-  azure_max_get_burst?: number;
+  azure_max_get_burst?: bigint;
 
   /**
    * Limit on Azure GET request per second rate before throttling. Zero means unlimited.
    * @since 25.9
    */
-  azure_max_get_rps?: number;
+  azure_max_get_rps?: bigint;
 
   /**
    * The maximum number of a concurrent loaded parts in multipart upload request. 0 means unlimited.
    */
-  azure_max_inflight_parts_for_one_file?: number;
+  azure_max_inflight_parts_for_one_file?: bigint;
 
   /**
    * Max number of requests that can be issued simultaneously before hitting request per second limit. By default (0) equals to `azure_max_put_rps`
    * @since 25.9
    */
-  azure_max_put_burst?: number;
+  azure_max_put_burst?: bigint;
 
   /**
    * Limit on Azure PUT request per second rate before throttling. Zero means unlimited.
    * @since 25.9
    */
-  azure_max_put_rps?: number;
+  azure_max_put_rps?: bigint;
 
   /**
    * Max number of azure redirects hops allowed.
    * @since 25.9
    */
-  azure_max_redirects?: number;
+  azure_max_redirects?: bigint;
 
   /**
    * The maximum size of object to copy using single part copy to Azure blob storage.
    */
-  azure_max_single_part_copy_size?: number;
+  azure_max_single_part_copy_size?: bigint;
 
   /**
    * The maximum size of object to upload using singlepart upload to Azure blob storage.
    */
-  azure_max_single_part_upload_size?: number;
+  azure_max_single_part_upload_size?: bigint;
 
   /**
    * The maximum number of retries during single Azure blob storage read.
    */
-  azure_max_single_read_retries?: number;
+  azure_max_single_read_retries?: bigint;
 
   /**
    * The maximum number of retries in case of unexpected errors during Azure blob storage write
    */
-  azure_max_unexpected_write_error_retries?: number;
+  azure_max_unexpected_write_error_retries?: bigint;
 
   /**
    * The maximum size of part to upload during multipart upload to Azure blob storage.
    */
-  azure_max_upload_part_size?: number;
+  azure_max_upload_part_size?: bigint;
 
   /**
    * The minimum size of part to upload during multipart upload to Azure blob storage.
    */
-  azure_min_upload_part_size?: number;
+  azure_min_upload_part_size?: bigint;
 
   /**
    * Idleness timeout for sending and receiving data to/from azure. Fail if a single TCP read or write call blocks for this long.
    * @since 25.9
    */
-  azure_request_timeout_ms?: number;
+  azure_request_timeout_ms?: bigint;
 
   /**
    * Maximum number of retries in azure sdk
    */
-  azure_sdk_max_retries?: number;
+  azure_sdk_max_retries?: bigint;
 
   /**
    * Minimal backoff between retries in azure sdk
    */
-  azure_sdk_retry_initial_backoff_ms?: number;
+  azure_sdk_retry_initial_backoff_ms?: bigint;
 
   /**
    * Maximal backoff between retries in azure sdk
    */
-  azure_sdk_retry_max_backoff_ms?: number;
+  azure_sdk_retry_max_backoff_ms?: bigint;
 
   /**
    * Enables or disables skipping empty files in S3 engine. Possible values: - 0 — `SELECT` throws an exception if empty file is not compatible with requested format. - 1 — `SELECT` returns empty result for empty file.
@@ -742,7 +742,7 @@ export interface ClickHouseSettings {
   /**
    * The exact size of part to upload during multipart upload to Azure blob storage.
    */
-  azure_strict_upload_part_size?: number;
+  azure_strict_upload_part_size?: bigint;
 
   /**
    * Throw an error if matched zero files according to glob expansion rules. Possible values: - 1 — `SELECT` throws an exception. - 0 — `SELECT` returns empty result.
@@ -757,12 +757,12 @@ export interface ClickHouseSettings {
   /**
    * Multiply azure_min_upload_part_size by this factor each time azure_multiply_parts_count_threshold parts were uploaded from a single write to Azure blob storage.
    */
-  azure_upload_part_size_multiply_factor?: number;
+  azure_upload_part_size_multiply_factor?: bigint;
 
   /**
    * Each time this number of parts was uploaded to Azure blob storage, azure_min_upload_part_size is multiplied by azure_upload_part_size_multiply_factor.
    */
-  azure_upload_part_size_multiply_parts_count_threshold?: number;
+  azure_upload_part_size_multiply_parts_count_threshold?: bigint;
 
   /**
    * When set to `true` than for all azure requests first two attempts are made with low send and receive timeouts. When set to `false` than all attempts are made with identical timeouts.
@@ -773,24 +773,24 @@ export interface ClickHouseSettings {
   /**
    * Maximum size of batch for multi request to [Zoo]Keeper during backup or restore
    */
-  backup_restore_batch_size_for_keeper_multi?: number;
+  backup_restore_batch_size_for_keeper_multi?: bigint;
 
   /**
    * Maximum size of batch for multiread request to [Zoo]Keeper during backup or restore
    */
-  backup_restore_batch_size_for_keeper_multiread?: number;
+  backup_restore_batch_size_for_keeper_multiread?: bigint;
 
   /**
    * If a host during a BACKUP ON CLUSTER or RESTORE ON CLUSTER operation doesn't recreate its ephemeral 'alive' node in ZooKeeper for this amount of time then the whole backup or restore is considered as failed. This value should be bigger than any reasonable time for a host to reconnect to ZooKeeper after a failure. Zero means unlimited.
    * @since 24.12
    */
-  backup_restore_failure_after_host_disconnected_for_seconds?: number;
+  backup_restore_failure_after_host_disconnected_for_seconds?: bigint;
 
   /**
    * How long the initiator should wait for other host to react to the 'error' node and stop their work on the current BACKUP ON CLUSTER or RESTORE ON CLUSTER operation.
    * @since 24.12
    */
-  backup_restore_finish_timeout_after_error_sec?: number;
+  backup_restore_finish_timeout_after_error_sec?: bigint;
 
   /**
    * Approximate probability of failure for a keeper request during backup or restore. Valid value is in interval [0.0f, 1.0f]
@@ -800,50 +800,50 @@ export interface ClickHouseSettings {
   /**
    * 0 - random seed, otherwise the setting value
    */
-  backup_restore_keeper_fault_injection_seed?: number;
+  backup_restore_keeper_fault_injection_seed?: bigint;
 
   /**
    * Max retries for [Zoo]Keeper operations in the middle of a BACKUP or RESTORE operation. Should be big enough so the whole operation won't fail because of a temporary [Zoo]Keeper failure.
    */
-  backup_restore_keeper_max_retries?: number;
+  backup_restore_keeper_max_retries?: bigint;
 
   /**
    * Max retries for [Zoo]Keeper operations while handling an error of a BACKUP ON CLUSTER or RESTORE ON CLUSTER operation.
    * @since 24.12
    */
-  backup_restore_keeper_max_retries_while_handling_error?: number;
+  backup_restore_keeper_max_retries_while_handling_error?: bigint;
 
   /**
    * Max retries for [Zoo]Keeper operations during the initialization of a BACKUP ON CLUSTER or RESTORE ON CLUSTER operation.
    * @since 24.12
    */
-  backup_restore_keeper_max_retries_while_initializing?: number;
+  backup_restore_keeper_max_retries_while_initializing?: bigint;
 
   /**
    * Initial backoff timeout for [Zoo]Keeper operations during backup or restore
    */
-  backup_restore_keeper_retry_initial_backoff_ms?: number;
+  backup_restore_keeper_retry_initial_backoff_ms?: bigint;
 
   /**
    * Max backoff timeout for [Zoo]Keeper operations during backup or restore
    */
-  backup_restore_keeper_retry_max_backoff_ms?: number;
+  backup_restore_keeper_retry_max_backoff_ms?: bigint;
 
   /**
    * Maximum size of data of a [Zoo]Keeper's node during backup
    */
-  backup_restore_keeper_value_max_size?: number;
+  backup_restore_keeper_value_max_size?: bigint;
 
   /**
    * Setting for Aws::Client::RetryStrategy, Aws::Client does retries itself, 0 means no retries. It takes place only for backup/restore.
    */
-  backup_restore_s3_retry_attempts?: number;
+  backup_restore_s3_retry_attempts?: bigint;
 
   /**
    * Initial backoff delay in milliseconds before the first retry attempt during backup and restore. Each subsequent retry increases the delay exponentially, up to the maximum specified by `backup_restore_s3_retry_max_backoff_ms`
    * @since 25.9
    */
-  backup_restore_s3_retry_initial_backoff_ms?: number;
+  backup_restore_s3_retry_initial_backoff_ms?: bigint;
 
   /**
    * Jitter factor applied to the retry backoff delay in Aws::Client::RetryStrategy during backup and restore operations. The computed backoff delay is multiplied by a random factor in the range [1.0, 1.0 + jitter], up to the maximum `backup_restore_s3_retry_max_backoff_ms`. Must be in [0.0, 1.0] interval
@@ -855,7 +855,7 @@ export interface ClickHouseSettings {
    * Maximum delay in milliseconds between retries during backup and restore operations.
    * @since 25.9
    */
-  backup_restore_s3_retry_max_backoff_ms?: number;
+  backup_restore_s3_retry_max_backoff_ms?: bigint;
 
   /**
    * When set to `true`, all threads executing S3 requests to the same backup endpoint are slowed down after any single S3 request encounters a retryable S3 error, such as 'Slow Down'. When set to `false`, each thread handles s3 request backoff independently of the others.
@@ -866,7 +866,7 @@ export interface ClickHouseSettings {
   /**
    * Only has an effect in ClickHouse Cloud. Number of background threads for speculatively downloading new data parts into the filesystem cache, when [cache_populated_by_fetch](merge-tree-settings.md/#cache_populated_by_fetch) is enabled. Zero to disable.
    */
-  cache_warmer_threads?: number;
+  cache_warmer_threads?: bigint;
 
   /**
    * Calculate text stack trace in case of exceptions during query execution. This is the default. It requires symbol lookups that may slow down fuzzing tests when a huge amount of wrong queries are executed. In normal cases, you should not disable this option.
@@ -933,12 +933,12 @@ export interface ClickHouseSettings {
   /**
    * The database engine allowed in Cloud. 1 - rewrite DDLs to use Replicated database, 2 - rewrite DDLs to use Shared database
    */
-  cloud_mode_database_engine?: number;
+  cloud_mode_database_engine?: bigint;
 
   /**
    * The engine family allowed in Cloud. - 0 - allow everything - 1 - rewrite DDLs to use *ReplicatedMergeTree - 2 - rewrite DDLs to use SharedMergeTree - 3 - rewrite DDLs to use SharedMergeTree except when explicitly passed remote disk is specified UInt64 to minimize public part
    */
-  cloud_mode_engine?: number;
+  cloud_mode_engine?: bigint;
 
   /**
    * Cluster for a shard in which current server is located
@@ -955,7 +955,7 @@ export interface ClickHouseSettings {
    * Defines the approximate size of a batch (in bytes) used in distributed processing of tasks in cluster table functions with `bucket` split granularity. The system accumulates data until at least this amount is reached. The actual size may be slightly larger to align with data boundaries.
    * @since 25.12
    */
-  cluster_table_function_buckets_batch_size?: number;
+  cluster_table_function_buckets_batch_size?: bigint;
 
   /**
    * Controls how data is split into tasks when executing a CLUSTER TABLE FUNCTION. This setting defines the granularity of work distribution across the cluster: - `file` — each task processes an entire file. - `bucket` — tasks are created per internal data block within a file (for example, Parquet row groups). Choosing finer granularity (like `bucket`) can improve parallelism when working with a small number of large files. For instance, if a Parquet file contains multiple row groups, enabling `bucket` granularity allows each group to be processed independently by different workers.
@@ -1032,7 +1032,7 @@ export interface ClickHouseSettings {
   /**
    * The maximum number of connection attempts with each replica for the Distributed table engine.
    */
-  connections_with_failover_max_tries?: number;
+  connections_with_failover_max_tries?: bigint;
 
   /**
    * When set to `true`, a `SELECT` query will be converted to conjuctive normal form (CNF). There are scenarios where rewriting a query in CNF may execute faster (view this [Github issue](https://github.com/ClickHouse/ClickHouse/issues/11749) for an explanation). For example, notice how the following `SELECT` query is not modified (the default behavior): ```sql EXPLAIN SYNTAX SELECT * FROM ( SELECT number AS x FROM numbers(20) ) AS a WHERE ((x >= 1) AND (x <= 5)) OR ((x >= 10) AND (x <= 15)) SETTINGS convert_query_to_cnf = false; ``` The result is: ```response ┌─explain────────────────────────────────────────────────────────┐ │ SELECT x │ │ FROM │ │ ( │ │ SELECT number AS x │ │ FROM numbers(20) │ │ WHERE ((x >= 1) AND (x <= 5)) OR ((x >= 10) AND (x <= 15)) │ │ ) AS a │ │ WHERE ((x >= 1) AND (x <= 5)) OR ((x >= 10) AND (x <= 15)) │ │ SETTINGS convert_query_to_cnf = 0 │ └────────────────────────────────────────────────────────────────┘ ``` Let's set `convert_query_to_cnf` to `true` and see what changes: ```sql EXPLAIN SYNTAX SELECT * FROM ( SELECT number AS x FROM numbers(20) ) AS a WHERE ((x >= 1) AND (x <= 5)) OR ((x >= 10) AND (x <= 15)) SETTINGS convert_query_to_cnf = true; ``` Notice the `WHERE` clause is rewritten in CNF, but the result set is the identical - the Boolean logic is unchanged: ```response ┌─explain───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │ SELECT x │ │ FROM │ │ ( │ │ SELECT number AS x │ │ FROM numbers(20) │ │ WHERE ((x <= 15) OR (x <= 5)) AND ((x <= 15) OR (x >= 1)) AND ((x >= 10) OR (x <= 5)) AND ((x >= 10) OR (x >= 1)) │ │ ) AS a │ │ WHERE ((x >= 10) OR (x >= 1)) AND ((x >= 10) OR (x <= 5)) AND ((x <= 15) OR (x >= 1)) AND ((x <= 15) OR (x <= 5)) │ │ SETTINGS convert_query_to_cnf = 1 │ └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ ``` Possible values: true, false
@@ -1090,12 +1090,12 @@ export interface ClickHouseSettings {
   /**
    * Minimal size of block to compress in CROSS JOIN. Zero value means - disable this threshold. This block is compressed when any of the two thresholds (by rows or by bytes) are reached.
    */
-  cross_join_min_bytes_to_compress?: number;
+  cross_join_min_bytes_to_compress?: bigint;
 
   /**
    * Minimal count of rows to compress block in CROSS JOIN. Zero value means - disable this threshold. This block is compressed when any of the two thresholds (by rows or by bytes) are reached.
    */
-  cross_join_min_rows_to_compress?: number;
+  cross_join_min_rows_to_compress?: bigint;
 
   /**
    * Allows data types without explicit modifiers [NULL or NOT NULL](/sql-reference/statements/create/table#null-or-not-null-modifiers) in column definition will be [Nullable](/sql-reference/data-types/nullable). Possible values: - 1 — The data types in column definitions are set to `Nullable` by default. - 0 — The data types in column definitions are set to not `Nullable` by default.
@@ -1110,7 +1110,7 @@ export interface ClickHouseSettings {
   /**
    * 0 - Don't allow to explicitly specify UUIDs for tables in Replicated databases. 1 - Allow. 2 - Allow, but ignore the specified UUID and generate a random one instead.
    */
-  database_replicated_allow_explicit_uuid?: number;
+  database_replicated_allow_explicit_uuid?: bigint;
 
   /**
    * Allow long-running DDL queries (CREATE AS SELECT and POPULATE) in Replicated database engine. Note that it can block DDL queue for a long time.
@@ -1125,7 +1125,7 @@ export interface ClickHouseSettings {
   /**
    * 0 - Don't allow to explicitly specify ZooKeeper path and replica name for *MergeTree tables in Replicated databases. 1 - Allow. 2 - Allow, but ignore the specified path and use default one instead. 3 - Allow and don't log a warning.
    */
-  database_replicated_allow_replicated_engine_arguments?: number;
+  database_replicated_allow_replicated_engine_arguments?: bigint;
 
   /**
    * Execute DETACH TABLE as DETACH TABLE PERMANENTLY if database engine is Replicated
@@ -1140,13 +1140,13 @@ export interface ClickHouseSettings {
   /**
    * Sets how long initial DDL query should wait for Replicated database to process previous DDL queue entries in seconds. Possible values: - Positive integer. - 0 — Unlimited.
    */
-  database_replicated_initial_query_timeout_sec?: number;
+  database_replicated_initial_query_timeout_sec?: bigint;
 
   /**
    * The delay in seconds before a dropped table is actually removed from a Shared database. This allows to recover the table within this time using `UNDROP TABLE` statement.
    * @since 25.12
    */
-  database_shared_drop_table_delay_seconds?: number;
+  database_shared_drop_table_delay_seconds?: bigint;
 
   /**
    * Check overflow of decimal arithmetic/comparison operations
@@ -1166,7 +1166,7 @@ export interface ClickHouseSettings {
   /**
    * Maximum size of right-side table if limit is required but `max_bytes_in_join` is not set.
    */
-  default_max_bytes_in_join?: number;
+  default_max_bytes_in_join?: bigint;
 
   /**
    * Allows to set default `SQL SECURITY` option while creating a normal view. [More about SQL security](../../sql-reference/statements/create/view.md/#sql_security). The default value is `INVOKER`.
@@ -1204,13 +1204,13 @@ export interface ClickHouseSettings {
    * Defines a bytes limit for a single inserted data file in delta lake.
    * @since 25.10
    */
-  delta_lake_insert_max_bytes_in_data_file?: number;
+  delta_lake_insert_max_bytes_in_data_file?: bigint;
 
   /**
    * Defines a rows limit for a single inserted data file in delta lake.
    * @since 25.10
    */
-  delta_lake_insert_max_rows_in_data_file?: number;
+  delta_lake_insert_max_rows_in_data_file?: bigint;
 
   /**
    * Enables logging delta lake metadata files into system table.
@@ -1222,19 +1222,19 @@ export interface ClickHouseSettings {
    * End version of delta lake snapshot to read. Value -1 means to read latest version (value 0 is a valid snapshot version).
    * @since 26.1
    */
-  delta_lake_snapshot_end_version?: number;
+  delta_lake_snapshot_end_version?: bigint;
 
   /**
    * Start version of delta lake snapshot to read. Value -1 means to read latest version (value 0 is a valid snapshot version).
    * @since 26.1
    */
-  delta_lake_snapshot_start_version?: number;
+  delta_lake_snapshot_start_version?: bigint;
 
   /**
    * Version of delta lake snapshot to read. Value -1 means to read latest version (value 0 is a valid snapshot version).
    * @since 25.9
    */
-  delta_lake_snapshot_version?: number;
+  delta_lake_snapshot_version?: bigint;
 
   /**
    * Enables throwing an exception if there was an error when analyzing scan predicate in delta-kernel.
@@ -1300,13 +1300,13 @@ export interface ClickHouseSettings {
   /**
    * Timeout for insert query into distributed. Setting is used only with insert_distributed_sync enabled. Zero value means no timeout.
    */
-  distributed_background_insert_timeout?: number;
+  distributed_background_insert_timeout?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. A setting for testing purposes, do not change it
    * @since 25.8
    */
-  distributed_cache_alignment?: number;
+  distributed_cache_alignment?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Allow to bypass distributed cache connection pool
@@ -1317,35 +1317,35 @@ export interface ClickHouseSettings {
    * Only has an effect in ClickHouse Cloud. Maximum backoff milliseconds for distributed cache connection creation.
    * @since 25.9
    */
-  distributed_cache_connect_backoff_max_ms?: number;
+  distributed_cache_connect_backoff_max_ms?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Minimum backoff milliseconds for distributed cache connection creation.
    * @since 25.9
    */
-  distributed_cache_connect_backoff_min_ms?: number;
+  distributed_cache_connect_backoff_min_ms?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Number of tries to connect to distributed cache if unsuccessful
    */
-  distributed_cache_connect_max_tries?: number;
+  distributed_cache_connect_max_tries?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Connection timeout when connecting to distributed cache server.
    * @since 25.11
    */
-  distributed_cache_connect_timeout_ms?: number;
+  distributed_cache_connect_timeout_ms?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. A period of credentials refresh.
    * @since 25.8
    */
-  distributed_cache_credentials_refresh_period_seconds?: number;
+  distributed_cache_credentials_refresh_period_seconds?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. A window for sending ACK for DataPacket sequence in a single distributed cache read request
    */
-  distributed_cache_data_packet_ack_window?: number;
+  distributed_cache_data_packet_ack_window?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Discard connection if some data is unread.
@@ -1366,13 +1366,13 @@ export interface ClickHouseSettings {
   /**
    * Only has an effect in ClickHouse Cloud. A maximum number of unacknowledged in-flight packets in a single distributed cache read request
    */
-  distributed_cache_max_unacked_inflight_packets?: number;
+  distributed_cache_max_unacked_inflight_packets?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Minimum number of bytes to do seek in distributed cache.
    * @since 25.2
    */
-  distributed_cache_min_bytes_for_seek?: number;
+  distributed_cache_min_bytes_for_seek?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Identifies behaviour of distributed cache connection on pool limit reached
@@ -1395,35 +1395,35 @@ export interface ClickHouseSettings {
    * Only has an effect in ClickHouse Cloud. Number of tries to do distributed cache request if unsuccessful
    * @since 25.5
    */
-  distributed_cache_read_request_max_tries?: number;
+  distributed_cache_read_request_max_tries?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Wait time in milliseconds to receive data for request from distributed cache
    */
-  distributed_cache_receive_response_wait_milliseconds?: number;
+  distributed_cache_receive_response_wait_milliseconds?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Wait time in milliseconds to receive any kind of response from distributed cache
    */
-  distributed_cache_receive_timeout_milliseconds?: number;
+  distributed_cache_receive_timeout_milliseconds?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Timeout for receiving data from distributed cache server, in milliseconds. If no bytes were received in this interval, the exception is thrown.
    * @since 25.11
    */
-  distributed_cache_receive_timeout_ms?: number;
+  distributed_cache_receive_timeout_ms?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Timeout for sending data to istributed cache server, in milliseconds. If a client needs to send some data but is not able to send any bytes in this interval, the exception is thrown.
    * @since 25.11
    */
-  distributed_cache_send_timeout_ms?: number;
+  distributed_cache_send_timeout_ms?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. The time in milliseconds the connection to distributed cache server needs to remain idle before TCP starts sending keepalive probes.
    * @since 25.11
    */
-  distributed_cache_tcp_keep_alive_timeout_ms?: number;
+  distributed_cache_tcp_keep_alive_timeout_ms?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Rethrow exception happened during communication with distributed cache or exception received from distributed cache. Otherwise fallback to skipping distributed cache on error
@@ -1445,17 +1445,17 @@ export interface ClickHouseSettings {
   /**
    * Only has an effect in ClickHouse Cloud. Wait time in milliseconds to receive connection from connection pool if distributed_cache_pool_behaviour_on_limit is wait
    */
-  distributed_cache_wait_connection_from_pool_milliseconds?: number;
+  distributed_cache_wait_connection_from_pool_milliseconds?: bigint;
 
   /**
    * The maximum number of simultaneous connections with remote servers for distributed processing of all queries to a single Distributed table. We recommend setting a value no less than the number of servers in the cluster.
    */
-  distributed_connections_pool_size?: number;
+  distributed_connections_pool_size?: bigint;
 
   /**
    * Compatibility version of distributed DDL (ON CLUSTER) queries
    */
-  distributed_ddl_entry_format_version?: number;
+  distributed_ddl_entry_format_version?: bigint;
 
   /**
    * Sets format of distributed DDL query result. Possible values: - `throw` — Returns result set with query execution status for all hosts where query is finished. If query has failed on some hosts, then it will rethrow the first exception. If query is not finished yet on some hosts and [distributed_ddl_task_timeout](#distributed_ddl_task_timeout) exceeded, then it throws `TIMEOUT_EXCEEDED` exception. - `none` — Is similar to throw, but distributed DDL query returns no result set. - `null_status_on_timeout` — Returns `NULL` as execution status in some rows of result set instead of throwing `TIMEOUT_EXCEEDED` if query is not finished on the corresponding hosts. - `never_throw` — Do not throw `TIMEOUT_EXCEEDED` and do not rethrow exceptions if query has failed on some hosts. - `none_only_active` - similar to `none`, but doesn't wait for inactive replicas of the `Replicated` database. Note: with this mode it's impossible to figure out that the query was not executed on some replica and will be executed in background. - `null_status_on_timeout_only_active` — similar to `null_status_on_timeout`, but doesn't wait for inactive replicas of the `Replicated` database - `throw_only_active` — similar to `throw`, but doesn't wait for inactive replicas of the `Replicated` database Cloud default value: `throw`.
@@ -1465,7 +1465,7 @@ export interface ClickHouseSettings {
   /**
    * Sets timeout for DDL query responses from all hosts in cluster. If a DDL request has not been performed on all hosts, a response will contain a timeout error and a request will be executed in an async mode. Negative value means infinite. Possible values: - Positive integer. - 0 — Async mode. - Negative integer — infinite timeout.
    */
-  distributed_ddl_task_timeout?: number;
+  distributed_ddl_task_timeout?: bigint;
 
   /**
    * Enables or disables synchronous data insertion into a [Distributed](/engines/table-engines/special/distributed) table. By default, when inserting data into a `Distributed` table, the ClickHouse server sends data to cluster nodes in background mode. When `distributed_foreground_insert=1`, the data is processed synchronously, and the `INSERT` operation succeeds only after all the data is saved on all shards (at least one replica for each shard if `internal_replication` is true). Possible values: - `0` — Data is inserted in background mode. - `1` — Data is inserted in synchronous mode. Cloud default value: `0`. **See Also** - [Distributed Table Engine](/engines/table-engines/special/distributed) - [Managing Distributed Tables](/sql-reference/statements/system#managing-distributed-tables)
@@ -1475,7 +1475,7 @@ export interface ClickHouseSettings {
   /**
    * Do not merge aggregation states from different servers for distributed query processing, you can use this in case it is for certain that there are different keys on different shards Possible values: - `0` — Disabled (final query processing is done on the initiator node). - `1` - Do not merge aggregation states from different servers for distributed query processing (query completely processed on the shard, initiator only proxy the data), can be used in case it is for certain that there are different keys on different shards. - `2` - Same as `1` but applies `ORDER BY` and `LIMIT` (it is not possible when the query processed completely on the remote node, like for `distributed_group_by_no_merge=1`) on the initiator (can be used for queries with `ORDER BY` and/or `LIMIT`). **Example** ```sql SELECT * FROM remote('127.0.0.{2,3}', system.one) GROUP BY dummy LIMIT 1 SETTINGS distributed_group_by_no_merge = 1 FORMAT PrettyCompactMonoBlock ┌─dummy─┐ │ 0 │ │ 0 │ └───────┘ ``` ```sql SELECT * FROM remote('127.0.0.{2,3}', system.one) GROUP BY dummy LIMIT 1 SETTINGS distributed_group_by_no_merge = 2 FORMAT PrettyCompactMonoBlock ┌─dummy─┐ │ 0 │ └───────┘ ```
    */
-  distributed_group_by_no_merge?: number;
+  distributed_group_by_no_merge?: bigint;
 
   /**
    * Enables skipping read-only replicas for INSERT queries into Distributed. Possible values: - 0 — INSERT was as usual, if it will go to read-only replica it will fail - 1 — Initiator will skip read-only replicas before sending data to shards.
@@ -1486,13 +1486,13 @@ export interface ClickHouseSettings {
    * Default number of tasks for parallel reading in distributed query. Tasks are spread across between replicas.
    * @since 25.7
    */
-  distributed_plan_default_reader_bucket_count?: number;
+  distributed_plan_default_reader_bucket_count?: bigint;
 
   /**
    * Default number of buckets for distributed shuffle-hash-join.
    * @since 25.7
    */
-  distributed_plan_default_shuffle_join_bucket_count?: number;
+  distributed_plan_default_shuffle_join_bucket_count?: bigint;
 
   /**
    * Run all tasks of a distributed query plan locally. Useful for testing and debugging.
@@ -1516,7 +1516,7 @@ export interface ClickHouseSettings {
    * Maximum rows to use broadcast join instead of shuffle join in distributed query plan.
    * @since 25.8
    */
-  distributed_plan_max_rows_to_broadcast?: number;
+  distributed_plan_max_rows_to_broadcast?: bigint;
 
   /**
    * Removes unnecessary exchanges in distributed query plan. Disable it for debugging.
@@ -1532,12 +1532,12 @@ export interface ClickHouseSettings {
   /**
    * Enables or disables [LIMIT](#limit) applying on each shard separately. This will allow to avoid: - Sending extra rows over network; - Processing rows behind the limit on the initiator. Starting from 21.9 version you cannot get inaccurate results anymore, since `distributed_push_down_limit` changes query execution only if at least one of the conditions met: - [distributed_group_by_no_merge](#distributed_group_by_no_merge) > 0. - Query **does not have** `GROUP BY`/`DISTINCT`/`LIMIT BY`, but it has `ORDER BY`/`LIMIT`. - Query **has** `GROUP BY`/`DISTINCT`/`LIMIT BY` with `ORDER BY`/`LIMIT` and: - [optimize_skip_unused_shards](#optimize_skip_unused_shards) is enabled. - [optimize_distributed_group_by_sharding_key](#optimize_distributed_group_by_sharding_key) is enabled. Possible values: - 0 — Disabled. - 1 — Enabled. See also: - [distributed_group_by_no_merge](#distributed_group_by_no_merge) - [optimize_skip_unused_shards](#optimize_skip_unused_shards) - [optimize_distributed_group_by_sharding_key](#optimize_distributed_group_by_sharding_key)
    */
-  distributed_push_down_limit?: number;
+  distributed_push_down_limit?: bigint;
 
   /**
    * - Type: unsigned int - Default value: 1000 The error count of each replica is capped at this value, preventing a single replica from accumulating too many errors. See also: - [load_balancing](#load_balancing-round_robin) - [Table engine Distributed](../../engines/table-engines/special/distributed.md) - [distributed_replica_error_half_life](#distributed_replica_error_half_life) - [distributed_replica_max_ignored_errors](#distributed_replica_max_ignored_errors)
    */
-  distributed_replica_error_cap?: number;
+  distributed_replica_error_cap?: bigint;
 
   /**
    * - Type: seconds - Default value: 60 seconds Controls how fast errors in distributed tables are zeroed. If a replica is unavailable for some time, accumulates 5 errors, and distributed_replica_error_half_life is set to 1 second, then the replica is considered normal 3 seconds after the last error. See also: - [load_balancing](#load_balancing-round_robin) - [Table engine Distributed](../../engines/table-engines/special/distributed.md) - [distributed_replica_error_cap](#distributed_replica_error_cap) - [distributed_replica_max_ignored_errors](#distributed_replica_max_ignored_errors)
@@ -1547,7 +1547,7 @@ export interface ClickHouseSettings {
   /**
    * - Type: unsigned int - Default value: 0 The number of errors that will be ignored while choosing replicas (according to `load_balancing` algorithm). See also: - [load_balancing](#load_balancing-round_robin) - [Table engine Distributed](../../engines/table-engines/special/distributed.md) - [distributed_replica_error_cap](#distributed_replica_error_cap) - [distributed_replica_error_half_life](#distributed_replica_error_half_life)
    */
-  distributed_replica_max_ignored_errors?: number;
+  distributed_replica_max_ignored_errors?: bigint;
 
   /**
    * Merge parts only in one partition in select final
@@ -1837,22 +1837,22 @@ export interface ClickHouseSettings {
   /**
    * Connect timeout in seconds. Now supported only for MySQL
    */
-  external_storage_connect_timeout_sec?: number;
+  external_storage_connect_timeout_sec?: bigint;
 
   /**
    * Limit maximum number of bytes when table with external engine should flush history data. Now supported only for MySQL table engine, database engine, and dictionary. If equal to 0, this setting is disabled
    */
-  external_storage_max_read_bytes?: number;
+  external_storage_max_read_bytes?: bigint;
 
   /**
    * Limit maximum number of rows when table with external engine should flush history data. Now supported only for MySQL table engine, database engine, and dictionary. If equal to 0, this setting is disabled
    */
-  external_storage_max_read_rows?: number;
+  external_storage_max_read_rows?: bigint;
 
   /**
    * Read/write timeout in seconds. Now supported only for MySQL
    */
-  external_storage_rw_timeout_sec?: number;
+  external_storage_rw_timeout_sec?: bigint;
 
   /**
    * Defines how [mysql](../../sql-reference/table-functions/mysql.md), [postgresql](../../sql-reference/table-functions/postgresql.md) and [odbc](../../sql-reference/table-functions/odbc.md) table functions use Nullable columns. Possible values: - 0 — The table function explicitly uses Nullable columns. - 1 — The table function implicitly uses Nullable columns. **Usage** If the setting is set to `0`, the table function does not make Nullable columns and inserts default values instead of NULL. This is also applicable for NULL values inside arrays.
@@ -1867,7 +1867,7 @@ export interface ClickHouseSettings {
   /**
    * Max number of pairs that can be produced by the `extractKeyValuePairs` function. Used as a safeguard against consuming too much memory.
    */
-  extract_key_value_pairs_max_pairs_per_row?: number;
+  extract_key_value_pairs_max_pairs_per_row?: bigint;
 
   /**
    * Whether to count extreme values (the minimums and maximums in columns of a query result). Accepts 0 or 1. By default, 0 (disabled). For more information, see the section "Extreme values".
@@ -1889,7 +1889,7 @@ export interface ClickHouseSettings {
    * Filesystem cache boundary alignment. This setting is applied only for non-disk read (e.g. for cache of remote table engines / table functions, but not for storage configuration of MergeTree tables). Value 0 means no alignment.
    * @since 24.12
    */
-  filesystem_cache_boundary_alignment?: number;
+  filesystem_cache_boundary_alignment?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Wait time to lock cache for space reservation in filesystem cache
@@ -1906,7 +1906,7 @@ export interface ClickHouseSettings {
   /**
    * Max remote filesystem cache size that can be downloaded by a single query
    */
-  filesystem_cache_max_download_size?: number;
+  filesystem_cache_max_download_size?: bigint;
 
   /**
    * Filesystem cache name to use for stateless table engines or data lakes
@@ -1922,12 +1922,12 @@ export interface ClickHouseSettings {
   /**
    * Wait time to lock cache for space reservation in filesystem cache
    */
-  filesystem_cache_reserve_space_wait_lock_timeout_milliseconds?: number;
+  filesystem_cache_reserve_space_wait_lock_timeout_milliseconds?: bigint;
 
   /**
    * Limit on size of a single batch of file segments that a read buffer can request from cache. Too low value will lead to excessive requests to cache, too large may slow down eviction from cache
    */
-  filesystem_cache_segments_batch_size?: number;
+  filesystem_cache_segments_batch_size?: bigint;
 
   /**
    * Skip download from remote filesystem if exceeds query cache size
@@ -1938,22 +1938,22 @@ export interface ClickHouseSettings {
   /**
    * Maximum memory usage for prefetches.
    */
-  filesystem_prefetch_max_memory_usage?: number;
+  filesystem_prefetch_max_memory_usage?: bigint;
 
   /**
    * Prefetch step in bytes. Zero means `auto` - approximately the best prefetch step will be auto deduced, but might not be 100% the best. The actual value might be different because of setting filesystem_prefetch_min_bytes_for_single_read_task
    */
-  filesystem_prefetch_step_bytes?: number;
+  filesystem_prefetch_step_bytes?: bigint;
 
   /**
    * Prefetch step in marks. Zero means `auto` - approximately the best prefetch step will be auto deduced, but might not be 100% the best. The actual value might be different because of setting filesystem_prefetch_min_bytes_for_single_read_task
    */
-  filesystem_prefetch_step_marks?: number;
+  filesystem_prefetch_step_marks?: bigint;
 
   /**
    * Maximum number of prefetches. Zero means unlimited. A setting `filesystem_prefetches_max_memory_usage` is more recommended if you want to limit the number of prefetches
    */
-  filesystem_prefetches_limit?: number;
+  filesystem_prefetches_limit?: bigint;
 
   /**
    * Automatically applies [FINAL](../../sql-reference/statements/select/from.md/#final-modifier) modifier to all tables in a query, to tables where [FINAL](../../sql-reference/statements/select/from.md/#final-modifier) is applicable, including joined tables and tables in sub-queries, and distributed tables. Possible values: - 0 - disabled - 1 - enabled Example: ```sql CREATE TABLE test ( key Int64, some String ) ENGINE = ReplacingMergeTree ORDER BY key; INSERT INTO test FORMAT Values (1, 'first'); INSERT INTO test FORMAT Values (1, 'second'); SELECT * FROM test; ┌─key─┬─some───┐ │ 1 │ second │ └─────┴────────┘ ┌─key─┬─some──┐ │ 1 │ first │ └─────┴───────┘ SELECT * FROM test SETTINGS final = 1; ┌─key─┬─some───┐ │ 1 │ second │ └─────┴────────┘ SET final = 1; SELECT * FROM test; ┌─key─┬─some───┐ │ 1 │ second │ └─────┴────────┘ ```
@@ -2003,12 +2003,12 @@ export interface ClickHouseSettings {
   /**
    * Enables or disables query execution if [optimize_skip_unused_shards](#optimize_skip_unused_shards) is enabled and skipping of unused shards is not possible. If the skipping is not possible and the setting is enabled, an exception will be thrown. Possible values: - 0 — Disabled. ClickHouse does not throw an exception. - 1 — Enabled. Query execution is disabled only if the table has a sharding key. - 2 — Enabled. Query execution is disabled regardless of whether a sharding key is defined for the table.
    */
-  force_optimize_skip_unused_shards?: number;
+  force_optimize_skip_unused_shards?: bigint;
 
   /**
    * Controls [`force_optimize_skip_unused_shards`](#force_optimize_skip_unused_shards) (hence still requires [`force_optimize_skip_unused_shards`](#force_optimize_skip_unused_shards)) depends on the nesting level of the distributed query (case when you have `Distributed` table that look into another `Distributed` table). Possible values: - 0 - Disabled, `force_optimize_skip_unused_shards` works always. - 1 — Enables `force_optimize_skip_unused_shards` only for the first level. - 2 — Enables `force_optimize_skip_unused_shards` up to the second level.
    */
-  force_optimize_skip_unused_shards_nesting?: number;
+  force_optimize_skip_unused_shards_nesting?: bigint;
 
   /**
    * Disables query execution if indexing by the primary key is not possible. Works with tables in the MergeTree family. If `force_primary_key=1`, ClickHouse checks to see if the query has a primary key condition that can be used for restricting data ranges. If there is no suitable condition, it throws an exception. However, it does not check whether the condition reduces the amount of data to read. For more information about data ranges in MergeTree tables, see [MergeTree](../../engines/table-engines/mergetree-family/mergetree.md).
@@ -2056,7 +2056,7 @@ export interface ClickHouseSettings {
    * Allows to change the behaviour of the result type of `dateTrunc` function. Possible values: - 0 - When the second argument is `DateTime64/Date32` the return type will be `DateTime64/Date32` regardless of the time unit in the first argument. - 1 - For `Date32` the result is always `Date`. For `DateTime64` the result is `DateTime` for time units `second` and higher.
    * @since 25.8
    */
-  function_date_trunc_return_type_behavior?: number;
+  function_date_trunc_return_type_behavior?: bigint;
 
   /**
    * Choose function implementation for specific target or variant (experimental). If empty enable all of them.
@@ -2081,17 +2081,17 @@ export interface ClickHouseSettings {
   /**
    * Sets the safety threshold for data volume generated by function [range](/sql-reference/functions/array-functions#range). Defines the maximum number of values generated by function per block of data (sum of array sizes for every row in a block). Possible values: - Positive integer. **See Also** - [`max_block_size`](#max_block_size) - [`min_insert_block_size_rows`](#min_insert_block_size_rows)
    */
-  function_range_max_elements_in_block?: number;
+  function_range_max_elements_in_block?: bigint;
 
   /**
    * Maximum number of microseconds the function `sleep` is allowed to sleep for each block. If a user called it with a larger value, it throws an exception. It is a safety threshold.
    */
-  function_sleep_max_microseconds_per_block?: number;
+  function_sleep_max_microseconds_per_block?: bigint;
 
   /**
    * The version of `visibleWidth` behavior. 0 - only count the number of code points; 1 - correctly count zero-width and combining characters, count full-width characters as two, estimate the tab width, count delete characters.
    */
-  function_visible_width_behavior?: number;
+  function_visible_width_behavior?: bigint;
 
   /**
    * If all four arguments to `geoDistance`, `greatCircleDistance`, `greatCircleAngle` functions are Float64, return Float64 and use double precision for internal calculations. In previous ClickHouse versions, the functions always returned Float32.
@@ -2107,17 +2107,17 @@ export interface ClickHouseSettings {
   /**
    * Maximum number of allowed addresses (For external storages, table functions, etc).
    */
-  glob_expansion_max_elements?: number;
+  glob_expansion_max_elements?: bigint;
 
   /**
    * Initial number of grace hash join buckets
    */
-  grace_hash_join_initial_buckets?: number;
+  grace_hash_join_initial_buckets?: bigint;
 
   /**
    * Limit on the number of grace hash join buckets
    */
-  grace_hash_join_max_buckets?: number;
+  grace_hash_join_max_buckets?: bigint;
 
   /**
    * Sets what happens when the number of unique keys for aggregation exceeds the limit: - `throw`: throw an exception - `break`: stop executing the query and return the partial result - `any`: continue aggregation for the keys that got into the set, but do not add new keys to the set. Using the 'any' value lets you run an approximation of GROUP BY. The quality of this approximation depends on the statistical nature of the data.
@@ -2127,12 +2127,12 @@ export interface ClickHouseSettings {
   /**
    * From what number of keys, a two-level aggregation starts. 0 - the threshold is not set.
    */
-  group_by_two_level_threshold?: number;
+  group_by_two_level_threshold?: bigint;
 
   /**
    * From what size of the aggregation state in bytes, a two-level aggregation begins to be used. 0 - the threshold is not set. Two-level aggregation is used when at least one of the thresholds is triggered.
    */
-  group_by_two_level_threshold_bytes?: number;
+  group_by_two_level_threshold_bytes?: bigint;
 
   /**
    * Changes the way the [GROUP BY clause](/sql-reference/statements/select/group-by) treats the types of aggregation keys. When the `ROLLUP`, `CUBE`, or `GROUPING SETS` specifiers are used, some aggregation keys may not be used to produce some result rows. Columns for these keys are filled with either default value or `NULL` in corresponding rows depending on this setting. Possible values: - 0 — The default value for the aggregation key type is used to produce missing values. - 1 — ClickHouse executes `GROUP BY` the same way as the SQL standard says. The types of aggregation keys are converted to [Nullable](/sql-reference/data-types/nullable). Columns for corresponding aggregation keys are filled with [NULL](/sql-reference/syntax#null) for rows that didn't use it. See also: - [GROUP BY clause](/sql-reference/statements/select/group-by)
@@ -2163,7 +2163,7 @@ export interface ClickHouseSettings {
   /**
    * The actual number of replications can be specified when the hdfs file is created.
    */
-  hdfs_replication?: number;
+  hdfs_replication?: bigint;
 
   /**
    * Enables or disables skipping empty files in [HDFS](../../engines/table-engines/integrations/hdfs.md) engine tables. Possible values: - 0 — `SELECT` throws an exception if empty file is not compatible with requested format. - 1 — `SELECT` returns empty result for empty file.
@@ -2188,12 +2188,12 @@ export interface ClickHouseSettings {
   /**
    * The size of the dynamic candidate list when searching the vector similarity index, also known as 'ef_search'.
    */
-  hnsw_candidate_list_size_for_search?: number;
+  hnsw_candidate_list_size_for_search?: bigint;
 
   /**
    * Expired time for HSTS. 0 means disable HSTS.
    */
-  hsts_max_age?: number;
+  hsts_max_age?: bigint;
 
   /**
    * HTTP connection timeout (in seconds). Possible values: - Any positive integer. - 0 - Disabled (infinite timeout).
@@ -2203,7 +2203,7 @@ export interface ClickHouseSettings {
   /**
    * Do not send HTTP headers X-ClickHouse-Progress more frequently than at each specified interval.
    */
-  http_headers_progress_interval_ms?: number;
+  http_headers_progress_interval_ms?: bigint;
 
   /**
    * The `http_make_head_request` setting allows the execution of a `HEAD` request while reading data from HTTP to retrieve information about the file to be read, such as its size. Since it's enabled by default, it may be desirable to disable this setting in cases where the server does not support `HEAD` requests.
@@ -2213,37 +2213,37 @@ export interface ClickHouseSettings {
   /**
    * Maximum length of field name in HTTP header
    */
-  http_max_field_name_size?: number;
+  http_max_field_name_size?: bigint;
 
   /**
    * Maximum length of field value in HTTP header
    */
-  http_max_field_value_size?: number;
+  http_max_field_value_size?: bigint;
 
   /**
    * Maximum number of fields in HTTP header
    */
-  http_max_fields?: number;
+  http_max_fields?: bigint;
 
   /**
    * Limit on size of multipart/form-data content. This setting cannot be parsed from URL parameters and should be set in a user profile. Note that content is parsed and external tables are created in memory before the start of query execution. And this is the only limit that has an effect on that stage (limits on max memory usage and max execution time have no effect while reading HTTP form data).
    */
-  http_max_multipart_form_data_size?: number;
+  http_max_multipart_form_data_size?: bigint;
 
   /**
    * Limit on size of request data used as a query parameter in predefined HTTP requests.
    */
-  http_max_request_param_data_size?: number;
+  http_max_request_param_data_size?: bigint;
 
   /**
    * Max attempts to read via http.
    */
-  http_max_tries?: number;
+  http_max_tries?: bigint;
 
   /**
    * Sets the maximum URI length of an HTTP request. Possible values: - Positive integer.
    */
-  http_max_uri_size?: number;
+  http_max_uri_size?: bigint;
 
   /**
    * Enables or disables checksum verification when decompressing the HTTP POST data from the client. Used only for ClickHouse native compression format (not used with `gzip` or `deflate`). For more information, read the [HTTP interface description](/interfaces/http). Possible values: - 0 — Disabled. - 1 — Enabled.
@@ -2258,7 +2258,7 @@ export interface ClickHouseSettings {
   /**
    * The number of bytes to buffer in the server memory before sending a HTTP response to the client or flushing to disk (when http_wait_end_of_query is enabled).
    */
-  http_response_buffer_size?: number;
+  http_response_buffer_size?: bigint;
 
   /**
    * Allows to add or override HTTP headers which the server will return in the response with a successful query result. This only affects the HTTP interface. If the header is already set by default, the provided value will override it. If the header was not set by default, it will be added to the list of headers. Headers that are set by the server by default and not overridden by this setting, will remain. The setting allows you to set a header to a constant value. Currently there is no way to set a header to a dynamically calculated value. Neither names or values can contain ASCII control characters. If you implement a UI application which allows users to modify settings but at the same time makes decisions based on the returned headers, it is recommended to restrict this setting to readonly. Example: `SET http_response_headers = '{"Content-Type": "image/png"}'`
@@ -2269,12 +2269,12 @@ export interface ClickHouseSettings {
   /**
    * Min milliseconds for backoff, when retrying read via http
    */
-  http_retry_initial_backoff_ms?: number;
+  http_retry_initial_backoff_ms?: bigint;
 
   /**
    * Max milliseconds for backoff, when retrying read via http
    */
-  http_retry_max_backoff_ms?: number;
+  http_retry_max_backoff_ms?: bigint;
 
   /**
    * HTTP send timeout (in seconds). Possible values: - Any positive integer. - 0 - Disabled (infinite timeout). :::note It's applicable only to the default profile. A server reboot is required for the changes to take effect. :::
@@ -2299,7 +2299,7 @@ export interface ClickHouseSettings {
   /**
    * Sets the level of data compression in the response to an HTTP request if [enable_http_compression = 1](#enable_http_compression). Possible values: Numbers from 1 to 9.
    */
-  http_zlib_compression_level?: number;
+  http_zlib_compression_level?: bigint;
 
   /**
    * Whether to delete all iceberg files on drop or not.
@@ -2311,19 +2311,19 @@ export interface ClickHouseSettings {
    * Max bytes of iceberg parquet data file on insert operation.
    * @since 25.11
    */
-  iceberg_insert_max_bytes_in_data_file?: number;
+  iceberg_insert_max_bytes_in_data_file?: bigint;
 
   /**
    * Max allowed partitions count per one insert operation for Iceberg table engine.
    * @since 26.1
    */
-  iceberg_insert_max_partitions?: number;
+  iceberg_insert_max_partitions?: bigint;
 
   /**
    * Max rows of iceberg parquet data file on insert operation.
    * @since 25.11
    */
-  iceberg_insert_max_rows_in_data_file?: number;
+  iceberg_insert_max_rows_in_data_file?: bigint;
 
   /**
    * Method to compress `.metadata.json` file.
@@ -2341,23 +2341,23 @@ export interface ClickHouseSettings {
    * Query Iceberg table using the specific snapshot id.
    * @since 25.5
    */
-  iceberg_snapshot_id?: number;
+  iceberg_snapshot_id?: bigint;
 
   /**
    * Query Iceberg table using the snapshot that was current at a specific timestamp.
    * @since 25.5
    */
-  iceberg_timestamp_ms?: number;
+  iceberg_timestamp_ms?: bigint;
 
   /**
    * Timeout to close idle TCP connections after specified number of seconds. Possible values: - Positive integer (0 - close immediately, after 0 seconds).
    */
-  idle_connection_timeout?: number;
+  idle_connection_timeout?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Exclude new data parts from SELECT queries until they're either pre-warmed (see [cache_populated_by_fetch](merge-tree-settings.md/#cache_populated_by_fetch)) or this many seconds old. Only for Replicated-/SharedMergeTree.
    */
-  ignore_cold_parts_seconds?: number;
+  ignore_cold_parts_seconds?: bigint;
 
   /**
    * Ignores the skipping indexes specified if used by the query. Consider the following example: ```sql CREATE TABLE data ( key Int, x Int, y Int, INDEX x_idx x TYPE minmax GRANULARITY 1, INDEX y_idx y TYPE minmax GRANULARITY 1, INDEX xy_idx (x,y) TYPE minmax GRANULARITY 1 ) Engine=MergeTree() ORDER BY key; INSERT INTO data VALUES (1, 2, 3); SELECT * FROM data; SELECT * FROM data SETTINGS ignore_data_skipping_indices=''; -- query will produce CANNOT_PARSE_TEXT error. SELECT * FROM data SETTINGS ignore_data_skipping_indices='x_idx'; -- Ok. SELECT * FROM data SETTINGS ignore_data_skipping_indices='na_idx'; -- Ok. SELECT * FROM data WHERE x = 1 AND y = 1 SETTINGS ignore_data_skipping_indices='xy_idx',force_data_skipping_indices='xy_idx' ; -- query will produce INDEX_NOT_USED error, since xy_idx is explicitly ignored. SELECT * FROM data WHERE x = 1 AND y = 2 SETTINGS ignore_data_skipping_indices='xy_idx'; ``` The query without ignoring any indexes: ```sql EXPLAIN indexes = 1 SELECT * FROM data WHERE x = 1 AND y = 2; Expression ((Projection + Before ORDER BY)) Filter (WHERE) ReadFromMergeTree (default.data) Indexes: PrimaryKey Condition: true Parts: 1/1 Granules: 1/1 Skip Name: x_idx Description: minmax GRANULARITY 1 Parts: 0/1 Granules: 0/1 Skip Name: y_idx Description: minmax GRANULARITY 1 Parts: 0/0 Granules: 0/0 Skip Name: xy_idx Description: minmax GRANULARITY 1 Parts: 0/0 Granules: 0/0 ``` Ignoring the `xy_idx` index: ```sql EXPLAIN indexes = 1 SELECT * FROM data WHERE x = 1 AND y = 2 SETTINGS ignore_data_skipping_indices='xy_idx'; Expression ((Projection + Before ORDER BY)) Filter (WHERE) ReadFromMergeTree (default.data) Indexes: PrimaryKey Condition: true Parts: 1/1 Granules: 1/1 Skip Name: x_idx Description: minmax GRANULARITY 1 Parts: 0/1 Granules: 0/1 Skip Name: y_idx Description: minmax GRANULARITY 1 Parts: 0/0 Granules: 0/0 ``` Works with tables in the MergeTree family.
@@ -2439,22 +2439,22 @@ export interface ClickHouseSettings {
   /**
    * 0 - random seed, otherwise the setting value
    */
-  insert_keeper_fault_injection_seed?: number;
+  insert_keeper_fault_injection_seed?: bigint;
 
   /**
    * The setting sets the maximum number of retries for ClickHouse Keeper (or ZooKeeper) requests during insert into replicated MergeTree. Only Keeper requests which failed due to network error, Keeper session timeout, or request timeout are considered for retries. Possible values: - Positive integer. - 0 — Retries are disabled Cloud default value: `20`. Keeper request retries are done after some timeout. The timeout is controlled by the following settings: `insert_keeper_retry_initial_backoff_ms`, `insert_keeper_retry_max_backoff_ms`. The first retry is done after `insert_keeper_retry_initial_backoff_ms` timeout. The consequent timeouts will be calculated as follows: ``` timeout = min(insert_keeper_retry_max_backoff_ms, latest_timeout * 2) ``` For example, if `insert_keeper_retry_initial_backoff_ms=100`, `insert_keeper_retry_max_backoff_ms=10000` and `insert_keeper_max_retries=8` then timeouts will be `100, 200, 400, 800, 1600, 3200, 6400, 10000`. Apart from fault tolerance, the retries aim to provide a better user experience - they allow to avoid returning an error during INSERT execution if Keeper is restarted, for example, due to an upgrade.
    */
-  insert_keeper_max_retries?: number;
+  insert_keeper_max_retries?: bigint;
 
   /**
    * Initial timeout(in milliseconds) to retry a failed Keeper request during INSERT query execution Possible values: - Positive integer. - 0 — No timeout
    */
-  insert_keeper_retry_initial_backoff_ms?: number;
+  insert_keeper_retry_initial_backoff_ms?: bigint;
 
   /**
    * Maximum timeout (in milliseconds) to retry a failed Keeper request during INSERT query execution Possible values: - Positive integer. - 0 — Maximum timeout is not limited
    */
-  insert_keeper_retry_max_backoff_ms?: number;
+  insert_keeper_retry_max_backoff_ms?: bigint;
 
   /**
    * Enables or disables the insertion of [default values](/sql-reference/statements/create/table#default_values) instead of [NULL](/sql-reference/syntax#null) into columns with not [nullable](/sql-reference/data-types/nullable) data type. If column type is not nullable and this setting is disabled, then inserting `NULL` causes an exception. If column type is nullable, then `NULL` values are inserted as is, regardless of this setting. This setting is applicable to [INSERT ... SELECT](../../sql-reference/statements/insert-into.md/#inserting-the-results-of-select) queries. Note that `SELECT` subqueries may be concatenated with `UNION ALL` clause. Possible values: - 0 — Inserting `NULL` into a not nullable column causes an exception. - 1 — Default column value is inserted instead of `NULL`.
@@ -2485,12 +2485,12 @@ export interface ClickHouseSettings {
   /**
    * If not `0`, specifies the shard of [Distributed](/engines/table-engines/special/distributed) table into which the data will be inserted synchronously. If `insert_shard_id` value is incorrect, the server will throw an exception. To get the number of shards on `requested_cluster`, you can check server config or use this query: ```sql SELECT uniq(shard_num) FROM system.clusters WHERE cluster = 'requested_cluster'; ``` Possible values: - 0 — Disabled. - Any number from `1` to `shards_num` of corresponding [Distributed](/engines/table-engines/special/distributed) table. **Example** Query: ```sql CREATE TABLE x AS system.numbers ENGINE = MergeTree ORDER BY number; CREATE TABLE x_dist AS x ENGINE = Distributed('test_cluster_two_shards_localhost', currentDatabase(), x); INSERT INTO x_dist SELECT * FROM numbers(5) SETTINGS insert_shard_id = 1; SELECT * FROM x_dist ORDER BY number ASC; ``` Result: ```text ┌─number─┐ │ 0 │ │ 0 │ │ 1 │ │ 1 │ │ 2 │ │ 2 │ │ 3 │ │ 3 │ │ 4 │ │ 4 │ └────────┘ ```
    */
-  insert_shard_id?: number;
+  insert_shard_id?: bigint;
 
   /**
    * The interval in microseconds for checking whether request execution has been canceled and sending the progress.
    */
-  interactive_delay?: number;
+  interactive_delay?: bigint;
 
   /**
    * Set default mode in INTERSECT query. Possible values: empty string, 'ALL', 'DISTINCT'. If empty, query without mode will throw exception.
@@ -2522,12 +2522,12 @@ export interface ClickHouseSettings {
   /**
    * Limits the number of files allowed for parallel sorting in MergeJoin operations when they are executed on disk. The bigger the value of the setting, the more RAM is used and the less disk I/O is needed. Possible values: - Any positive integer, starting from 2.
    */
-  join_on_disk_max_files_to_merge?: number;
+  join_on_disk_max_files_to_merge?: bigint;
 
   /**
    * The lower limit of per-key average rows in the right table to determine whether to output by row list in hash join.
    */
-  join_output_by_rowlist_perkey_rows_threshold?: number;
+  join_output_by_rowlist_perkey_rows_threshold?: bigint;
 
   /**
    * Defines what action ClickHouse performs when any of the following join limits is reached: - [max_bytes_in_join](/operations/settings/settings#max_bytes_in_join) - [max_rows_in_join](/operations/settings/settings#max_rows_in_join) Possible values: - `THROW` — ClickHouse throws an exception and breaks operation. - `BREAK` — ClickHouse breaks operation and does not throw an exception. Default value: `THROW`. **See Also** - [JOIN clause](/sql-reference/statements/select/join) - [Join table engine](/engines/table-engines/special/join)
@@ -2538,29 +2538,29 @@ export interface ClickHouseSettings {
    * Size in bytes of a bloom filter used as JOIN runtime filter (see enable_join_runtime_filters setting).
    * @since 25.11
    */
-  join_runtime_bloom_filter_bytes?: number;
+  join_runtime_bloom_filter_bytes?: bigint;
 
   /**
    * Number of hash functions in a bloom filter used as JOIN runtime filter (see enable_join_runtime_filters setting).
    * @since 25.11
    */
-  join_runtime_bloom_filter_hash_functions?: number;
+  join_runtime_bloom_filter_hash_functions?: bigint;
 
   /**
    * Maximum number of elements in runtime filter that are stored as is in a set, when this threshold is exceeded if switches to bloom filter.
    * @since 25.11
    */
-  join_runtime_filter_exact_values_limit?: number;
+  join_runtime_filter_exact_values_limit?: bigint;
 
   /**
    * The maximum number of rows in the right table to determine whether to rerange the right table by key in left or inner join.
    */
-  join_to_sort_maximum_table_rows?: number;
+  join_to_sort_maximum_table_rows?: bigint;
 
   /**
    * The lower limit of per-key average rows in the right table to determine whether to rerange the right table by key in left or inner join. This setting ensures that the optimization is not applied for sparse table keys
    */
-  join_to_sort_minimum_perkey_rows?: number;
+  join_to_sort_minimum_perkey_rows?: bigint;
 
   /**
    * Sets the type of [JOIN](../../sql-reference/statements/select/join.md) behaviour. When merging tables, empty cells may appear. ClickHouse fills them differently based on this setting. Possible values: - 0 — The empty cells are filled with the default value of the corresponding field type. - 1 — `JOIN` behaves the same way as in standard SQL. The type of the corresponding field is converted to [Nullable](/sql-reference/data-types/nullable), and empty cells are filled with [NULL](/sql-reference/syntax).
@@ -2596,17 +2596,17 @@ export interface ClickHouseSettings {
   /**
    * Max retries for general keeper operations
    */
-  keeper_max_retries?: number;
+  keeper_max_retries?: bigint;
 
   /**
    * Initial backoff timeout for general keeper operations
    */
-  keeper_retry_initial_backoff_ms?: number;
+  keeper_retry_initial_backoff_ms?: bigint;
 
   /**
    * Max backoff timeout for general keeper operations
    */
-  keeper_retry_max_backoff_ms?: number;
+  keeper_retry_max_backoff_ms?: bigint;
 
   /**
    * If enabled, functions 'least' and 'greatest' return NULL if one of their arguments is NULL.
@@ -2628,12 +2628,12 @@ export interface ClickHouseSettings {
   /**
    * The same as [`mutations_sync`](#mutations_sync), but controls only execution of lightweight deletes. Possible values: | Value | Description | |-------|-------------------------------------------------------------------------------------------------------------------------------------------------------| | `0` | Mutations execute asynchronously. | | `1` | The query waits for the lightweight deletes to complete on the current server. | | `2` | The query waits for the lightweight deletes to complete on all replicas (if they exist). | | `3` | The query waits only for active replicas. Supported only for `SharedMergeTree`. For `ReplicatedMergeTree` it behaves the same as `mutations_sync = 2`.| **See Also** - [Synchronicity of ALTER Queries](../../sql-reference/statements/alter/index.md/#synchronicity-of-alter-queries) - [Mutations](../../sql-reference/statements/alter/index.md/#mutations)
    */
-  lightweight_deletes_sync?: number;
+  lightweight_deletes_sync?: bigint;
 
   /**
    * Sets the maximum number of rows to get from the query result. It adjusts the value set by the [LIMIT](/sql-reference/statements/select/limit) clause, so that the limit, specified in the query, cannot exceed the limit, set by this setting. Possible values: - 0 — The number of rows is not limited. - Positive integer.
    */
-  limit?: number;
+  limit?: bigint;
 
   /**
    * Specifies the algorithm of replicas selection that is used for distributed query processing. ClickHouse supports the following algorithms of choosing replicas: - [Random](#load_balancing-random) (by default) - [Nearest hostname](#load_balancing-nearest_hostname) - [Hostname levenshtein distance](#load_balancing-hostname_levenshtein_distance) - [In order](#load_balancing-in_order) - [First or random](#load_balancing-first_or_random) - [Round robin](#load_balancing-round_robin) See also: - [distributed_replica_max_ignored_errors](#distributed_replica_max_ignored_errors) ### Random (by Default) {#load_balancing-random} ```sql load_balancing = random ``` The number of errors is counted for each replica. The query is sent to the replica with the fewest errors, and if there are several of these, to anyone of them. Disadvantages: Server proximity is not accounted for; if the replicas have different data, you will also get different data. ### Nearest Hostname {#load_balancing-nearest_hostname} ```sql load_balancing = nearest_hostname ``` The number of errors is counted for each replica. Every 5 minutes, the number of errors is integrally divided by 2. Thus, the number of errors is calculated for a recent time with exponential smoothing. If there is one replica with a minimal number of errors (i.e. errors occurred recently on the other replicas), the query is sent to it. If there are multiple replicas with the same minimal number of errors, the query is sent to the replica with a hostname that is most similar to the server's hostname in the config file (for the number of different characters in identical positions, up to the minimum length of both hostnames). For instance, example01-01-1 and example01-01-2 are different in one position, while example01-01-1 and example01-02-2 differ in two places. This method might seem primitive, but it does not require external data about network topology, and it does not compare IP addresses, which would be complicated for our IPv6 addresses. Thus, if there are equivalent replicas, the closest one by name is preferred. We can also assume that when sending a query to the same server, in the absence of failures, a distributed query will also go to the same servers. So even if different data is placed on the replicas, the query will return mostly the same results. ### Hostname levenshtein distance {#load_balancing-hostname_levenshtein_distance} ```sql load_balancing = hostname_levenshtein_distance ``` Just like `nearest_hostname`, but it compares hostname in a [levenshtein distance](https://en.wikipedia.org/wiki/Levenshtein_distance) manner. For example: ```text example-clickhouse-0-0 ample-clickhouse-0-0 1 example-clickhouse-0-0 example-clickhouse-1-10 2 example-clickhouse-0-0 example-clickhouse-12-0 3 ``` ### In Order {#load_balancing-in_order} ```sql load_balancing = in_order ``` Replicas with the same number of errors are accessed in the same order as they are specified in the configuration. This method is appropriate when you know exactly which replica is preferable. ### First or Random {#load_balancing-first_or_random} ```sql load_balancing = first_or_random ``` This algorithm chooses the first replica in the set or a random replica if the first is unavailable. It's effective in cross-replication topology setups, but useless in other configurations. The `first_or_random` algorithm solves the problem of the `in_order` algorithm. With `in_order`, if one replica goes down, the next one gets a double load while the remaining replicas handle the usual amount of traffic. When using the `first_or_random` algorithm, the load is evenly distributed among replicas that are still available. It's possible to explicitly define what the first replica is by using the setting `load_balancing_first_offset`. This gives more control to rebalance query workloads among replicas. ### Round Robin {#load_balancing-round_robin} ```sql load_balancing = round_robin ``` This algorithm uses a round-robin policy across replicas with the same number of errors (only the queries with `round_robin` policy is accounted).
@@ -2643,7 +2643,7 @@ export interface ClickHouseSettings {
   /**
    * Which replica to preferably send a query when FIRST_OR_RANDOM load balancing strategy is used.
    */
-  load_balancing_first_offset?: number;
+  load_balancing_first_offset?: bigint;
 
   /**
    * Load MergeTree marks asynchronously
@@ -2693,7 +2693,7 @@ export interface ClickHouseSettings {
   /**
    * If query length is greater than a specified threshold (in bytes), then cut query when writing to query log. Also limit the length of printed query in ordinary text log.
    */
-  log_queries_cut_to_length?: number;
+  log_queries_cut_to_length?: bigint;
 
   /**
    * If enabled (non-zero), queries faster than the value of this setting will not be logged (you can think about this as a `long_query_time` for [MySQL Slow Query Log](https://dev.mysql.com/doc/refman/5.7/slow-query-log.html)), and this basically means that you will not find them in the following tables: - `system.query_log` - `system.query_thread_log` Only the queries with the following type will get to the log: - `QUERY_FINISH` - `EXCEPTION_WHILE_PROCESSING` - Type: milliseconds - Default value: 0 (any query)
@@ -2733,7 +2733,7 @@ export interface ClickHouseSettings {
   /**
    * Sets a maximum size in rows of a shared global dictionary for the [LowCardinality](../../sql-reference/data-types/lowcardinality.md) data type that can be written to a storage file system. This setting prevents issues with RAM in case of unlimited dictionary growth. All the data that can't be encoded due to maximum dictionary size limitation ClickHouse writes in an ordinary method. Possible values: - Any positive integer.
    */
-  low_cardinality_max_dictionary_size?: number;
+  low_cardinality_max_dictionary_size?: bigint;
 
   /**
    * Turns on or turns off using of single dictionary for the data part. By default, the ClickHouse server monitors the size of dictionaries and if a dictionary overflows then the server starts to write the next one. To prohibit creating several dictionaries set `low_cardinality_use_single_dictionary_for_part = 1`. Possible values: - 1 — Creating several dictionaries for the data part is prohibited. - 0 — Creating several dictionaries for the data part is not prohibited.
@@ -2781,63 +2781,63 @@ export interface ClickHouseSettings {
   /**
    * Maximum number of analyses performed by interpreter.
    */
-  max_analyze_depth?: number;
+  max_analyze_depth?: bigint;
 
   /**
    * The maximum nesting depth of a query syntactic tree. If exceeded, an exception is thrown. :::note At this time, it isn't checked during parsing, but only after parsing the query. This means that a syntactic tree that is too deep can be created during parsing, but the query will fail. :::
    */
-  max_ast_depth?: number;
+  max_ast_depth?: bigint;
 
   /**
    * The maximum number of elements in a query syntactic tree. If exceeded, an exception is thrown. :::note At this time, it isn't checked during parsing, but only after parsing the query. This means that a syntactic tree that is too deep can be created during parsing, but the query will fail. :::
    */
-  max_ast_elements?: number;
+  max_ast_elements?: bigint;
 
   /**
    * The limit on the number of series created by the `generateSerialID` function. As each series represents a node in Keeper, it is recommended to have no more than a couple of millions of them.
    * @since 25.2
    */
-  max_autoincrement_series?: number;
+  max_autoincrement_series?: bigint;
 
   /**
    * The maximum read speed in bytes per second for particular backup on server. Zero means unlimited.
    */
-  max_backup_bandwidth?: number;
+  max_backup_bandwidth?: bigint;
 
   /**
    * In ClickHouse, data is processed by blocks, which are sets of column parts. The internal processing cycles for a single block are efficient but there are noticeable costs when processing each block. The `max_block_size` setting indicates the recommended maximum number of rows to include in a single block when loading data from tables. Blocks the size of `max_block_size` are not always loaded from the table: if ClickHouse determines that less data needs to be retrieved, a smaller block is processed. The block size should not be too small to avoid noticeable costs when processing each block. It should also not be too large to ensure that queries with a LIMIT clause execute quickly after processing the first block. When setting `max_block_size`, the goal should be to avoid consuming too much memory when extracting a large number of columns in multiple threads and to preserve at least some cache locality.
    */
-  max_block_size?: number;
+  max_block_size?: bigint;
 
   /**
    * Cloud default value: half the memory amount per replica. Enables or disables execution of `GROUP BY` clauses in external memory. (See [GROUP BY in external memory](/sql-reference/statements/select/group-by#group-by-in-external-memory)) Possible values: - Maximum volume of RAM (in bytes) that can be used by the single [GROUP BY](/sql-reference/statements/select/group-by) operation. - `0` — `GROUP BY` in external memory disabled. :::note If memory usage during GROUP BY operations is exceeding this threshold in bytes, activate the 'external aggregation' mode (spill data to disk). The recommended value is half of the available system memory. :::
    */
-  max_bytes_before_external_group_by?: number;
+  max_bytes_before_external_group_by?: bigint;
 
   /**
    * Cloud default value: half the memory amount per replica. Enables or disables execution of `ORDER BY` clauses in external memory. See [ORDER BY Implementation Details](../../sql-reference/statements/select/order-by.md#implementation-details) If memory usage during ORDER BY operation exceeds this threshold in bytes, the 'external sorting' mode (spill data to disk) is activated. Possible values: - Maximum volume of RAM (in bytes) that can be used by the single [ORDER BY](../../sql-reference/statements/select/order-by.md) operation. The recommended value is half of available system memory - `0` — `ORDER BY` in external memory disabled.
    */
-  max_bytes_before_external_sort?: number;
+  max_bytes_before_external_sort?: bigint;
 
   /**
    * In case of ORDER BY with LIMIT, when memory usage is higher than specified threshold, perform additional steps of merging blocks before final merge to keep just top LIMIT rows.
    */
-  max_bytes_before_remerge_sort?: number;
+  max_bytes_before_remerge_sort?: bigint;
 
   /**
    * The maximum number of bytes of the state (in uncompressed bytes) in memory, which is used by a hash table when using DISTINCT.
    */
-  max_bytes_in_distinct?: number;
+  max_bytes_in_distinct?: bigint;
 
   /**
    * The maximum size in number of bytes of the hash table used when joining tables. This setting applies to [SELECT ... JOIN](/sql-reference/statements/select/join) operations and the [Join table engine](/engines/table-engines/special/join). If the query contains joins, ClickHouse checks this setting for every intermediate result. ClickHouse can proceed with different actions when the limit is reached. Use the [join_overflow_mode](/operations/settings/settings#join_overflow_mode) settings to choose the action. Possible values: - Positive integer. - 0 — Memory control is disabled.
    */
-  max_bytes_in_join?: number;
+  max_bytes_in_join?: bigint;
 
   /**
    * The maximum number of bytes (of uncompressed data) used by a set in the IN clause created from a subquery.
    */
-  max_bytes_in_set?: number;
+  max_bytes_in_set?: bigint;
 
   /**
    * The ratio of available memory that is allowed for `GROUP BY`. Once reached, external memory is used for aggregation. For example, if set to `0.6`, `GROUP BY` will allow using 60% of the available memory (to server/user/merges) at the beginning of the execution, after that, it will start using external aggregation.
@@ -2854,57 +2854,57 @@ export interface ClickHouseSettings {
   /**
    * The maximum number of bytes (of uncompressed data) that can be read from a table when running a query. The restriction is checked for each processed chunk of data, applied only to the deepest table expression and when reading from a remote server, checked only on the remote server.
    */
-  max_bytes_to_read?: number;
+  max_bytes_to_read?: bigint;
 
   /**
    * The maximum number of bytes (of uncompressed data) that can be read from a local table on a leaf node when running a distributed query. While distributed queries can issue a multiple sub-queries to each shard (leaf) - this limit will be checked only on the read stage on the leaf nodes and will be ignored on the merging of results stage on the root node. For example, a cluster consists of 2 shards and each shard contains a table with 100 bytes of data. A distributed query which is supposed to read all the data from both tables with setting `max_bytes_to_read=150` will fail as in total it will be 200 bytes. A query with `max_bytes_to_read_leaf=150` will succeed since leaf nodes will read 100 bytes at max. The restriction is checked for each processed chunk of data. :::note This setting is unstable with `prefer_localhost_replica=1`. :::
    */
-  max_bytes_to_read_leaf?: number;
+  max_bytes_to_read_leaf?: bigint;
 
   /**
    * The maximum number of bytes before sorting. If more than the specified amount of uncompressed bytes have to be processed for ORDER BY operation, the behavior will be determined by the `sort_overflow_mode` which by default is set to `throw`.
    */
-  max_bytes_to_sort?: number;
+  max_bytes_to_sort?: bigint;
 
   /**
    * The maximum number of bytes (uncompressed data) that can be passed to a remote server or saved in a temporary table when the GLOBAL IN/JOIN section is executed.
    */
-  max_bytes_to_transfer?: number;
+  max_bytes_to_transfer?: bigint;
 
   /**
    * The maximum number of columns that can be read from a table in a single query. If a query requires reading more than the specified number of columns, an exception is thrown. :::tip This setting is useful for preventing overly complex queries. ::: `0` value means unlimited.
    */
-  max_columns_to_read?: number;
+  max_columns_to_read?: bigint;
 
   /**
    * The maximum size of blocks of uncompressed data before compressing for writing to a table. By default, 1,048,576 (1 MiB). Specifying a smaller block size generally leads to slightly reduced compression ratio, the compression and decompression speed increases slightly due to cache locality, and memory consumption is reduced. :::note This is an expert-level setting, and you shouldn't change it if you're just getting started with ClickHouse. ::: Don't confuse blocks for compression (a chunk of memory consisting of bytes) with blocks for query processing (a set of rows from a table).
    */
-  max_compress_block_size?: number;
+  max_compress_block_size?: bigint;
 
   /**
    * Throw exception if the value of this setting is less or equal than the current number of simultaneously processed queries. Example: `max_concurrent_queries_for_all_users` can be set to 99 for all users and database administrator can set it to 100 for itself to run queries for investigation even when the server is overloaded. Modifying the setting for one query or user does not affect other queries. Possible values: - Positive integer. - 0 — No limit. **Example** ```xml <max_concurrent_queries_for_all_users>99</max_concurrent_queries_for_all_users> ``` **See Also** - [max_concurrent_queries](/operations/server-configuration-parameters/settings#max_concurrent_queries)
    */
-  max_concurrent_queries_for_all_users?: number;
+  max_concurrent_queries_for_all_users?: bigint;
 
   /**
    * The maximum number of simultaneously processed queries per user. Possible values: - Positive integer. - 0 — No limit. **Example** ```xml <max_concurrent_queries_for_user>5</max_concurrent_queries_for_user> ```
    */
-  max_concurrent_queries_for_user?: number;
+  max_concurrent_queries_for_user?: bigint;
 
   /**
    * The maximum number of simultaneous connections with remote servers for distributed processing of a single query to a single Distributed table. We recommend setting a value no less than the number of servers in the cluster. The following parameters are only used when creating Distributed tables (and when launching a server), so there is no reason to change them at runtime.
    */
-  max_distributed_connections?: number;
+  max_distributed_connections?: bigint;
 
   /**
    * Limits the maximum depth of recursive queries for [Distributed](../../engines/table-engines/special/distributed.md) tables. If the value is exceeded, the server throws an exception. Possible values: - Positive integer. - 0 — Unlimited depth.
    */
-  max_distributed_depth?: number;
+  max_distributed_depth?: bigint;
 
   /**
    * The maximal size of buffer for parallel downloading (e.g. for URL engine) per each thread.
    */
-  max_download_buffer_size?: number;
+  max_download_buffer_size?: bigint;
 
   /**
    * The maximum number of threads to download data (e.g. for URL engine).
@@ -2919,12 +2919,12 @@ export interface ClickHouseSettings {
   /**
    * The maximum number of execution rows per second. Checked on every data block when [`timeout_before_checking_execution_speed`](/operations/settings/settings#timeout_before_checking_execution_speed) expires. If the execution speed is high, the execution speed will be reduced.
    */
-  max_execution_speed?: number;
+  max_execution_speed?: bigint;
 
   /**
    * The maximum number of execution bytes per second. Checked on every data block when [`timeout_before_checking_execution_speed`](/operations/settings/settings#timeout_before_checking_execution_speed) expires. If the execution speed is high, the execution speed will be reduced.
    */
-  max_execution_speed_bytes?: number;
+  max_execution_speed_bytes?: bigint;
 
   /**
    * The maximum query execution time in seconds. The `max_execution_time` parameter can be a bit tricky to understand. It operates based on interpolation relative to the current query execution speed (this behaviour is controlled by [`timeout_before_checking_execution_speed`](/operations/settings/settings#timeout_before_checking_execution_speed)). ClickHouse will interrupt a query if the projected execution time exceeds the specified `max_execution_time`. By default, the `timeout_before_checking_execution_speed` is set to 10 seconds. This means that after 10 seconds of query execution, ClickHouse will begin estimating the total execution time. If, for example, `max_execution_time` is set to 3600 seconds (1 hour), ClickHouse will terminate the query if the estimated time exceeds this 3600-second limit. If you set `timeout_before_checking_execution_speed` to 0, ClickHouse will use the clock time as the basis for `max_execution_time`. If query runtime exceeds the specified number of seconds, the behavior will be determined by the 'timeout_overflow_mode', which by default is set to `throw`. :::note The timeout is checked and the query can stop only in designated places during data processing. It currently cannot stop during merging of aggregation states or during query analysis, and the actual run time will be higher than the value of this setting. :::
@@ -2939,12 +2939,12 @@ export interface ClickHouseSettings {
   /**
    * Maximum size of query syntax tree in number of nodes after expansion of aliases and the asterisk.
    */
-  max_expanded_ast_elements?: number;
+  max_expanded_ast_elements?: bigint;
 
   /**
    * Amount of retries while fetching partition from another host.
    */
-  max_fetch_partition_retries_count?: number;
+  max_fetch_partition_retries_count?: bigint;
 
   /**
    * Sets the maximum number of parallel threads for the `SELECT` query data read phase with the [FINAL](/sql-reference/statements/select/from#final-modifier) modifier. Possible values: - Positive integer. - 0 or 1 — Disabled. `SELECT` queries are executed in a single thread.
@@ -2954,109 +2954,109 @@ export interface ClickHouseSettings {
   /**
    * Max number of HTTP GET redirects hops allowed. Ensures additional security measures are in place to prevent a malicious server from redirecting your requests to unexpected services.nnIt is the case when an external server redirects to another address, but that address appears to be internal to the company's infrastructure, and by sending an HTTP request to an internal server, you could request an internal API from the internal network, bypassing the auth, or even query other services, such as Redis or Memcached. When you don't have an internal infrastructure (including something running on your localhost), or you trust the server, it is safe to allow redirects. Although keep in mind, that if the URL uses HTTP instead of HTTPS, and you will have to trust not only the remote server but also your ISP and every network in the middle.
    */
-  max_http_get_redirects?: number;
+  max_http_get_redirects?: bigint;
 
   /**
    * Defines the maximum length for each regular expression in the [hyperscan multi-match functions](/sql-reference/functions/string-search-functions#multiMatchAny). Possible values: - Positive integer. - 0 - The length is not limited. **Example** Query: ```sql SELECT multiMatchAny('abcd', ['ab','bcd','c','d']) SETTINGS max_hyperscan_regexp_length = 3; ``` Result: ```text ┌─multiMatchAny('abcd', ['ab', 'bcd', 'c', 'd'])─┐ │ 1 │ └────────────────────────────────────────────────┘ ``` Query: ```sql SELECT multiMatchAny('abcd', ['ab','bcd','c','d']) SETTINGS max_hyperscan_regexp_length = 2; ``` Result: ```text Exception: Regexp length too large. ``` **See Also** - [max_hyperscan_regexp_total_length](#max_hyperscan_regexp_total_length)
    */
-  max_hyperscan_regexp_length?: number;
+  max_hyperscan_regexp_length?: bigint;
 
   /**
    * Sets the maximum length total of all regular expressions in each [hyperscan multi-match function](/sql-reference/functions/string-search-functions#multiMatchAny). Possible values: - Positive integer. - 0 - The length is not limited. **Example** Query: ```sql SELECT multiMatchAny('abcd', ['a','b','c','d']) SETTINGS max_hyperscan_regexp_total_length = 5; ``` Result: ```text ┌─multiMatchAny('abcd', ['a', 'b', 'c', 'd'])─┐ │ 1 │ └─────────────────────────────────────────────┘ ``` Query: ```sql SELECT multiMatchAny('abcd', ['ab','bc','c','d']) SETTINGS max_hyperscan_regexp_total_length = 5; ``` Result: ```text Exception: Total regexp lengths too large. ``` **See Also** - [max_hyperscan_regexp_length](#max_hyperscan_regexp_length)
    */
-  max_hyperscan_regexp_total_length?: number;
+  max_hyperscan_regexp_total_length?: bigint;
 
   /**
    * The size of blocks (in a count of rows) to form for insertion into a table. This setting only applies in cases when the server forms the blocks. For example, for an INSERT via the HTTP interface, the server parses the data format and forms blocks of the specified size. But when using clickhouse-client, the client parses the data itself, and the 'max_insert_block_size' setting on the server does not affect the size of the inserted blocks. The setting also does not have a purpose when using INSERT SELECT, since data is inserted using the same blocks that are formed after SELECT. The default is slightly more than `max_block_size`. The reason for this is that certain table engines (`*MergeTree`) form a data part on the disk for each inserted block, which is a fairly large entity. Similarly, `*MergeTree` tables sort data during insertion, and a large enough block size allow sorting more data in RAM.
    */
-  max_insert_block_size?: number;
+  max_insert_block_size?: bigint;
 
   /**
    * The maximum number of streams (columns) to delay final part flush. Default - auto (100 in case of underlying storage supports parallel write, for example S3 and disabled otherwise)
    */
-  max_insert_delayed_streams_for_parallel_write?: number;
+  max_insert_delayed_streams_for_parallel_write?: bigint;
 
   /**
    * The maximum number of threads to execute the `INSERT SELECT` query. Possible values: - 0 (or 1) — `INSERT SELECT` no parallel execution. - Positive integer. Bigger than 1. Cloud default value: - `1` for nodes with 8 GiB memory - `2` for nodes with 16 GiB memory - `4` for larger nodes Parallel `INSERT SELECT` has effect only if the `SELECT` part is executed in parallel, see [`max_threads`](#max_threads) setting. Higher values will lead to higher memory usage.
    */
-  max_insert_threads?: number;
+  max_insert_threads?: bigint;
 
   /**
    * Maximum block size in bytes for JOIN result (if join algorithm supports it). 0 means unlimited.
    * @since 25.9
    */
-  max_joined_block_size_bytes?: number;
+  max_joined_block_size_bytes?: bigint;
 
   /**
    * Maximum block size for JOIN result (if join algorithm supports it). 0 means unlimited.
    */
-  max_joined_block_size_rows?: number;
+  max_joined_block_size_rows?: bigint;
 
   /**
    * SELECT queries with LIMIT bigger than this setting cannot use vector similarity indices. Helps to prevent memory overflows in vector similarity indices.
    * @since 25.6
    */
-  max_limit_for_vector_search_queries?: number;
+  max_limit_for_vector_search_queries?: bigint;
 
   /**
    * The maximum speed of local reads in bytes per second.
    */
-  max_local_read_bandwidth?: number;
+  max_local_read_bandwidth?: bigint;
 
   /**
    * The maximum speed of local writes in bytes per second.
    */
-  max_local_write_bandwidth?: number;
+  max_local_write_bandwidth?: bigint;
 
   /**
    * Cloud default value: depends on the amount of RAM on the replica. The maximum amount of RAM to use for running a query on a single server. A value of `0` means unlimited. This setting does not consider the volume of available memory or the total volume of memory on the machine. The restriction applies to a single query within a single server. You can use `SHOW PROCESSLIST` to see the current memory consumption for each query. Peak memory consumption is tracked for each query and written to the log. Memory usage is not fully tracked for states of the following aggregate functions from `String` and `Array` arguments: - `min` - `max` - `any` - `anyLast` - `argMin` - `argMax` Memory consumption is also restricted by the parameters [`max_memory_usage_for_user`](/operations/settings/settings#max_memory_usage_for_user) and [`max_server_memory_usage`](/operations/server-configuration-parameters/settings#max_server_memory_usage).
    */
-  max_memory_usage?: number;
+  max_memory_usage?: bigint;
 
   /**
    * The maximum amount of RAM to use for running a user's queries on a single server. Zero means unlimited. By default, the amount is not restricted (`max_memory_usage_for_user = 0`). Also see the description of [`max_memory_usage`](/operations/settings/settings#max_memory_usage). For example if you want to set `max_memory_usage_for_user` to 1000 bytes for a user named `clickhouse_read`, you can use the statement ```sql ALTER USER clickhouse_read SETTINGS max_memory_usage_for_user = 1000; ``` You can verify it worked by logging out of your client, logging back in, then use the `getSetting` function: ```sql SELECT getSetting('max_memory_usage_for_user'); ```
    */
-  max_memory_usage_for_user?: number;
+  max_memory_usage_for_user?: bigint;
 
   /**
    * Limits the speed of the data exchange over the network in bytes per second. This setting applies to every query. Possible values: - Positive integer. - 0 — Bandwidth control is disabled.
    */
-  max_network_bandwidth?: number;
+  max_network_bandwidth?: bigint;
 
   /**
    * Limits the speed that data is exchanged at over the network in bytes per second. This setting applies to all concurrently running queries on the server. Possible values: - Positive integer. - 0 — Control of the data speed is disabled.
    */
-  max_network_bandwidth_for_all_users?: number;
+  max_network_bandwidth_for_all_users?: bigint;
 
   /**
    * Limits the speed of the data exchange over the network in bytes per second. This setting applies to all concurrently running queries performed by a single user. Possible values: - Positive integer. - 0 — Control of the data speed is disabled.
    */
-  max_network_bandwidth_for_user?: number;
+  max_network_bandwidth_for_user?: bigint;
 
   /**
    * Limits the data volume (in bytes) that is received or transmitted over the network when executing a query. This setting applies to every individual query. Possible values: - Positive integer. - 0 — Data volume control is disabled.
    */
-  max_network_bytes?: number;
+  max_network_bytes?: bigint;
 
   /**
    * Maximal number of partitions in table to apply optimization
    */
-  max_number_of_partitions_for_independent_aggregation?: number;
+  max_number_of_partitions_for_independent_aggregation?: bigint;
 
   /**
    * The maximum number of replicas for each shard when executing a query. Possible values: - Positive integer. **Additional Info** This options will produce different results depending on the settings used. :::note This setting will produce incorrect results when joins or subqueries are involved, and all tables don't meet certain requirements. See [Distributed Subqueries and max_parallel_replicas](/operations/settings/settings#max_parallel_replicas) for more details. ::: ### Parallel processing using `SAMPLE` key A query may be processed faster if it is executed on several servers in parallel. But the query performance may degrade in the following cases: - The position of the sampling key in the partitioning key does not allow efficient range scans. - Adding a sampling key to the table makes filtering by other columns less efficient. - The sampling key is an expression that is expensive to calculate. - The cluster latency distribution has a long tail, so that querying more servers increases the query overall latency. ### Parallel processing using [parallel_replicas_custom_key](#parallel_replicas_custom_key) This setting is useful for any replicated table.
    */
-  max_parallel_replicas?: number;
+  max_parallel_replicas?: bigint;
 
   /**
    * Maximum parser backtracking (how many times it tries different alternatives in the recursive descend parsing process).
    */
-  max_parser_backtracks?: number;
+  max_parser_backtracks?: bigint;
 
   /**
    * Limits maximum recursion depth in the recursive descent parser. Allows controlling the stack size. Possible values: - Positive integer. - 0 — Recursion depth is unlimited.
    */
-  max_parser_depth?: number;
+  max_parser_depth?: bigint;
 
   /**
    * The maximum number of threads to parse data in input formats that support parallel parsing. By default, it is determined automatically.
@@ -3066,150 +3066,150 @@ export interface ClickHouseSettings {
   /**
    * Restriction on dropping partitions in query time. The value `0` means that you can drop partitions without any restrictions. Cloud default value: 1 TB. :::note This query setting overwrites its server setting equivalent, see [max_partition_size_to_drop](/operations/server-configuration-parameters/settings#max_partition_size_to_drop) :::
    */
-  max_partition_size_to_drop?: number;
+  max_partition_size_to_drop?: bigint;
 
   /**
    * Limits the maximum number of partitions in a single inserted block and an exception is thrown if the block contains too many partitions. - Positive integer. - `0` — Unlimited number of partitions. **Details** When inserting data, ClickHouse calculates the number of partitions in the inserted block. If the number of partitions is more than `max_partitions_per_insert_block`, ClickHouse either logs a warning or throws an exception based on `throw_on_max_partitions_per_insert_block`. Exceptions have the following text: > "Too many partitions for a single INSERT block (`partitions_count` partitions, limit is " + toString(max_partitions) + "). The limit is controlled by the 'max_partitions_per_insert_block' setting. A large number of partitions is a common misconception. It will lead to severe negative performance impact, including slow server startup, slow INSERT queries and slow SELECT queries. Recommended total number of partitions for a table is under 1000..10000. Please note, that partitioning is not intended to speed up SELECT queries (ORDER BY key is sufficient to make range queries fast). Partitions are intended for data manipulation (DROP PARTITION, etc)." :::note This setting is a safety threshold because using a large number of partitions is a common misconception. :::
    */
-  max_partitions_per_insert_block?: number;
+  max_partitions_per_insert_block?: bigint;
 
   /**
    * Limits the maximum number of partitions that can be accessed in a single query. The setting value specified when the table is created can be overridden via query-level setting. Possible values: - Positive integer - `-1` - unlimited (default) :::note You can also specify the MergeTree setting [`max_partitions_to_read`](/operations/settings/settings#max_partitions_to_read) in tables' setting. :::
    */
-  max_partitions_to_read?: number;
+  max_partitions_to_read?: bigint;
 
   /**
    * If the number of rows to read from the projection index is less than or equal to this threshold, ClickHouse will try to apply the projection index during query execution.
    * @since 25.12
    */
-  max_projection_rows_to_use_projection_index?: number;
+  max_projection_rows_to_use_projection_index?: bigint;
 
   /**
    * The maximum number of bytes of a query string parsed by the SQL parser. Data in the VALUES clause of INSERT queries is processed by a separate stream parser (that consumes O(1) RAM) and not affected by this restriction. :::note `max_query_size` cannot be set within an SQL query (e.g., `SELECT now() SETTINGS max_query_size=10000`) because ClickHouse needs to allocate a buffer to parse the query, and this buffer size is determined by the `max_query_size` setting, which must be configured before the query is executed. :::
    */
-  max_query_size?: number;
+  max_query_size?: bigint;
 
   /**
    * The maximum size of the buffer to read from the filesystem.
    */
-  max_read_buffer_size?: number;
+  max_read_buffer_size?: bigint;
 
   /**
    * The maximum size of the buffer to read from local filesystem. If set to 0 then max_read_buffer_size will be used.
    */
-  max_read_buffer_size_local_fs?: number;
+  max_read_buffer_size_local_fs?: bigint;
 
   /**
    * The maximum size of the buffer to read from remote filesystem. If set to 0 then max_read_buffer_size will be used.
    */
-  max_read_buffer_size_remote_fs?: number;
+  max_read_buffer_size_remote_fs?: bigint;
 
   /**
    * Maximum limit on recursive CTE evaluation depth
    */
-  max_recursive_cte_evaluation_depth?: number;
+  max_recursive_cte_evaluation_depth?: bigint;
 
   /**
    * The maximum speed of data exchange over the network in bytes per second for read.
    */
-  max_remote_read_network_bandwidth?: number;
+  max_remote_read_network_bandwidth?: bigint;
 
   /**
    * The maximum speed of data exchange over the network in bytes per second for write.
    */
-  max_remote_write_network_bandwidth?: number;
+  max_remote_write_network_bandwidth?: bigint;
 
   /**
    * Disables lagging replicas for distributed queries. See [Replication](../../engines/table-engines/mergetree-family/replication.md). Sets the time in seconds. If a replica's lag is greater than or equal to the set value, this replica is not used. Possible values: - Positive integer. - 0 — Replica lags are not checked. To prevent the use of any replica with a non-zero lag, set this parameter to 1. Used when performing `SELECT` from a distributed table that points to replicated tables.
    */
-  max_replica_delay_for_distributed_queries?: number;
+  max_replica_delay_for_distributed_queries?: bigint;
 
   /**
    * Limits the result size in bytes (uncompressed). The query will stop after processing a block of data if the threshold is met, but it will not cut the last block of the result, therefore the result size can be larger than the threshold. **Caveats** The result size in memory is taken into account for this threshold. Even if the result size is small, it can reference larger data structures in memory, representing dictionaries of LowCardinality columns, and Arenas of AggregateFunction columns, so the threshold can be exceeded despite the small result size. :::warning The setting is fairly low level and should be used with caution :::
    */
-  max_result_bytes?: number;
+  max_result_bytes?: bigint;
 
   /**
    * Cloud default value: `0`. Limits the number of rows in the result. Also checked for subqueries, and on remote servers when running parts of a distributed query. No limit is applied when the value is `0`. The query will stop after processing a block of data if the threshold is met, but it will not cut the last block of the result, therefore the result size can be larger than the threshold.
    */
-  max_result_rows?: number;
+  max_result_rows?: bigint;
 
   /**
    * Maximum size in bytes of the per-query reverse dictionary lookup cache used by the function `dictGetKeys`. The cache stores serialized key tuples per attribute value to avoid re-scanning the dictionary within the same query. When the limit is reached, entries are evicted using LRU. Set to 0 to disable caching.
    * @since 26.1
    */
-  max_reverse_dictionary_lookup_cache_size_bytes?: number;
+  max_reverse_dictionary_lookup_cache_size_bytes?: bigint;
 
   /**
    * The maximum number of different rows when using DISTINCT.
    */
-  max_rows_in_distinct?: number;
+  max_rows_in_distinct?: bigint;
 
   /**
    * Limits the number of rows in the hash table that is used when joining tables. This settings applies to [SELECT ... JOIN](/sql-reference/statements/select/join) operations and the [Join](/engines/table-engines/special/join) table engine. If a query contains multiple joins, ClickHouse checks this setting for every intermediate result. ClickHouse can proceed with different actions when the limit is reached. Use the [`join_overflow_mode`](/operations/settings/settings#join_overflow_mode) setting to choose the action. Possible values: - Positive integer. - `0` — Unlimited number of rows.
    */
-  max_rows_in_join?: number;
+  max_rows_in_join?: bigint;
 
   /**
    * The maximum number of rows for a data set in the IN clause created from a subquery.
    */
-  max_rows_in_set?: number;
+  max_rows_in_set?: bigint;
 
   /**
    * Maximal size of the set to filter joined tables by each other's row sets before joining. Possible values: - 0 — Disable. - Any positive integer.
    */
-  max_rows_in_set_to_optimize_join?: number;
+  max_rows_in_set_to_optimize_join?: bigint;
 
   /**
    * The maximum number of unique keys received from aggregation. This setting lets you limit memory consumption when aggregating. If aggregation during GROUP BY is generating more than the specified number of rows (unique GROUP BY keys), the behavior will be determined by the 'group_by_overflow_mode' which by default is `throw`, but can be also switched to an approximate GROUP BY mode.
    */
-  max_rows_to_group_by?: number;
+  max_rows_to_group_by?: bigint;
 
   /**
    * The maximum number of rows that can be read from a table when running a query. The restriction is checked for each processed chunk of data, applied only to the deepest table expression and when reading from a remote server, checked only on the remote server.
    */
-  max_rows_to_read?: number;
+  max_rows_to_read?: bigint;
 
   /**
    * The maximum number of rows that can be read from a local table on a leaf node when running a distributed query. While distributed queries can issue multiple sub-queries to each shard (leaf) - this limit will be checked only on the read stage on the leaf nodes and ignored on the merging of results stage on the root node. For example, a cluster consists of 2 shards and each shard contains a table with 100 rows. The distributed query which is supposed to read all the data from both tables with setting `max_rows_to_read=150` will fail, as in total there will be 200 rows. A query with `max_rows_to_read_leaf=150` will succeed, since leaf nodes will read at max 100 rows. The restriction is checked for each processed chunk of data. :::note This setting is unstable with `prefer_localhost_replica=1`. :::
    */
-  max_rows_to_read_leaf?: number;
+  max_rows_to_read_leaf?: bigint;
 
   /**
    * The maximum number of rows before sorting. This allows you to limit memory consumption when sorting. If more than the specified amount of records have to be processed for the ORDER BY operation, the behavior will be determined by the `sort_overflow_mode` which by default is set to `throw`.
    */
-  max_rows_to_sort?: number;
+  max_rows_to_sort?: bigint;
 
   /**
    * Maximum size (in rows) that can be passed to a remote server or saved in a temporary table when the GLOBAL IN/JOIN section is executed.
    */
-  max_rows_to_transfer?: number;
+  max_rows_to_transfer?: bigint;
 
   /**
    * Maximum number of simultaneous sessions per authenticated user to the ClickHouse server. Example: ```xml <profiles> <single_session_profile> <max_sessions_for_user>1</max_sessions_for_user> </single_session_profile> <two_sessions_profile> <max_sessions_for_user>2</max_sessions_for_user> </two_sessions_profile> <unlimited_sessions_profile> <max_sessions_for_user>0</max_sessions_for_user> </unlimited_sessions_profile> </profiles> <users> <!-- User Alice can connect to a ClickHouse server no more than once at a time. --> <Alice> <profile>single_session_user</profile> </Alice> <!-- User Bob can use 2 simultaneous sessions. --> <Bob> <profile>two_sessions_profile</profile> </Bob> <!-- User Charles can use arbitrarily many of simultaneous sessions. --> <Charles> <profile>unlimited_sessions_profile</profile> </Charles> </users> ``` Possible values: - Positive integer - `0` - infinite count of simultaneous sessions (default)
    */
-  max_sessions_for_user?: number;
+  max_sessions_for_user?: bigint;
 
   /**
    * For how many elements it is allowed to preallocate space in all hash tables in total before aggregation
    */
-  max_size_to_preallocate_for_aggregation?: number;
+  max_size_to_preallocate_for_aggregation?: bigint;
 
   /**
    * For how many elements it is allowed to preallocate space in all hash tables in total before join
    */
-  max_size_to_preallocate_for_joins?: number;
+  max_size_to_preallocate_for_joins?: bigint;
 
   /**
    * If is not zero, limit the number of threads reading data from files in *Cluster table functions.
    * @since 26.1
    */
-  max_streams_for_files_processing_in_cluster_functions?: number;
+  max_streams_for_files_processing_in_cluster_functions?: bigint;
 
   /**
    * If is not zero, limit the number of reading streams for MergeTree table.
    */
-  max_streams_for_merge_tree_reading?: number;
+  max_streams_for_merge_tree_reading?: bigint;
 
   /**
    * Ask more streams when reading from Merge table. Streams will be spread across tables that Merge table will use. This allows more even distribution of work across threads and is especially helpful when merged tables differ in size.
@@ -3224,32 +3224,32 @@ export interface ClickHouseSettings {
   /**
    * If a query has more than the specified number of nested subqueries, throws an exception. :::tip This allows you to have a sanity check to protect against the users of your cluster from writing overly complex queries. :::
    */
-  max_subquery_depth?: number;
+  max_subquery_depth?: bigint;
 
   /**
    * Restriction on deleting tables in query time. The value `0` means that you can delete all tables without any restrictions. Cloud default value: 1 TB. :::note This query setting overwrites its server setting equivalent, see [max_table_size_to_drop](/operations/server-configuration-parameters/settings#max_table_size_to_drop) :::
    */
-  max_table_size_to_drop?: number;
+  max_table_size_to_drop?: bigint;
 
   /**
    * The maximum number of temporary columns that must be kept in RAM simultaneously when running a query, including constant columns. If a query generates more than the specified number of temporary columns in memory as a result of intermediate calculation, then an exception is thrown. :::tip This setting is useful for preventing overly complex queries. ::: `0` value means unlimited.
    */
-  max_temporary_columns?: number;
+  max_temporary_columns?: bigint;
 
   /**
    * The maximum amount of data consumed by temporary files on disk in bytes for all concurrently running queries. Possible values: - Positive integer. - `0` — unlimited (default)
    */
-  max_temporary_data_on_disk_size_for_query?: number;
+  max_temporary_data_on_disk_size_for_query?: bigint;
 
   /**
    * The maximum amount of data consumed by temporary files on disk in bytes for all concurrently running user queries. Possible values: - Positive integer. - `0` — unlimited (default)
    */
-  max_temporary_data_on_disk_size_for_user?: number;
+  max_temporary_data_on_disk_size_for_user?: bigint;
 
   /**
    * Like `max_temporary_columns`, the maximum number of temporary columns that must be kept in RAM simultaneously when running a query, but without counting constant columns. :::note Constant columns are formed fairly often when running a query, but they require approximately zero computing resources. :::
    */
-  max_temporary_non_const_columns?: number;
+  max_temporary_non_const_columns?: bigint;
 
   /**
    * The maximum number of query processing threads, excluding threads for retrieving data from remote servers (see the ['max_distributed_connections'](/operations/settings/settings#max_distributed_connections) parameter). This parameter applies to threads that perform the same stages of the query processing pipeline in parallel. For example, when reading from a table, if it is possible to evaluate expressions with functions, filter with `WHERE` and pre-aggregate for `GROUP BY` in parallel using at least 'max_threads' number of threads, then 'max_threads' are used. For queries that are completed quickly because of a LIMIT, you can set a lower 'max_threads'. For example, if the necessary number of entries are located in every block and max_threads = 8, then 8 blocks are retrieved, although it would have been enough to read just one. The smaller the `max_threads` value, the less memory is consumed. The `max_threads` setting by default matches the number of hardware threads available to ClickHouse. Without SMT (e.g. Intel HyperThreading), this corresponds to the number of CPU cores. For ClickHouse Cloud users, the default value will display as `auto(N)` where N matches the vCPU size of your service e.g. 2vCPU/8GiB, 4vCPU/16GiB etc. See the settings tab in the Cloud console for a list of all service sizes.
@@ -3259,32 +3259,32 @@ export interface ClickHouseSettings {
   /**
    * The maximum number of threads process indices.
    */
-  max_threads_for_indexes?: number;
+  max_threads_for_indexes?: bigint;
 
   /**
    * Small allocations and deallocations are grouped in thread local variable and tracked or profiled only when an amount (in absolute value) becomes larger than the specified value. If the value is higher than 'memory_profiler_step' it will be effectively lowered to 'memory_profiler_step'.
    */
-  max_untracked_memory?: number;
+  max_untracked_memory?: bigint;
 
   /**
    * It represents the soft memory limit when the hard limit is reached on the global level. This value is used to compute the overcommit ratio for the query. Zero means skip the query. Read more about [memory overcommit](memory-overcommit.md).
    */
-  memory_overcommit_ratio_denominator?: number;
+  memory_overcommit_ratio_denominator?: bigint;
 
   /**
    * It represents the soft memory limit when the hard limit is reached on the user level. This value is used to compute the overcommit ratio for the query. Zero means skip the query. Read more about [memory overcommit](memory-overcommit.md).
    */
-  memory_overcommit_ratio_denominator_for_user?: number;
+  memory_overcommit_ratio_denominator_for_user?: bigint;
 
   /**
    * Collect random allocations of size less or equal than the specified value with probability equal to `memory_profiler_sample_probability`. 0 means disabled. You may want to set 'max_untracked_memory' to 0 to make this threshold work as expected.
    */
-  memory_profiler_sample_max_allocation_size?: number;
+  memory_profiler_sample_max_allocation_size?: bigint;
 
   /**
    * Collect random allocations of size greater or equal than the specified value with probability equal to `memory_profiler_sample_probability`. 0 means disabled. You may want to set 'max_untracked_memory' to 0 to make this threshold work as expected.
    */
-  memory_profiler_sample_min_allocation_size?: number;
+  memory_profiler_sample_min_allocation_size?: bigint;
 
   /**
    * Collect random allocations and deallocations and write them into system.trace_log with 'MemorySample' trace_type. The probability is for every alloc/free regardless of the size of the allocation (can be changed with `memory_profiler_sample_min_allocation_size` and `memory_profiler_sample_max_allocation_size`). Note that sampling happens only when the amount of untracked memory exceeds 'max_untracked_memory'. You may want to set 'max_untracked_memory' to 0 for extra fine-grained sampling.
@@ -3294,7 +3294,7 @@ export interface ClickHouseSettings {
   /**
    * Sets the step of memory profiler. Whenever query memory usage becomes larger than every next step in number of bytes the memory profiler will collect the allocating stacktrace and will write it into [trace_log](/operations/system-tables/trace_log). Possible values: - A positive integer number of bytes. - 0 for turning off the memory profiler.
    */
-  memory_profiler_step?: number;
+  memory_profiler_step?: bigint;
 
   /**
    * For testing of `exception safety` - throw an exception every time you allocate memory with the specified probability.
@@ -3304,23 +3304,23 @@ export interface ClickHouseSettings {
   /**
    * Maximum time thread will wait for memory to be freed in the case of memory overcommit on a user level. If the timeout is reached and memory is not freed, an exception is thrown. Read more about [memory overcommit](memory-overcommit.md).
    */
-  memory_usage_overcommit_max_wait_microseconds?: number;
+  memory_usage_overcommit_max_wait_microseconds?: bigint;
 
   /**
    * When creating a `Merge` table without an explicit schema or when using the `merge` table function, infer schema as a union of not more than the specified number of matching tables. If there is a larger number of tables, the schema will be inferred from the first specified number of tables.
    * @since 25.2
    */
-  merge_table_max_tables_to_look_for_schema_inference?: number;
+  merge_table_max_tables_to_look_for_schema_inference?: bigint;
 
   /**
    * When searching for data, ClickHouse checks the data marks in the index file. If ClickHouse finds that required keys are in some range, it divides this range into `merge_tree_coarse_index_granularity` subranges and searches the required keys there recursively. Possible values: - Any positive even integer.
    */
-  merge_tree_coarse_index_granularity?: number;
+  merge_tree_coarse_index_granularity?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Number of granules in stripe of compact part of MergeTree tables to use multibuffer reader, which supports parallel reading and prefetch. In case of reading from remote fs using of multibuffer reader increases number of read request.
    */
-  merge_tree_compact_parts_min_granules_to_multibuffer_read?: number;
+  merge_tree_compact_parts_min_granules_to_multibuffer_read?: bigint;
 
   /**
    * Whether to use only prewhere columns size to determine reading task size.
@@ -3330,52 +3330,52 @@ export interface ClickHouseSettings {
   /**
    * If ClickHouse should read more than `merge_tree_max_bytes_to_use_cache` bytes in one query, it does not use the cache of uncompressed blocks. The cache of uncompressed blocks stores data extracted for queries. ClickHouse uses this cache to speed up responses to repeated small queries. This setting protects the cache from trashing by queries that read a large amount of data. The [uncompressed_cache_size](/operations/server-configuration-parameters/settings#uncompressed_cache_size) server setting defines the size of the cache of uncompressed blocks. Possible values: - Any positive integer.
    */
-  merge_tree_max_bytes_to_use_cache?: number;
+  merge_tree_max_bytes_to_use_cache?: bigint;
 
   /**
    * If ClickHouse should read more than `merge_tree_max_rows_to_use_cache` rows in one query, it does not use the cache of uncompressed blocks. The cache of uncompressed blocks stores data extracted for queries. ClickHouse uses this cache to speed up responses to repeated small queries. This setting protects the cache from trashing by queries that read a large amount of data. The [uncompressed_cache_size](/operations/server-configuration-parameters/settings#uncompressed_cache_size) server setting defines the size of the cache of uncompressed blocks. Possible values: - Any positive integer.
    */
-  merge_tree_max_rows_to_use_cache?: number;
+  merge_tree_max_rows_to_use_cache?: bigint;
 
   /**
    * If the number of bytes to read from one file of a [MergeTree](../../engines/table-engines/mergetree-family/mergetree.md)-engine table exceeds `merge_tree_min_bytes_for_concurrent_read`, then ClickHouse tries to concurrently read from this file in several threads. Possible value: - Positive integer.
    */
-  merge_tree_min_bytes_for_concurrent_read?: number;
+  merge_tree_min_bytes_for_concurrent_read?: bigint;
 
   /**
    * The minimum number of bytes to read from one file before [MergeTree](../../engines/table-engines/mergetree-family/mergetree.md) engine can parallelize reading, when reading from remote filesystem. We do not recommend using this setting. Possible values: - Positive integer.
    */
-  merge_tree_min_bytes_for_concurrent_read_for_remote_filesystem?: number;
+  merge_tree_min_bytes_for_concurrent_read_for_remote_filesystem?: bigint;
 
   /**
    * If the distance between two data blocks to be read in one file is less than `merge_tree_min_bytes_for_seek` bytes, then ClickHouse sequentially reads a range of file that contains both blocks, thus avoiding extra seek. Possible values: - Any positive integer.
    */
-  merge_tree_min_bytes_for_seek?: number;
+  merge_tree_min_bytes_for_seek?: bigint;
 
   /**
    * Min bytes to read per task.
    */
-  merge_tree_min_bytes_per_task_for_remote_reading?: number;
+  merge_tree_min_bytes_per_task_for_remote_reading?: bigint;
 
   /**
    * Hard lower limit on the task size (even when the number of granules is low and the number of available threads is high we won't allocate smaller tasks
    */
-  merge_tree_min_read_task_size?: number;
+  merge_tree_min_read_task_size?: bigint;
 
   /**
    * If the number of rows to be read from a file of a [MergeTree](../../engines/table-engines/mergetree-family/mergetree.md) table exceeds `merge_tree_min_rows_for_concurrent_read` then ClickHouse tries to perform a concurrent reading from this file on several threads. Possible values: - Positive integer.
    */
-  merge_tree_min_rows_for_concurrent_read?: number;
+  merge_tree_min_rows_for_concurrent_read?: bigint;
 
   /**
    * The minimum number of lines to read from one file before the [MergeTree](../../engines/table-engines/mergetree-family/mergetree.md) engine can parallelize reading, when reading from remote filesystem. We do not recommend using this setting. Possible values: - Positive integer.
    */
-  merge_tree_min_rows_for_concurrent_read_for_remote_filesystem?: number;
+  merge_tree_min_rows_for_concurrent_read_for_remote_filesystem?: bigint;
 
   /**
    * If the distance between two data blocks to be read in one file is less than `merge_tree_min_rows_for_seek` rows, then ClickHouse does not seek through the file but reads the data sequentially. Possible values: - Any positive integer.
    */
-  merge_tree_min_rows_for_seek?: number;
+  merge_tree_min_rows_for_seek?: bigint;
 
   /**
    * For testing of `PartsSplitter` - split read ranges into intersecting and non intersecting every time you read from MergeTree with the specified probability.
@@ -3386,7 +3386,7 @@ export interface ClickHouseSettings {
    * Inject artificial delay (in milliseconds) when creating a storage snapshot for MergeTree tables. Used for testing and debugging purposes only. Possible values: - 0 - No delay (default) - N - Delay in milliseconds
    * @since 25.7
    */
-  merge_tree_storage_snapshot_sleep_ms?: number;
+  merge_tree_storage_snapshot_sleep_ms?: bigint;
 
   /**
    * Whether to use constant size tasks for reading from a remote table.
@@ -3424,62 +3424,62 @@ export interface ClickHouseSettings {
   /**
    * The minimum data volume required for using direct I/O access to the storage disk. ClickHouse uses this setting when reading data from tables. If the total storage volume of all the data to be read exceeds `min_bytes_to_use_direct_io` bytes, then ClickHouse reads the data from the storage disk with the `O_DIRECT` option. Possible values: - 0 — Direct I/O is disabled. - Positive integer.
    */
-  min_bytes_to_use_direct_io?: number;
+  min_bytes_to_use_direct_io?: bigint;
 
   /**
    * This is an experimental setting. Sets the minimum amount of memory for reading large files without copying data from the kernel to userspace. Recommended threshold is about 64 MB, because [mmap/munmap](https://en.wikipedia.org/wiki/Mmap) is slow. It makes sense only for large files and helps only if data reside in the page cache. Possible values: - Positive integer. - 0 — Big files read with only copying data from kernel to userspace.
    */
-  min_bytes_to_use_mmap_io?: number;
+  min_bytes_to_use_mmap_io?: bigint;
 
   /**
    * - Type: unsigned int - Default value: 1 MiB The minimum chunk size in bytes, which each thread will parse in parallel.
    */
-  min_chunk_bytes_for_parallel_parsing?: number;
+  min_chunk_bytes_for_parallel_parsing?: bigint;
 
   /**
    * For [MergeTree](../../engines/table-engines/mergetree-family/mergetree.md) tables. In order to reduce latency when processing queries, a block is compressed when writing the next mark if its size is at least `min_compress_block_size`. By default, 65,536. The actual size of the block, if the uncompressed data is less than `max_compress_block_size`, is no less than this value and no less than the volume of data for one mark. Let's look at an example. Assume that `index_granularity` was set to 8192 during table creation. We are writing a UInt32-type column (4 bytes per value). When writing 8192 rows, the total will be 32 KB of data. Since min_compress_block_size = 65,536, a compressed block will be formed for every two marks. We are writing a URL column with the String type (average size of 60 bytes per value). When writing 8192 rows, the average will be slightly less than 500 KB of data. Since this is more than 65,536, a compressed block will be formed for each mark. In this case, when reading data from the disk in the range of a single mark, extra data won't be decompressed. :::note This is an expert-level setting, and you shouldn't change it if you're just getting started with ClickHouse. :::
    */
-  min_compress_block_size?: number;
+  min_compress_block_size?: bigint;
 
   /**
    * The minimum number of identical aggregate expressions to start JIT-compilation. Works only if the [compile_aggregate_expressions](#compile_aggregate_expressions) setting is enabled. Possible values: - Positive integer. - 0 — Identical aggregate expressions are always JIT-compiled.
    */
-  min_count_to_compile_aggregate_expression?: number;
+  min_count_to_compile_aggregate_expression?: bigint;
 
   /**
    * Minimum count of executing same expression before it is get compiled.
    */
-  min_count_to_compile_expression?: number;
+  min_count_to_compile_expression?: bigint;
 
   /**
    * The number of identical sort descriptions before they are JIT-compiled
    */
-  min_count_to_compile_sort_description?: number;
+  min_count_to_compile_sort_description?: bigint;
 
   /**
    * Minimal execution speed in rows per second. Checked on every data block when [`timeout_before_checking_execution_speed`](/operations/settings/settings#timeout_before_checking_execution_speed) expires. If the execution speed is lower, an exception is thrown.
    */
-  min_execution_speed?: number;
+  min_execution_speed?: bigint;
 
   /**
    * The minimum number of execution bytes per second. Checked on every data block when [`timeout_before_checking_execution_speed`](/operations/settings/settings#timeout_before_checking_execution_speed) expires. If the execution speed is lower, an exception is thrown.
    */
-  min_execution_speed_bytes?: number;
+  min_execution_speed_bytes?: bigint;
 
   /**
    * Squash blocks passed to the external table to a specified size in bytes, if blocks are not big enough.
    */
-  min_external_table_block_size_bytes?: number;
+  min_external_table_block_size_bytes?: bigint;
 
   /**
    * Squash blocks passed to external table to specified size in rows, if blocks are not big enough.
    */
-  min_external_table_block_size_rows?: number;
+  min_external_table_block_size_rows?: bigint;
 
   /**
    * Minimum free disk space bytes to perform an insert.
    */
-  min_free_disk_bytes_to_perform_insert?: number;
+  min_free_disk_bytes_to_perform_insert?: bigint;
 
   /**
    * Minimum free disk space ratio to perform an insert.
@@ -3489,7 +3489,7 @@ export interface ClickHouseSettings {
   /**
    * The minimum disk space to keep while writing temporary data used in external sorting and aggregation.
    */
-  min_free_disk_space_for_temporary_data?: number;
+  min_free_disk_space_for_temporary_data?: bigint;
 
   /**
    * Minimal hit rate of a cache which is used for consecutive keys optimization in aggregation to keep it enabled
@@ -3499,46 +3499,46 @@ export interface ClickHouseSettings {
   /**
    * Sets the minimum number of bytes in the block which can be inserted into a table by an `INSERT` query. Smaller-sized blocks are squashed into bigger ones. Possible values: - Positive integer. - 0 — Squashing disabled.
    */
-  min_insert_block_size_bytes?: number;
+  min_insert_block_size_bytes?: bigint;
 
   /**
    * Sets the minimum number of bytes in the block which can be inserted into a table by an `INSERT` query. Smaller-sized blocks are squashed into bigger ones. This setting is applied only for blocks inserted into [materialized view](../../sql-reference/statements/create/view.md). By adjusting this setting, you control blocks squashing while pushing to materialized view and avoid excessive memory usage. Possible values: - Any positive integer. - 0 — Squashing disabled. **See also** - [min_insert_block_size_bytes](#min_insert_block_size_bytes)
    */
-  min_insert_block_size_bytes_for_materialized_views?: number;
+  min_insert_block_size_bytes_for_materialized_views?: bigint;
 
   /**
    * Sets the minimum number of rows in the block that can be inserted into a table by an `INSERT` query. Smaller-sized blocks are squashed into bigger ones. Possible values: - Positive integer. - 0 — Squashing disabled.
    */
-  min_insert_block_size_rows?: number;
+  min_insert_block_size_rows?: bigint;
 
   /**
    * Sets the minimum number of rows in the block which can be inserted into a table by an `INSERT` query. Smaller-sized blocks are squashed into bigger ones. This setting is applied only for blocks inserted into [materialized view](../../sql-reference/statements/create/view.md). By adjusting this setting, you control blocks squashing while pushing to materialized view and avoid excessive memory usage. Possible values: - Any positive integer. - 0 — Squashing disabled. **See Also** - [min_insert_block_size_rows](#min_insert_block_size_rows)
    */
-  min_insert_block_size_rows_for_materialized_views?: number;
+  min_insert_block_size_rows_for_materialized_views?: bigint;
 
   /**
    * Minimum block size in bytes for JOIN input and output blocks (if join algorithm supports it). Small blocks will be squashed. 0 means unlimited.
    * @since 24.12
    */
-  min_joined_block_size_bytes?: number;
+  min_joined_block_size_bytes?: bigint;
 
   /**
    * Minimum block size in rows for JOIN input and output blocks (if join algorithm supports it). Small blocks will be squashed. 0 means unlimited.
    * @since 25.8
    */
-  min_joined_block_size_rows?: number;
+  min_joined_block_size_rows?: bigint;
 
   /**
    * Specifies the minimum number of output streams of a `Resize` or `StrictResize` processor after the split is performed during pipeline generation. If the resulting number of streams is less than this value, the split operation will not occur. ### What is a Resize Node A `Resize` node is a processor in the query pipeline that adjusts the number of data streams flowing through the pipeline. It can either increase or decrease the number of streams to balance the workload across multiple threads or processors. For example, if a query requires more parallelism, the `Resize` node can split a single stream into multiple streams. Conversely, it can merge multiple streams into fewer streams to consolidate data processing. The `Resize` node ensures that data is evenly distributed across streams, maintaining the structure of the data blocks. This helps optimize resource utilization and improve query performance. ### Why the Resize Node Needs to Be Split During pipeline execution, ExecutingGraph::Node::status_mutex of the centrally-hubbed `Resize` node is heavily contended especially in high-core-count environments, and this contention leads to: 1. Increased latency for ExecutingGraph::updateNode, directly impacting query performance. 2. Excessive CPU cycles are wasted in spin-lock contention (native_queued_spin_lock_slowpath), degrading efficiency. 3. Reduced CPU utilization, limiting parallelism and throughput. ### How the Resize Node Gets Split 1. The number of output streams is checked to ensure the split could be performed: the output streams of each split processor meet or exceed the `min_outstreams_per_resize_after_split` threshold. 2. The `Resize` node is divided into smaller `Resize` nodes with equal count of ports, each handling a subset of input and output streams. 3. Each group is processed independently, reducing the lock contention. ### Splitting Resize Node with Arbitrary Inputs/Outputs In some cases, where the inputs/outputs are indivisible by the number of split `Resize` nodes, some inputs are connected to `NullSource`s and some outputs are connected to `NullSink`s. This allows the split to occur without affecting the overall data flow. ### Purpose of the Setting The `min_outstreams_per_resize_after_split` setting ensures that the splitting of `Resize` nodes is meaningful and avoids creating too few streams, which could lead to inefficient parallel processing. By enforcing a minimum number of output streams, this setting helps maintain a balance between parallelism and overhead, optimizing query execution in scenarios involving stream splitting and merging. ### Disabling the Setting To disable the split of `Resize` nodes, set this setting to 0. This will prevent the splitting of `Resize` nodes during pipeline generation, allowing them to retain their original structure without division into smaller nodes.
    * @since 25.7
    */
-  min_outstreams_per_resize_after_split?: number;
+  min_outstreams_per_resize_after_split?: bigint;
 
   /**
    * If the estimated number of rows to read from the table is greater than or equal to this threshold, ClickHouse will try to use the projection index during query execution.
    * @since 25.12
    */
-  min_table_rows_to_use_projection_index?: number;
+  min_table_rows_to_use_projection_index?: bigint;
 
   /**
    * If enabled, MongoDB tables will return an error when a MongoDB query cannot be built. Otherwise, ClickHouse reads the full table and processes it locally. This option does not apply when 'allow_experimental_analyzer=0'.
@@ -3573,12 +3573,12 @@ export interface ClickHouseSettings {
   /**
    * The maximum size of serialized literal in bytes to replace in `UPDATE` and `DELETE` queries. Takes effect only if at least one the two settings above is enabled. Default value: 16384 (16 KiB).
    */
-  mutations_max_literal_size_to_replace?: number;
+  mutations_max_literal_size_to_replace?: bigint;
 
   /**
    * Allows to execute `ALTER TABLE ... UPDATE|DELETE|MATERIALIZE INDEX|MATERIALIZE PROJECTION|MATERIALIZE COLUMN|MATERIALIZE STATISTICS` queries ([mutations](../../sql-reference/statements/alter/index.md/#mutations)) synchronously. Possible values: | Value | Description | |-------|-------------------------------------------------------------------------------------------------------------------------------------------------------| | `0` | Mutations execute asynchronously. | | `1` | The query waits for all mutations to complete on the current server. | | `2` | The query waits for all mutations to complete on all replicas (if they exist). | | `3` | The query waits only for active replicas. Supported only for `SharedMergeTree`. For `ReplicatedMergeTree` it behaves the same as `mutations_sync = 2`.|
    */
-  mutations_sync?: number;
+  mutations_sync?: bigint;
 
   /**
    * Defines how MySQL types are converted to corresponding ClickHouse types. A comma separated list in any combination of `decimal`, `datetime64`, `date2Date32` or `date2String`. - `decimal`: convert `NUMERIC` and `DECIMAL` types to `Decimal` when precision allows it. - `datetime64`: convert `DATETIME` and `TIMESTAMP` types to `DateTime64` instead of `DateTime` when precision is not `0`. - `date2Date32`: convert `DATE` to `Date32` instead of `Date`. Takes precedence over `date2String`. - `date2String`: convert `DATE` to `String` instead of `Date`. Overridden by `datetime64`.
@@ -3598,7 +3598,7 @@ export interface ClickHouseSettings {
   /**
    * The maximum number of rows in MySQL batch insertion of the MySQL storage engine
    */
-  mysql_max_rows_to_insert?: number;
+  mysql_max_rows_to_insert?: bigint;
 
   /**
    * The codec for compressing the client/server and server/server communication. Possible values: - `NONE` — no compression. - `LZ4` — use the LZ4 codec. - `LZ4HC` — use the LZ4HC codec. - `ZSTD` — use the ZSTD codec. **See Also** - [network_zstd_compression_level](#network_zstd_compression_level)
@@ -3608,7 +3608,7 @@ export interface ClickHouseSettings {
   /**
    * Adjusts the level of ZSTD compression. Used only when [network_compression_method](#network_compression_method) is set to `ZSTD`. Possible values: - Positive integer from 1 to 15.
    */
-  network_zstd_compression_level?: number;
+  network_zstd_compression_level?: bigint;
 
   /**
    * Normalize function names to their canonical names
@@ -3618,17 +3618,17 @@ export interface ClickHouseSettings {
   /**
    * If the mutated table contains at least that many unfinished mutations, artificially slow down mutations of table. 0 - disabled
    */
-  number_of_mutations_to_delay?: number;
+  number_of_mutations_to_delay?: bigint;
 
   /**
    * If the mutated table contains at least that many unfinished mutations, throw 'Too many mutations ...' exception. 0 - disabled
    */
-  number_of_mutations_to_throw?: number;
+  number_of_mutations_to_throw?: bigint;
 
   /**
    * Connection pool size for each connection settings string in ODBC bridge.
    */
-  odbc_bridge_connection_pool_size?: number;
+  odbc_bridge_connection_pool_size?: bigint;
 
   /**
    * Use connection pooling in ODBC bridge. If set to false, a new connection is created every time.
@@ -3638,7 +3638,7 @@ export interface ClickHouseSettings {
   /**
    * Sets the number of rows to skip before starting to return rows from the query. It adjusts the offset set by the [OFFSET](/sql-reference/statements/select/offset) clause, so that these two values are summarized. Possible values: - 0 — No rows are skipped . - Positive integer. **Example** Input table: ```sql CREATE TABLE test (i UInt64) ENGINE = MergeTree() ORDER BY i; INSERT INTO test SELECT number FROM numbers(500); ``` Query: ```sql SET limit = 5; SET offset = 7; SELECT * FROM test LIMIT 10 OFFSET 100; ``` Result: ```text ┌───i─┐ │ 107 │ │ 108 │ │ 109 │ └─────┘ ```
    */
-  offset?: number;
+  offset?: bigint;
 
   /**
    * Sets the probability that the ClickHouse can start a trace for executed queries (if no parent [trace context](https://www.w3.org/TR/trace-context/) is supplied). Possible values: - 0 — The trace for all executed queries is disabled (if no parent trace context is supplied). - Positive floating-point number in the range [0..1]. For example, if the setting value is `0,5`, ClickHouse can start a trace on average for half of the queries. - 1 — The trace for all executed queries is enabled.
@@ -3686,7 +3686,7 @@ export interface ClickHouseSettings {
    * Replace with scalar and use hash as a name for large constants (size is estimated by the name length). Possible values: - positive integer - max length of the name, - 0 — always, - negative integer - never.
    * @since 25.12
    */
-  optimize_const_name_size?: number;
+  optimize_const_name_size?: bigint;
 
   /**
    * Enables or disables the optimization of counting number of rows from files in different input formats. It applies to table functions/engines `file`/`s3`/`url`/`hdfs`/`azureBlobStorage`. Possible values: - 0 — Optimization disabled. - 1 — Optimization enabled.
@@ -3759,12 +3759,12 @@ export interface ClickHouseSettings {
   /**
    * The minimum length of the expression `expr = x1 OR ... expr = xN` for optimization
    */
-  optimize_min_equality_disjunction_chain_length?: number;
+  optimize_min_equality_disjunction_chain_length?: bigint;
 
   /**
    * The minimum length of the expression `expr <> x1 AND ... expr <> xN` for optimization
    */
-  optimize_min_inequality_conjunction_chain_length?: number;
+  optimize_min_inequality_conjunction_chain_length?: bigint;
 
   /**
    * Enables or disables automatic [PREWHERE](../../sql-reference/statements/select/prewhere.md) optimization in [SELECT](../../sql-reference/statements/select/index.md) queries. Works only for [*MergeTree](../../engines/table-engines/mergetree-family/index.md) tables. Possible values: - 0 — Automatic `PREWHERE` optimization is disabled. - 1 — Automatic `PREWHERE` optimization is enabled.
@@ -3862,12 +3862,12 @@ export interface ClickHouseSettings {
   /**
    * Limit for number of sharding key values, turns off `optimize_skip_unused_shards` if the limit is reached. Too many values may require significant amount for processing, while the benefit is doubtful, since if you have huge number of values in `IN (...)`, then most likely the query will be sent to all shards anyway.
    */
-  optimize_skip_unused_shards_limit?: number;
+  optimize_skip_unused_shards_limit?: bigint;
 
   /**
    * Controls [`optimize_skip_unused_shards`](#optimize_skip_unused_shards) (hence still requires [`optimize_skip_unused_shards`](#optimize_skip_unused_shards)) depends on the nesting level of the distributed query (case when you have `Distributed` table that look into another `Distributed` table). Possible values: - 0 — Disabled, `optimize_skip_unused_shards` works always. - 1 — Enables `optimize_skip_unused_shards` only for the first level. - 2 — Enables `optimize_skip_unused_shards` up to the second level.
    */
-  optimize_skip_unused_shards_nesting?: number;
+  optimize_skip_unused_shards_nesting?: bigint;
 
   /**
    * Rewrite IN in query for remote shards to exclude values that does not belong to the shard (requires optimize_skip_unused_shards). Possible values: - 0 — Disabled. - 1 — Enabled.
@@ -3955,12 +3955,12 @@ export interface ClickHouseSettings {
   /**
    * Default compression level if query output is compressed. The setting is applied when `SELECT` query has `INTO OUTFILE` or when writing to table functions `file`, `url`, `hdfs`, `s3`, or `azureBlobStorage`. Possible values: from `1` to `22`
    */
-  output_format_compression_level?: number;
+  output_format_compression_level?: bigint;
 
   /**
    * Can be used when the output compression method is `zstd`. If greater than `0`, this setting explicitly sets compression window size (power of `2`) and enables a long-range mode for zstd compression. This can help to achieve a better compression ratio. Possible values: non-negative numbers. Note that if the value is too small or too big, `zstdlib` will throw an exception. Typical values are from `20` (window size = `1MB`) to `30` (window size = `1GB`).
    */
-  output_format_compression_zstd_window_log?: number;
+  output_format_compression_zstd_window_log?: bigint;
 
   /**
    * Enables or disables parallel formatting of data formats. Supported only for [TSV](/interfaces/formats/TabSeparated), [TSKV](/interfaces/formats/TSKV), [CSV](/interfaces/formats/CSV) and [JSONEachRow](/interfaces/formats/JSONEachRow) formats. Possible values: - 1 — Enabled. - 0 — Disabled.
@@ -3971,7 +3971,7 @@ export interface ClickHouseSettings {
    * Size of file chunks to store in the userspace page cache, in bytes. All reads that go through the cache will be rounded up to a multiple of this size. This setting can be adjusted on a per-query level basis, but cache entries with different block sizes cannot be reused. Changing this setting effectively invalidates existing entries in the cache. A higher value, like 1 MiB is good for high-throughput queries, and a lower value, like 64 KiB is good for low-latency point queries.
    * @since 25.6
    */
-  page_cache_block_size?: number;
+  page_cache_block_size?: bigint;
 
   /**
    * Userspace page cache will sometimes invalidate some pages at random. Intended for testing.
@@ -3982,23 +3982,23 @@ export interface ClickHouseSettings {
    * On userspace page cache miss, read up to this many consecutive blocks at once from the underlying storage, if they're also not in the cache. Each block is page_cache_block_size bytes. A higher value is good for high-throughput queries, while low-latency point queries will work better without readahead.
    * @since 25.6
    */
-  page_cache_lookahead_blocks?: number;
+  page_cache_lookahead_blocks?: bigint;
 
   /**
    * Enables parallel distributed `INSERT ... SELECT` query. If we execute `INSERT INTO distributed_table_a SELECT ... FROM distributed_table_b` queries and both tables use the same cluster, and both tables are either [replicated](../../engines/table-engines/mergetree-family/replication.md) or non-replicated, then this query is processed locally on every shard. Possible values: - `0` — Disabled. - `1` — `SELECT` will be executed on each shard from the underlying table of the distributed engine. - `2` — `SELECT` and `INSERT` will be executed on each shard from/to the underlying table of the distributed engine. Setting `enable_parallel_replicas = 1` is needed when using this setting.
    */
-  parallel_distributed_insert_select?: number;
+  parallel_distributed_insert_select?: bigint;
 
   /**
    * When hash-based join algorithm is applied, this threshold helps to decide between using `hash` and `parallel_hash` (only if estimation of the right table size is available). The former is used when we know that the right table size is below the threshold.
    * @since 25.6
    */
-  parallel_hash_join_threshold?: number;
+  parallel_hash_join_threshold?: bigint;
 
   /**
    * This is internal setting that should not be used directly and represents an implementation detail of the 'parallel replicas' mode. This setting will be automatically set up by the initiator server for distributed queries to the index of the replica participating in query processing among parallel replicas.
    */
-  parallel_replica_offset?: number;
+  parallel_replica_offset?: bigint;
 
   /**
    * If true, subquery for IN will be executed on every follower replica.
@@ -4020,7 +4020,7 @@ export interface ClickHouseSettings {
   /**
    * This is internal setting that should not be used directly and represents an implementation detail of the 'parallel replicas' mode. This setting will be automatically set up by the initiator server for distributed queries to the number of parallel replicas participating in query processing.
    */
-  parallel_replicas_count?: number;
+  parallel_replicas_count?: bigint;
 
   /**
    * An arbitrary integer expression that can be used to split work between replicas for a specific table. The value can be any integer expression. Simple expressions using primary keys are preferred. If the setting is used on a cluster that consists of a single shard with multiple replicas, those replicas will be converted into virtual shards. Otherwise, it will behave same as for `SAMPLE` key, it will use multiple replicas of each shard.
@@ -4030,12 +4030,12 @@ export interface ClickHouseSettings {
   /**
    * Allows the filter type `range` to split the work evenly between replicas based on the custom range `[parallel_replicas_custom_key_range_lower, INT_MAX]`. When used in conjunction with [parallel_replicas_custom_key_range_upper](#parallel_replicas_custom_key_range_upper), it lets the filter evenly split the work over replicas for the range `[parallel_replicas_custom_key_range_lower, parallel_replicas_custom_key_range_upper]`. Note: This setting will not cause any additional data to be filtered during query processing, rather it changes the points at which the range filter breaks up the range `[0, INT_MAX]` for parallel processing.
    */
-  parallel_replicas_custom_key_range_lower?: number;
+  parallel_replicas_custom_key_range_lower?: bigint;
 
   /**
    * Allows the filter type `range` to split the work evenly between replicas based on the custom range `[0, parallel_replicas_custom_key_range_upper]`. A value of 0 disables the upper bound, setting it the max value of the custom key expression. When used in conjunction with [parallel_replicas_custom_key_range_lower](#parallel_replicas_custom_key_range_lower), it lets the filter evenly split the work over replicas for the range `[parallel_replicas_custom_key_range_lower, parallel_replicas_custom_key_range_upper]`. Note: This setting will not cause any additional data to be filtered during query processing, rather it changes the points at which the range filter breaks up the range `[0, INT_MAX]` for parallel processing
    */
-  parallel_replicas_custom_key_range_upper?: number;
+  parallel_replicas_custom_key_range_upper?: bigint;
 
   /**
    * Replace table function engines with their -Cluster alternatives
@@ -4068,12 +4068,12 @@ export interface ClickHouseSettings {
   /**
    * Parts virtually divided into segments to be distributed between replicas for parallel reading. This setting controls the size of these segments. Not recommended to change until you're absolutely sure in what you're doing. Value should be in range [128; 16384]
    */
-  parallel_replicas_mark_segment_size?: number;
+  parallel_replicas_mark_segment_size?: bigint;
 
   /**
    * Limit the number of replicas used in a query to (estimated rows to read / min_number_of_rows_per_replica). The max is still limited by 'max_parallel_replicas'
    */
-  parallel_replicas_min_number_of_rows_per_replica?: number;
+  parallel_replicas_min_number_of_rows_per_replica?: bigint;
 
   /**
    * Type of filter to use with custom key for parallel replicas. default - use modulo operation on the custom key, range - use range filter on custom key using all possible values for the value type of custom key.
@@ -4121,12 +4121,12 @@ export interface ClickHouseSettings {
   /**
    * If not 0 group left table blocks in bigger ones for left-side table in partial merge join. It uses up to 2x of specified memory per joining thread.
    */
-  partial_merge_join_left_table_buffer_bytes?: number;
+  partial_merge_join_left_table_buffer_bytes?: bigint;
 
   /**
    * Limits sizes of right-hand join data blocks in partial merge join algorithm for [JOIN](../../sql-reference/statements/select/join.md) queries. ClickHouse server: 1. Splits right-hand join data into blocks with up to the specified number of rows. 2. Indexes each block with its minimum and maximum values. 3. Unloads prepared blocks to disk if it is possible. Possible values: - Any positive integer. Recommended range of values: [1000, 100000].
    */
-  partial_merge_join_rows_in_right_blocks?: number;
+  partial_merge_join_rows_in_right_blocks?: bigint;
 
   /**
    * Allows query to return a partial result after cancel.
@@ -4136,12 +4136,12 @@ export interface ClickHouseSettings {
   /**
    * If the destination table contains at least that many active parts in a single partition, artificially slow down insert into table.
    */
-  parts_to_delay_insert?: number;
+  parts_to_delay_insert?: bigint;
 
   /**
    * If more than this number active parts in a single partition of the destination table, throw 'Too many parts ...' exception.
    */
-  parts_to_throw_insert?: number;
+  parts_to_throw_insert?: bigint;
 
   /**
    * Logs index statistics per part
@@ -4152,12 +4152,12 @@ export interface ClickHouseSettings {
   /**
    * Block at the query wait loop on the server for the specified number of seconds.
    */
-  poll_interval?: number;
+  poll_interval?: bigint;
 
   /**
    * Connection timeout in seconds of a single attempt to connect PostgreSQL end-point. The value is passed as a `connect_timeout` parameter of the connection URL.
    */
-  postgresql_connection_attempt_timeout?: number;
+  postgresql_connection_attempt_timeout?: bigint;
 
   /**
    * Close connection before returning connection to the pool.
@@ -4167,17 +4167,17 @@ export interface ClickHouseSettings {
   /**
    * Connection pool push/pop retries number for PostgreSQL table engine and database engine.
    */
-  postgresql_connection_pool_retries?: number;
+  postgresql_connection_pool_retries?: bigint;
 
   /**
    * Connection pool size for PostgreSQL table engine and database engine.
    */
-  postgresql_connection_pool_size?: number;
+  postgresql_connection_pool_size?: bigint;
 
   /**
    * Connection pool push/pop timeout on empty pool for PostgreSQL table engine and database engine. By default it will block on empty pool.
    */
-  postgresql_connection_pool_wait_timeout?: number;
+  postgresql_connection_pool_wait_timeout?: bigint;
 
   /**
    * Approximate probability of failing internal (for replication) PostgreSQL queries. Valid value is in interval [0.0f, 1.0f]
@@ -4193,7 +4193,7 @@ export interface ClickHouseSettings {
   /**
    * Prefer maximum block bytes for external sort, reduce the memory usage during merging.
    */
-  prefer_external_sort_block_bytes?: number;
+  prefer_external_sort_block_bytes?: bigint;
 
   /**
    * Enables the replacement of `IN`/`JOIN` operators with `GLOBAL IN`/`GLOBAL JOIN`. Possible values: - 0 — Disabled. `IN`/`JOIN` operators are not replaced with `GLOBAL IN`/`GLOBAL JOIN`. - 1 — Enabled. `IN`/`JOIN` operators are replaced with `GLOBAL IN`/`GLOBAL JOIN`. **Usage** Although `SET distributed_product_mode=global` can change the queries behavior for the distributed tables, it's not suitable for local tables or tables from external resources. Here is when the `prefer_global_in_and_join` setting comes into play. For example, we have query serving nodes that contain local tables, which are not suitable for distribution. We need to scatter their data on the fly during distributed processing with the `GLOBAL` keyword — `GLOBAL IN`/`GLOBAL JOIN`. Another use case of `prefer_global_in_and_join` is accessing tables created by external engines. This setting helps to reduce the number of calls to external sources while joining such tables: only one call per query. **See also:** - [Distributed subqueries](/sql-reference/operators/in#distributed-subqueries) for more information on how to use `GLOBAL IN`/`GLOBAL JOIN`
@@ -4208,17 +4208,17 @@ export interface ClickHouseSettings {
   /**
    * Only has an effect in ClickHouse Cloud. If a merged part is less than this many seconds old and is not pre-warmed (see [cache_populated_by_fetch](merge-tree-settings.md/#cache_populated_by_fetch)), but all its source parts are available and pre-warmed, SELECT queries will read from those parts instead. Only for Replicated-/SharedMergeTree. Note that this only checks whether CacheWarmer processed the part; if the part was fetched into cache by something else, it'll still be considered cold until CacheWarmer gets to it; if it was warmed, then evicted from cache, it'll still be considered warm.
    */
-  prefer_warmed_unmerged_parts_seconds?: number;
+  prefer_warmed_unmerged_parts_seconds?: bigint;
 
   /**
    * This setting adjusts the data block size for query processing and represents additional fine-tuning to the more rough 'max_block_size' setting. If the columns are large and with 'max_block_size' rows the block size is likely to be larger than the specified amount of bytes, its size will be lowered for better CPU cache locality.
    */
-  preferred_block_size_bytes?: number;
+  preferred_block_size_bytes?: bigint;
 
   /**
    * Limit on max column size in block while reading. Helps to decrease cache misses count. Should be close to L2 cache size.
    */
-  preferred_max_column_in_block_size_bytes?: number;
+  preferred_max_column_in_block_size_bytes?: bigint;
 
   /**
    * If it is set to a non-empty string, ClickHouse will try to apply specified projection in query. Possible values: - string: name of preferred projection
@@ -4228,7 +4228,7 @@ export interface ClickHouseSettings {
   /**
    * The maximum size of the prefetch buffer to read from the filesystem.
    */
-  prefetch_buffer_size?: number;
+  prefetch_buffer_size?: bigint;
 
   /**
    * Allows to print deep-nested type names in a pretty way with indents in `DESCRIBE` query and in `toTypeName()` function. Example: ```sql CREATE TABLE test (a Tuple(b String, c Tuple(d Nullable(UInt64), e Array(UInt32), f Array(Tuple(g String, h Map(String, Array(Tuple(i String, j UInt64))))), k Date), l Nullable(String))) ENGINE=Memory; DESCRIBE TABLE test FORMAT TSVRaw SETTINGS print_pretty_type_names=1; ``` ``` a Tuple( b String, c Tuple( d Nullable(UInt64), e Array(UInt32), f Array(Tuple( g String, h Map( String, Array(Tuple( i String, j UInt64 )) ) )), k Date ), l Nullable(String) ) ```
@@ -4238,7 +4238,7 @@ export interface ClickHouseSettings {
   /**
    * Priority of the query. 1 - the highest, higher value - lower priority; 0 - do not use priorities.
    */
-  priority?: number;
+  priority?: bigint;
 
   /**
    * Specifies the database name used by the 'promql' dialect. Empty string means the current database.
@@ -4272,12 +4272,12 @@ export interface ClickHouseSettings {
   /**
    * The maximum number of query results the current user may store in the [query cache](../query-cache.md). 0 means unlimited. Possible values: - Positive integer >= 0.
    */
-  query_cache_max_entries?: number;
+  query_cache_max_entries?: bigint;
 
   /**
    * The maximum amount of memory (in bytes) the current user may allocate in the [query cache](../query-cache.md). 0 means unlimited. Possible values: - Positive integer >= 0.
    */
-  query_cache_max_size_in_bytes?: number;
+  query_cache_max_size_in_bytes?: bigint;
 
   /**
    * Minimum duration in milliseconds a query needs to run for its result to be stored in the [query cache](../query-cache.md). Possible values: - Positive integer >= 0.
@@ -4287,7 +4287,7 @@ export interface ClickHouseSettings {
   /**
    * Minimum number of times a `SELECT` query must run before its result is stored in the [query cache](../query-cache.md). Possible values: - Positive integer >= 0.
    */
-  query_cache_min_query_runs?: number;
+  query_cache_min_query_runs?: bigint;
 
   /**
    * Controls how the [query cache](../query-cache.md) handles `SELECT` queries with non-deterministic functions like `rand()` or `now()`. Possible values: - `'throw'` - Throw an exception and don't cache the query result. - `'save'` - Cache the query result. - `'ignore'` - Don't cache the query result and don't throw an exception.
@@ -4328,7 +4328,7 @@ export interface ClickHouseSettings {
   /**
    * The interval in milliseconds at which the [query_metric_log](../../operations/system-tables/query_metric_log.md) for individual queries is collected. If set to any negative value, it will take the value `collect_interval_milliseconds` from the [query_metric_log setting](/operations/server-configuration-parameters/settings#query_metric_log) or default to 1000 if not present. To disable the collection of a single query, set `query_metric_log_interval` to 0. Default value: -1
    */
-  query_metric_log_interval?: number;
+  query_metric_log_interval?: bigint;
 
   /**
    * Toggles the aggregation in-order query-plan-level optimization. Only takes effect if setting [`query_plan_enable_optimizations`](#query_plan_enable_optimizations) is 1. :::note This is an expert-level setting which should only be used for debugging by developers. The setting may change in future in backward-incompatible ways or be removed. ::: Possible values: - 0 - Disable - 1 - Enable
@@ -4410,24 +4410,24 @@ export interface ClickHouseSettings {
    * Control maximum limit value that allows to use query plan for lazy materialization optimization. If zero, there is no limit.
    * @since 25.5
    */
-  query_plan_max_limit_for_lazy_materialization?: number;
+  query_plan_max_limit_for_lazy_materialization?: bigint;
 
   /**
    * Control maximum limit value that allows to evaluate query plan for TopK optimization by using minmax skip index and dynamic threshold filtering. If zero, there is no limit.
    * @since 26.1
    */
-  query_plan_max_limit_for_top_k_optimization?: number;
+  query_plan_max_limit_for_top_k_optimization?: bigint;
 
   /**
    * Limits the total number of optimizations applied to query plan, see setting [query_plan_enable_optimizations](#query_plan_enable_optimizations). Useful to avoid long optimization times for complex queries. In the EXPLAIN PLAN query, stop applying optimizations after this limit is reached and return the plan as is. For regular query execution if the actual number of optimizations exceeds this setting, an exception is thrown. :::note This is an expert-level setting which should only be used for debugging by developers. The setting may change in future in backward-incompatible ways or be removed. :::
    */
-  query_plan_max_optimizations_to_apply?: number;
+  query_plan_max_optimizations_to_apply?: bigint;
 
   /**
    * Maximum length of step description in EXPLAIN PLAN.
    * @since 25.10
    */
-  query_plan_max_step_description_length?: number;
+  query_plan_max_step_description_length?: bigint;
 
   /**
    * Toggles a query-plan-level optimization which merges consecutive filters. Only takes effect if setting [query_plan_enable_optimizations](#query_plan_enable_optimizations) is 1. :::note This is an expert-level setting which should only be used for debugging by developers. The setting may change in future in backward-incompatible ways or be removed. ::: Possible values: - 0 - Disable - 1 - Enable
@@ -4455,7 +4455,7 @@ export interface ClickHouseSettings {
    * Optimize the order of joins within the same subquery. Currently only supported for very limited cases. Value is the maximum number of tables to optimize.
    * @since 25.10
    */
-  query_plan_optimize_join_order_limit?: number;
+  query_plan_optimize_join_order_limit?: bigint;
 
   /**
    * Use query plan for lazy materialization optimization.
@@ -4525,12 +4525,12 @@ export interface ClickHouseSettings {
   /**
    * Sets the period for a CPU clock timer of the [query profiler](../../operations/optimizing-performance/sampling-query-profiler.md). This timer counts only CPU time. Possible values: - A positive integer number of nanoseconds. Recommended values: - 10000000 (100 times a second) nanoseconds and more for single queries. - 1000000000 (once a second) for cluster-wide profiling. - 0 for turning off the timer. See also: - System table [trace_log](/operations/system-tables/trace_log)
    */
-  query_profiler_cpu_time_period_ns?: number;
+  query_profiler_cpu_time_period_ns?: bigint;
 
   /**
    * Sets the period for a real clock timer of the [query profiler](../../operations/optimizing-performance/sampling-query-profiler.md). Real clock timer counts wall-clock time. Possible values: - Positive integer number, in nanoseconds. Recommended values: - 10000000 (100 times a second) nanoseconds and less for single queries. - 1000000000 (once a second) for cluster-wide profiling. - 0 for turning off the timer. See also: - System table [trace_log](/operations/system-tables/trace_log)
    */
-  query_profiler_real_time_period_ns?: number;
+  query_profiler_real_time_period_ns?: bigint;
 
   /**
    * The wait time in the request queue, if the number of concurrent requests exceeds the maximum.
@@ -4545,17 +4545,17 @@ export interface ClickHouseSettings {
   /**
    * Settings to reduce the number of threads in case of slow reads. Count events when the read bandwidth is less than that many bytes per second.
    */
-  read_backoff_max_throughput?: number;
+  read_backoff_max_throughput?: bigint;
 
   /**
    * Settings to try keeping the minimal number of threads in case of slow reads.
    */
-  read_backoff_min_concurrency?: number;
+  read_backoff_min_concurrency?: bigint;
 
   /**
    * Settings to reduce the number of threads in case of slow reads. The number of events after which the number of threads will be reduced.
    */
-  read_backoff_min_events?: number;
+  read_backoff_min_events?: bigint;
 
   /**
    * Settings to reduce the number of threads in case of slow reads. Do not pay attention to the event, if the previous one has passed less than a certain amount of time.
@@ -4586,7 +4586,7 @@ export interface ClickHouseSettings {
   /**
    * Minimal number of parts to read to run preliminary merge step during multithread reading in order of primary key.
    */
-  read_in_order_two_level_merge_threshold?: number;
+  read_in_order_two_level_merge_threshold?: bigint;
 
   /**
    * Use buffering before merging while reading in order of primary key. It increases the parallelism of query execution
@@ -4612,7 +4612,7 @@ export interface ClickHouseSettings {
   /**
    * Priority to read data from local filesystem or remote filesystem. Only supported for 'pread_threadpool' method for local filesystem and for `threadpool` method for remote filesystem.
    */
-  read_priority?: number;
+  read_priority?: bigint;
 
   /**
    * Only has an effect in ClickHouse Cloud. Allow reading from distributed cache
@@ -4622,7 +4622,7 @@ export interface ClickHouseSettings {
   /**
    * 0 - no read-only restrictions. 1 - only read requests, as well as changing explicitly allowed settings. 2 - only read requests, as well as changing settings, except for the 'readonly' setting.
    */
-  readonly?: number;
+  readonly?: bigint;
 
   /**
    * Connection timeout for receiving first packet of data or packet with positive progress from replica
@@ -4637,7 +4637,7 @@ export interface ClickHouseSettings {
   /**
    * Sets the maximum number of matches for a single regular expression per row. Use it to protect against memory overload when using greedy regular expression in the [extractAllGroupsHorizontal](/sql-reference/functions/string-search-functions#extractAllGroupsHorizontal) function. Possible values: - Positive integer.
    */
-  regexp_max_matches_per_row?: number;
+  regexp_max_matches_per_row?: bigint;
 
   /**
    * Reject patterns which will likely be expensive to evaluate with hyperscan (due to NFA state explosion)
@@ -4662,17 +4662,17 @@ export interface ClickHouseSettings {
   /**
    * Max attempts to read with backoff
    */
-  remote_fs_read_backoff_max_tries?: number;
+  remote_fs_read_backoff_max_tries?: bigint;
 
   /**
    * Max wait time when trying to read data for remote disk
    */
-  remote_fs_read_max_backoff_ms?: number;
+  remote_fs_read_max_backoff_ms?: bigint;
 
   /**
    * Min bytes required for remote read (url, s3) to do seek, instead of read with ignore.
    */
-  remote_read_min_bytes_for_seek?: number;
+  remote_read_min_bytes_for_seek?: bigint;
 
   /**
    * - **Type:** String - **Default value:** Empty string This setting allows to specify renaming pattern for files processed by `file` table function. When option is set, all files read by `file` table function will be renamed according to specified pattern with placeholders, only if files processing was successful. ### Placeholders - `%a` — Full original filename (e.g., "sample.csv"). - `%f` — Original filename without extension (e.g., "sample"). - `%e` — Original file extension with dot (e.g., ".csv"). - `%t` — Timestamp (in microseconds). - `%%` — Percentage sign ("%"). ### Example - Option: `--rename_files_after_processing="processed_%f_%t%e"` - Query: `SELECT * FROM file('sample.csv')` If reading `sample.csv` is successful, file will be renamed to `processed_sample_1683473210851438.csv`
@@ -4692,7 +4692,7 @@ export interface ClickHouseSettings {
   /**
    * Specifies how long (in seconds) to wait for inactive replicas to execute [`ALTER`](../../sql-reference/statements/alter/index.md), [`OPTIMIZE`](../../sql-reference/statements/optimize.md) or [`TRUNCATE`](../../sql-reference/statements/truncate.md) queries. Possible values: - `0` — Do not wait. - Negative integer — Wait for unlimited time. - Positive integer — The number of seconds to wait.
    */
-  replication_wait_for_inactive_replica_timeout?: number;
+  replication_wait_for_inactive_replica_timeout?: bigint;
 
   /**
    * Replace external dictionary sources to Null on restore. Useful for testing purposes
@@ -4750,7 +4750,7 @@ export interface ClickHouseSettings {
   /**
    * Connection timeout for host from s3 disks.
    */
-  s3_connect_timeout_ms?: number;
+  s3_connect_timeout_ms?: bigint;
 
   /**
    * Enables or disables creating a new file on each insert in s3 engine tables. If enabled, on each insert a new S3 object will be created with the key, similar to this pattern: initial: `data.Parquet.gz` -> `data.1.Parquet.gz` -> `data.2.Parquet.gz`, etc. Possible values: - 0 — `INSERT` query creates a new file or fail if file exists and s3_truncate_on_insert is not set. - 1 — `INSERT` query creates a new file on each insert using suffix (from the second one) if s3_truncate_on_insert is not set. See more details [here](/integrations/s3#inserting-data).
@@ -4770,83 +4770,83 @@ export interface ClickHouseSettings {
   /**
    * Maximum number of files that could be returned in batch by ListObject request
    */
-  s3_list_object_keys_size?: number;
+  s3_list_object_keys_size?: bigint;
 
   /**
    * The maximum number of connections per server.
    */
-  s3_max_connections?: number;
+  s3_max_connections?: bigint;
 
   /**
    * Max number of requests that can be issued simultaneously before hitting request per second limit. By default (0) equals to `s3_max_get_rps`
    */
-  s3_max_get_burst?: number;
+  s3_max_get_burst?: bigint;
 
   /**
    * Limit on S3 GET request per second rate before throttling. Zero means unlimited.
    */
-  s3_max_get_rps?: number;
+  s3_max_get_rps?: bigint;
 
   /**
    * The maximum number of a concurrent loaded parts in multipart upload request. 0 means unlimited.
    */
-  s3_max_inflight_parts_for_one_file?: number;
+  s3_max_inflight_parts_for_one_file?: bigint;
 
   /**
    * Maximum part number number for s3 upload part.
    */
-  s3_max_part_number?: number;
+  s3_max_part_number?: bigint;
 
   /**
    * Max number of requests that can be issued simultaneously before hitting request per second limit. By default (0) equals to `s3_max_put_rps`
    */
-  s3_max_put_burst?: number;
+  s3_max_put_burst?: bigint;
 
   /**
    * Limit on S3 PUT request per second rate before throttling. Zero means unlimited.
    */
-  s3_max_put_rps?: number;
+  s3_max_put_rps?: bigint;
 
   /**
    * Maximum size for single-operation copy in s3. This setting is used only if s3_allow_multipart_copy is true.
    */
-  s3_max_single_operation_copy_size?: number;
+  s3_max_single_operation_copy_size?: bigint;
 
   /**
    * The maximum size of object to upload using singlepart upload to S3.
    */
-  s3_max_single_part_upload_size?: number;
+  s3_max_single_part_upload_size?: bigint;
 
   /**
    * The maximum number of retries during single S3 read.
    */
-  s3_max_single_read_retries?: number;
+  s3_max_single_read_retries?: bigint;
 
   /**
    * The maximum number of retries in case of unexpected errors during S3 write.
    */
-  s3_max_unexpected_write_error_retries?: number;
+  s3_max_unexpected_write_error_retries?: bigint;
 
   /**
    * The maximum size of part to upload during multipart upload to S3.
    */
-  s3_max_upload_part_size?: number;
+  s3_max_upload_part_size?: bigint;
 
   /**
    * The minimum size of part to upload during multipart upload to S3.
    */
-  s3_min_upload_part_size?: number;
+  s3_min_upload_part_size?: bigint;
 
   /**
    * Maximum number of `_path` values that can be extracted from query filters to use for file iteration instead of glob listing. 0 means disabled.
    * @since 26.1
    */
-  s3_path_filter_limit?: number;
+  s3_path_filter_limit?: bigint;
 
   /**
    * Idleness timeout for sending and receiving data to/from S3. Fail if a single TCP read or write call blocks for this long.
    */
-  s3_request_timeout_ms?: number;
+  s3_request_timeout_ms?: bigint;
 
   /**
    * Enables or disables skipping empty files in [S3](../../engines/table-engines/integrations/s3.md) engine tables. Possible values: - 0 — `SELECT` throws an exception if empty file is not compatible with requested format. - 1 — `SELECT` returns empty result for empty file.
@@ -4862,7 +4862,7 @@ export interface ClickHouseSettings {
   /**
    * The exact size of part to upload during multipart upload to S3 (some implementations does not supports variable size parts).
    */
-  s3_strict_upload_part_size?: number;
+  s3_strict_upload_part_size?: bigint;
 
   /**
    * Throw an error, when ListObjects request cannot match any files
@@ -4877,12 +4877,12 @@ export interface ClickHouseSettings {
   /**
    * Multiply s3_min_upload_part_size by this factor each time s3_multiply_parts_count_threshold parts were uploaded from a single write to S3.
    */
-  s3_upload_part_size_multiply_factor?: number;
+  s3_upload_part_size_multiply_factor?: bigint;
 
   /**
    * Each time this number of parts was uploaded to S3, s3_min_upload_part_size is multiplied by s3_upload_part_size_multiply_factor.
    */
-  s3_upload_part_size_multiply_parts_count_threshold?: number;
+  s3_upload_part_size_multiply_parts_count_threshold?: bigint;
 
   /**
    * When set to `true` than for all s3 requests first two attempts are made with low send and receive timeouts. When set to `false` than all attempts are made with identical timeouts.
@@ -4955,7 +4955,7 @@ export interface ClickHouseSettings {
   /**
    * :::note This setting differ in behavior between SharedMergeTree and ReplicatedMergeTree, see [SharedMergeTree consistency](/cloud/reference/shared-merge-tree#consistency) for more information about the behavior of `select_sequential_consistency` in SharedMergeTree. ::: Enables or disables sequential consistency for `SELECT` queries. Requires `insert_quorum_parallel` to be disabled (enabled by default). Possible values: - 0 — Disabled. - 1 — Enabled. Usage When sequential consistency is enabled, ClickHouse allows the client to execute the `SELECT` query only for those replicas that contain data from all previous `INSERT` queries executed with `insert_quorum`. If the client refers to a partial replica, ClickHouse will generate an exception. The SELECT query will not include data that has not yet been written to the quorum of replicas. When `insert_quorum_parallel` is enabled (the default), then `select_sequential_consistency` does not work. This is because parallel `INSERT` queries can be written to different sets of quorum replicas so there is no guarantee a single replica will have received all writes. See also: - [insert_quorum](#insert_quorum) - [insert_quorum_timeout](#insert_quorum_timeout) - [insert_quorum_parallel](#insert_quorum_parallel)
    */
-  select_sequential_consistency?: number;
+  select_sequential_consistency?: bigint;
 
   /**
    * Send server text logs with specified minimum level to client. Valid values: 'trace', 'debug', 'information', 'warning', 'error', 'fatal', 'none'
@@ -5145,7 +5145,7 @@ export interface ClickHouseSettings {
   /**
    * Sets the maximum number of addresses generated from patterns for the [remote](../../sql-reference/table-functions/remote.md) function. Possible values: - Positive integer.
    */
-  table_function_remote_max_addresses?: number;
+  table_function_remote_max_addresses?: bigint;
 
   /**
    * The time in seconds the connection needs to remain idle before TCP starts sending keepalive probes
@@ -5155,7 +5155,7 @@ export interface ClickHouseSettings {
   /**
    * Wait time to lock cache for space reservation for temporary data in filesystem cache
    */
-  temporary_data_in_cache_reserve_space_wait_lock_timeout_milliseconds?: number;
+  temporary_data_in_cache_reserve_space_wait_lock_timeout_milliseconds?: bigint;
 
   /**
    * Sets compression codec for temporary files used in sorting and joining operations on disk. Possible values: - LZ4 — [LZ4](https://en.wikipedia.org/wiki/LZ4_(compression_algorithm)) compression is applied. - NONE — No compression is applied.
@@ -5252,7 +5252,7 @@ export interface ClickHouseSettings {
   /**
    * Send unknown packet instead of data Nth data packet
    */
-  unknown_packet_in_send_data?: number;
+  unknown_packet_in_send_data?: bigint;
 
   /**
    * Determines the behavior of concurrent update queries. Possible values: - `sync` - run sequentially all `UPDATE` queries. - `auto` - run sequentially only `UPDATE` queries with dependencies between columns updated in one query and columns used in expressions of another query. - `async` - do not synchronize update queries.
@@ -5322,7 +5322,7 @@ export interface ClickHouseSettings {
   /**
    * The maximum size of the set in the right-hand side of the IN operator to use table index for filtering. It allows to avoid performance degradation and higher memory usage due to the preparation of additional data structures for large queries. Zero means no limit.
    */
-  use_index_for_in_with_subqueries_max_values?: number;
+  use_index_for_in_with_subqueries_max_values?: bigint;
 
   /**
    * Enable pushing OR-connected parts of JOIN conditions down to the corresponding input sides ("partial pushdown"). This allows storage engines to filter earlier, which can reduce data read. The optimization is semantics-preserving and is applied only when each top-level OR branch contributes at least one deterministic predicate for the target side.
@@ -5413,7 +5413,7 @@ export interface ClickHouseSettings {
   /**
    * Use structure from insertion table instead of schema inference from data. Possible values: 0 - disabled, 1 - enabled, 2 - auto
    */
-  use_structure_from_insertion_table_in_table_functions?: number;
+  use_structure_from_insertion_table_in_table_functions?: bigint;
 
   /**
    * Whether to use a cache of deserialized text index dictionary block. Using the text index dictionary block cache can significantly reduce latency and increase throughput when working with a large number of text index queries.
@@ -5539,12 +5539,12 @@ export interface ClickHouseSettings {
    * Only has an effect in ClickHouse Cloud. Set buffer size for write-through distributed cache. If 0, will use buffer size which would have been used if there was not distributed cache.
    * @since 25.8
    */
-  write_through_distributed_cache_buffer_size?: number;
+  write_through_distributed_cache_buffer_size?: bigint;
 
   /**
    * Allows you to select the max window log of ZSTD (it will not be used for MergeTree family)
    */
-  zstd_window_log_max?: number;
+  zstd_window_log_max?: bigint;
 
   /** Index signature for unknown/custom settings */
   [key: string]: unknown;

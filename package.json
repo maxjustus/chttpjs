@@ -33,7 +33,8 @@
   ],
   "scripts": {
     "prepublishOnly": "npm run build",
-    "build": "npm run build:native && npm run build:native:cjs && npm run build:full && npm run build:full:cjs && npm run build:lz4 && npm run build:lz4:cjs && npm run build:tcp && npm run build:tcp:cjs",
+    "build": "npm run build:native && npm run build:native:cjs && npm run build:full && npm run build:full:cjs && npm run build:lz4 && npm run build:lz4:cjs && npm run build:tcp && npm run build:tcp:cjs && npm run build:copy-wasm",
+    "build:copy-wasm": "cp node_modules/@bokuweb/zstd-wasm/dist/common/zstd.wasm dist/",
     "build:native": "esbuild native/index.ts --bundle --format=esm --outfile=dist/native.js --platform=neutral --target=es2022 --minify --external:lz4-napi --external:zstd-napi",
     "build:native:cjs": "esbuild native/index.ts --bundle --format=cjs --outfile=dist/native.cjs --platform=node --target=es2022 --minify --external:lz4-napi --external:zstd-napi",
     "build:full": "esbuild index.ts --bundle --format=esm --outfile=dist/chttp.js --platform=browser --target=es2022 --minify --define:BUILD_WITH_ZSTD=true --external:zstd-napi --external:lz4-napi --external:@maxjustus/chttp/native",
