@@ -21,8 +21,8 @@ describe("TCP Client Multi-block Integration", () => {
       // Use 100k rows to ensure multiple blocks (default block size is 65536)
       const rowCount = 100000;
       
-      await client.execute(`CREATE TABLE ${tableName} (id UInt64, name String) ENGINE = Memory`);
-      await client.execute(`INSERT INTO ${tableName} SELECT number, 'row_' || toString(number) FROM numbers(${rowCount})`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt64, name String) ENGINE = Memory`);
+      await client.query(`INSERT INTO ${tableName} SELECT number, 'row_' || toString(number) FROM numbers(${rowCount})`);
       
       console.log(`Querying ${rowCount} rows...`);
       const stream = client.query(`SELECT * FROM ${tableName}`);
@@ -40,7 +40,7 @@ describe("TCP Client Multi-block Integration", () => {
       assert.strictEqual(totalRows, rowCount, "Total row count mismatch");
       assert.ok(blockCount > 1, "Should have received multiple blocks");
       
-      await client.execute(`DROP TABLE ${tableName}`);
+      await client.query(`DROP TABLE ${tableName}`);
     } finally {
       client.close();
     }
@@ -51,7 +51,7 @@ describe("TCP Client Multi-block Integration", () => {
     await client.connect();
     try {
       const tableName = `test_tcp_multi_ins_${Date.now()}`;
-      await client.execute(`CREATE TABLE ${tableName} (id UInt64, name String) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt64, name String) ENGINE = Memory`);
       
       const blockCount = 10;
       const rowsPerBlock = 1000;
@@ -87,7 +87,7 @@ describe("TCP Client Multi-block Integration", () => {
       console.log(`Verified ${totalCount} rows in table.`);
       assert.strictEqual(Number(totalCount), blockCount * rowsPerBlock);
       
-      await client.execute(`DROP TABLE ${tableName}`);
+      await client.query(`DROP TABLE ${tableName}`);
     } finally {
       client.close();
     }

@@ -24,6 +24,9 @@ import {
 } from "@maxjustus/chttp/native";
 import { init as initCompression, Method, type MethodCode } from "../compression.ts";
 import type { ClickHouseSettings } from "../settings.ts";
+import { collectable, type CollectableAsyncGenerator } from "../util.ts";
+
+export type { CollectableAsyncGenerator } from "../util.ts";
 
 /**
  * Duck-type check for RecordBatch-like objects.
@@ -327,17 +330,21 @@ export class TcpClient {
     this.log("Handshake: Complete!");
   }
 
-  async execute(sql: string, options: QueryOptions = {}): Promise<void> {
-    for await (const _ of this.query(sql, options)) { }
+  /** Insert a single RecordBatch. */
+  insert(sql: string, data: RecordBatch, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
+  /** Insert an iterable of RecordBatches. */
+  insert(sql: string, data: Iterable<RecordBatch> | AsyncIterable<RecordBatch>, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
+  /** Insert row objects with auto-coercion using server schema. */
+  insert(sql: string, data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
+  insert(
+    sql: string,
+    data: RecordBatch | Iterable<RecordBatch | Record<string, unknown>> | AsyncIterable<RecordBatch | Record<string, unknown>>,
+    options: InsertOptions = {}
+  ): CollectableAsyncGenerator<Packet> {
+    return collectable(this.insertImpl(sql, data, options));
   }
 
-  /** Insert a single RecordBatch. */
-  insert(sql: string, data: RecordBatch, options?: InsertOptions): AsyncGenerator<Packet>;
-  /** Insert an iterable of RecordBatches. */
-  insert(sql: string, data: Iterable<RecordBatch> | AsyncIterable<RecordBatch>, options?: InsertOptions): AsyncGenerator<Packet>;
-  /** Insert row objects with auto-coercion using server schema. */
-  insert(sql: string, data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>, options?: InsertOptions): AsyncGenerator<Packet>;
-  async *insert(
+  private async *insertImpl(
     sql: string,
     data: RecordBatch | Iterable<RecordBatch | Record<string, unknown>> | AsyncIterable<RecordBatch | Record<string, unknown>>,
     options: InsertOptions = {}
@@ -789,7 +796,11 @@ export class TcpClient {
   }
 
   // TODO: we should make the use flattened v3 setting automatically enabled until we support the other dynamic encodings
-  async *query(
+  query(sql: string, options: QueryOptions = {}): CollectableAsyncGenerator<Packet> {
+    return collectable(this.queryImpl(sql, options));
+  }
+
+  private async *queryImpl(
     sql: string,
     options: QueryOptions = {},
   ): AsyncGenerator<Packet> {

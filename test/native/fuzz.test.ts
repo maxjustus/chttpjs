@@ -795,14 +795,14 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
           const pathSelect = pathTypes.map((_, i) => `'tp_${i}', tp_${i}`).join(", ");
 
           // Create source table and insert random data
-          await client.execute(`CREATE TABLE ${srcTable} (id UInt64, data ${jsonType}) ENGINE = Memory`);
-          await client.execute(
+          await client.query(`CREATE TABLE ${srcTable} (id UInt64, data ${jsonType}) ENGINE = Memory`);
+          await client.query(
             `INSERT INTO ${srcTable} SELECT rowNumberInAllBlocks() as id, map(${pathSelect})::${jsonType} as data ` +
             `FROM generateRandom('${helperCols.replace(/'/g, "''")}') LIMIT ${rowCount}`
           );
 
           // Create empty destination table
-          await client.execute(`CREATE TABLE ${dstTable} (id UInt64, data ${jsonType}) ENGINE = Memory`);
+          await client.query(`CREATE TABLE ${dstTable} (id UInt64, data ${jsonType}) ENGINE = Memory`);
 
           // Read from source via TCP (tests decoder) - collect all batches first
           const batches: RecordBatch[] = [];
@@ -849,8 +849,8 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
           throw err;
         } finally {
           try {
-            await client.execute(`DROP TABLE IF EXISTS ${srcTable} SYNC`);
-            await client.execute(`DROP TABLE IF EXISTS ${dstTable} SYNC`);
+            await client.query(`DROP TABLE IF EXISTS ${srcTable} SYNC`);
+            await client.query(`DROP TABLE IF EXISTS ${dstTable} SYNC`);
           } catch (_) { /* ignore cleanup errors */ }
         }
       }

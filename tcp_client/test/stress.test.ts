@@ -25,7 +25,7 @@ describe("TCP Client Stress Tests", () => {
   describe("Multi-turn Operation Sequences", () => {
     test("query → cancel → insert → query sequence", () => withClient(async (client) => {
       const tableName = `test_sequence_${Date.now()}`;
-      await client.execute(`CREATE TABLE ${tableName} (id UInt64, value String) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt64, value String) ENGINE = Memory`);
 
       try {
         // 1. Start a long query and cancel it
@@ -57,13 +57,13 @@ describe("TCP Client Stress Tests", () => {
         }
         assert.strictEqual(rowCount, 2, "Should have 2 rows after sequence");
       } finally {
-        await client.execute(`DROP TABLE ${tableName}`);
+        await client.query(`DROP TABLE ${tableName}`);
       }
     }));
 
     test("insert → query → insert → query alternating 10 times", () => withClient(async (client) => {
       const tableName = `test_alternate_${Date.now()}`;
-      await client.execute(`CREATE TABLE ${tableName} (id UInt64, cycle UInt32) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt64, cycle UInt32) ENGINE = Memory`);
 
       try {
         for (let cycle = 0; cycle < 10; cycle++) {
@@ -86,7 +86,7 @@ describe("TCP Client Stress Tests", () => {
           assert.strictEqual(Number(count), (cycle + 1) * 2, `Cycle ${cycle}: expected ${(cycle + 1) * 2} rows`);
         }
       } finally {
-        await client.execute(`DROP TABLE ${tableName}`);
+        await client.query(`DROP TABLE ${tableName}`);
       }
     }));
   });
@@ -133,7 +133,7 @@ describe("TCP Client Stress Tests", () => {
       const tableName = `test_cancel_insert_${Date.now()}`;
 
       try {
-        await client.execute(`CREATE TABLE ${tableName} (id UInt64) ENGINE = Memory`);
+        await client.query(`CREATE TABLE ${tableName} (id UInt64) ENGINE = Memory`);
 
         const controller = new AbortController();
         let blocksYielded = 0;
@@ -163,7 +163,7 @@ describe("TCP Client Stress Tests", () => {
         // Use fresh client for cleanup since connection may be in bad state
         const cleanupClient = new TcpClient(options);
         await cleanupClient.connect();
-        await cleanupClient.execute(`DROP TABLE IF EXISTS ${tableName}`);
+        await cleanupClient.query(`DROP TABLE IF EXISTS ${tableName}`);
         cleanupClient.close();
         client.close();
       }
@@ -203,7 +203,7 @@ describe("TCP Client Stress Tests", () => {
 
     test("50 insert/query cycles with verification", () => withClient(async (client) => {
       const tableName = `test_rapid_${Date.now()}`;
-      await client.execute(`CREATE TABLE ${tableName} (id UInt64, batch UInt32) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt64, batch UInt32) ENGINE = Memory`);
 
       try {
         const cycles = 50;
@@ -233,7 +233,7 @@ describe("TCP Client Stress Tests", () => {
           assert.strictEqual(Number(count), (cycle + 1) * rowsPerCycle);
         }
       } finally {
-        await client.execute(`DROP TABLE ${tableName}`);
+        await client.query(`DROP TABLE ${tableName}`);
       }
     }));
   });
@@ -287,7 +287,7 @@ describe("TCP Client Stress Tests", () => {
       const batchSize = 10000;
       const batches = totalRows / batchSize;
 
-      await client.execute(`CREATE TABLE ${tableName} (id UInt64, name String, value Float64) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt64, name String, value Float64) ENGINE = Memory`);
 
       try {
         async function* generateBatches() {
@@ -338,7 +338,7 @@ describe("TCP Client Stress Tests", () => {
         assert.strictEqual(spotCheckRows[2].id, 199999n);
         assert.strictEqual(spotCheckRows[2].name, "row_199999");
       } finally {
-        await client.execute(`DROP TABLE ${tableName}`);
+        await client.query(`DROP TABLE ${tableName}`);
       }
     }));
 
@@ -346,7 +346,7 @@ describe("TCP Client Stress Tests", () => {
       const tableName = `test_hash_${Date.now()}`;
       const rowCount = 50000;
 
-      await client.execute(`CREATE TABLE ${tableName} (id UInt64, data String) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt64, data String) ENGINE = Memory`);
 
       try {
         // Insert data
@@ -375,7 +375,7 @@ describe("TCP Client Stress Tests", () => {
         // Hash is computed - we just verify the query ran successfully
         assert.ok(typeof hash === "bigint", "Hash should be a bigint");
       } finally {
-        await client.execute(`DROP TABLE ${tableName}`);
+        await client.query(`DROP TABLE ${tableName}`);
       }
     }));
   });

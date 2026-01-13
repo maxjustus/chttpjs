@@ -23,6 +23,9 @@ export {
 } from "@maxjustus/chttp/native";
 
 import { StreamBuffer } from "@maxjustus/chttp/native";
+import { collectable, type CollectableAsyncGenerator } from "./util.ts";
+
+export type { CollectableAsyncGenerator } from "./util.ts";
 
 export type Compression = 'lz4' | 'zstd' | false;
 
@@ -561,7 +564,15 @@ function buildMultipartBody(
   };
 }
 
-async function* query(
+function query(
+  sql: string,
+  sessionId: string,
+  options: QueryOptions & Record<string, any> = {},
+): CollectableAsyncGenerator<QueryPacket> {
+  return collectable(queryImpl(sql, sessionId, options));
+}
+
+async function* queryImpl(
   sql: string,
   sessionId: string,
   options: QueryOptions & Record<string, any> = {},

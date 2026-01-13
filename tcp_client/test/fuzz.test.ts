@@ -210,8 +210,8 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
         console.log(`[tcp round-trip ${i + 1}/${iterations}] ${structure.slice(0, 80)}...`);
 
         const escaped = structure.replace(/'/g, "''");
-        await writeClient.execute(`CREATE TABLE ${srcTable} ENGINE = MergeTree ORDER BY tuple() AS SELECT * FROM generateRandom('${escaped}') LIMIT ${rowCount}`);
-        await writeClient.execute(`CREATE TABLE ${dstTable} EMPTY AS ${srcTable}`);
+        await writeClient.query(`CREATE TABLE ${srcTable} ENGINE = MergeTree ORDER BY tuple() AS SELECT * FROM generateRandom('${escaped}') LIMIT ${rowCount}`);
+        await writeClient.query(`CREATE TABLE ${dstTable} EMPTY AS ${srcTable}`);
 
         const start = Date.now();
         let blocksRead = 0, rowsRead = 0;
@@ -229,14 +229,14 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
 
         await verifyTableEquality(writeClient, srcTable, dstTable);
         console.log(`  verified OK`);
-        await writeClient.execute(`DROP TABLE IF EXISTS ${srcTable}`);
-        await writeClient.execute(`DROP TABLE IF EXISTS ${dstTable}`);
+        await writeClient.query(`DROP TABLE IF EXISTS ${srcTable}`);
+        await writeClient.query(`DROP TABLE IF EXISTS ${dstTable}`);
       } catch (err) {
         const error = err as Error;
         console.error(`\n[ROUND-TRIP FAILURE] ${structure || "(no structure)"}: ${error.message}`);
         try {
-          await writeClient.execute(`DROP TABLE IF EXISTS ${srcTable}`);
-          await writeClient.execute(`DROP TABLE IF EXISTS ${dstTable}`);
+          await writeClient.query(`DROP TABLE IF EXISTS ${srcTable}`);
+          await writeClient.query(`DROP TABLE IF EXISTS ${dstTable}`);
         } catch { /* ignore */ }
         failures++;
         if (failures >= maxFailures) {
@@ -285,8 +285,8 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
         console.log(`  ${totalRows} rows, ${blocks} blocks`);
         assert.strictEqual(totalRows, rowCount);
       } finally {
-        await client.execute(`DROP TABLE IF EXISTS ${t1}`);
-        await client.execute(`DROP TABLE IF EXISTS ${t2}`);
+        await client.query(`DROP TABLE IF EXISTS ${t1}`);
+        await client.query(`DROP TABLE IF EXISTS ${t2}`);
       }
     }
   }));
@@ -370,10 +370,10 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
 
           await streamRoundTrip(read, write, src, dst, QUERY_SETTINGS);
         } finally {
-          await write.execute(`DROP TABLE IF EXISTS ${src}`);
-          await write.execute(`DROP TABLE IF EXISTS ${dst}`);
-          await write.execute(`DROP TABLE IF EXISTS ${t1}`);
-          await write.execute(`DROP TABLE IF EXISTS ${t2}`);
+          await write.query(`DROP TABLE IF EXISTS ${src}`);
+          await write.query(`DROP TABLE IF EXISTS ${dst}`);
+          await write.query(`DROP TABLE IF EXISTS ${t1}`);
+          await write.query(`DROP TABLE IF EXISTS ${t2}`);
         }
       }
     })
@@ -399,8 +399,8 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
 
           await streamRoundTrip(read, write, src, dst, QUERY_SETTINGS);
         } finally {
-          await write.execute(`DROP TABLE IF EXISTS ${src}`);
-          await write.execute(`DROP TABLE IF EXISTS ${dst}`);
+          await write.query(`DROP TABLE IF EXISTS ${src}`);
+          await write.query(`DROP TABLE IF EXISTS ${dst}`);
         }
       }
     })
@@ -424,8 +424,8 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
 
           await streamRoundTrip(read, write, src, dst, QUERY_SETTINGS);
         } finally {
-          await write.execute(`DROP TABLE IF EXISTS ${src}`);
-          await write.execute(`DROP TABLE IF EXISTS ${dst}`);
+          await write.query(`DROP TABLE IF EXISTS ${src}`);
+          await write.query(`DROP TABLE IF EXISTS ${dst}`);
         }
       }
     })

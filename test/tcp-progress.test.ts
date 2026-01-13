@@ -135,7 +135,7 @@ describe("TCP progress accumulation", { timeout: 60000 }, () => {
 
   it("yields progress packets from insert()", async () => {
     const tableName = `test_insert_progress_${Date.now()}`;
-    await client.execute(`CREATE TABLE ${tableName} (id UInt32, name String) ENGINE = Memory`);
+    await client.query(`CREATE TABLE ${tableName} (id UInt32, name String) ENGINE = Memory`);
 
     try {
       const rows = Array.from({ length: 1000 }, (_, i) => ({ id: i, name: `row_${i}` }));
@@ -175,7 +175,7 @@ describe("TCP progress accumulation", { timeout: 60000 }, () => {
       }
       assert.strictEqual(rowCount, 1000n, `Expected 1000 rows inserted, got ${rowCount}`);
     } finally {
-      await client.execute(`DROP TABLE ${tableName}`);
+      await client.query(`DROP TABLE ${tableName}`);
     }
   });
 });

@@ -26,8 +26,8 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
     await setupClient.connect();
 
     const table = "test_tcp_sparse";
-    await setupClient.execute(`DROP TABLE IF EXISTS ${table}`);
-    await setupClient.execute(`
+    await setupClient.query(`DROP TABLE IF EXISTS ${table}`);
+    await setupClient.query(`
       CREATE TABLE ${table} (
         id UInt32,
         val UInt64
@@ -44,8 +44,8 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
       else if (i === 5000) rows.push(`(${i}, 987654321)`);
       else rows.push(`(${i}, 0)`);
     }
-    await setupClient.execute(`INSERT INTO ${table} VALUES ${rows.join(",")}`);
-    await setupClient.execute(`OPTIMIZE TABLE ${table} FINAL`);
+    await setupClient.query(`INSERT INTO ${table} VALUES ${rows.join(",")}`);
+    await setupClient.query(`OPTIMIZE TABLE ${table} FINAL`);
     setupClient.close();
   });
 

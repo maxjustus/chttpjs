@@ -18,7 +18,7 @@ const config = {
   auth: { username: "default", password: "" },
 };
 
-// Insert - returns { summary, queryId }
+// Insert - returns { summary, queryId } (HTTP is request/response, no streaming progress)
 const { summary } = await insert(
   "INSERT INTO table FORMAT JSONEachRow",
   streamEncodeJsonEachRow([{ id: 1, name: "test" }]),
@@ -418,7 +418,7 @@ const allRows = batch.toArray({ bigIntAsString: true });
 
 ## TCP Client (Experimental)
 
-Direct TCP protocol for lower latency. Single connection per client - use separate clients for concurrent operations.
+Direct TCP protocol for lower latency. Preferable for long-running queries and large inserts where you want real-time progress streaming. Single connection per client - use separate clients for concurrent operations.
 
 ### Basic Usage
 
@@ -442,11 +442,11 @@ for await (const packet of client.query("SELECT * FROM table")) {
   }
 }
 
-// Execute DDL
-await client.execute("CREATE TABLE ...");
+// DDL statements
+await client.query("CREATE TABLE ...");
 
-// Insert (see Insert API section for details)
-for await (const _ of client.insert("INSERT INTO table", [{ id: 1, name: "alice" }])) {}
+// Insert - returns Packet[] (TCP streams progress during insert)
+await client.insert("INSERT INTO table", [{ id: 1, name: "alice" }]);
 
 client.close();
 ```
@@ -569,20 +569,20 @@ for await (const packet of client.query(sql)) {
 
 ### Insert API
 
-The `insert()` method accepts RecordBatches or row objects. It returns an async generator that must be consumed:
+The `insert()` method accepts RecordBatches or row objects:
 
 ```ts
 // Single batch
-for await (const _ of client.insert("INSERT INTO t", batch)) {}
+await client.insert("INSERT INTO t", batch);
 
 // Multiple batches
-for await (const _ of client.insert("INSERT INTO t", [batch1, batch2])) {}
+await client.insert("INSERT INTO t", [batch1, batch2]);
 
 // Row objects with auto-coercion (types inferred from server schema)
-for await (const _ of client.insert("INSERT INTO t", [
+await client.insert("INSERT INTO t", [
   { id: 1, name: "alice" },
   { id: 2, name: "bob" },
-])) {}
+]);
 
 // Streaming rows with generator
 async function* generateRows() {
@@ -592,35 +592,35 @@ async function* generateRows() {
 }
 
 // batchSize dictates number of rows per RecordBatch (native insert block) sent
-for await (const _ of client.insert("INSERT INTO t", generateRows(), { batchSize: 10000 })) {}
+await client.insert("INSERT INTO t", generateRows(), { batchSize: 10000 });
 
 // Schema validation (fail fast if types don't match the schema the server sends for the insert table)
-for await (const _ of client.insert("INSERT INTO t", rows, {
+await client.insert("INSERT INTO t", rows, {
   schema: [
     { name: "id", type: "UInt32" },
     { name: "name", type: "String" },
   ],
-})) {}
+});
 ```
 
 #### Insert Progress Tracking
 
-Handle packets to monitor insert progress:
+Both `query()` and `insert()` return a `CollectableAsyncGenerator<Packet>`:
+- `await` collects all packets into an array
+- `for await` streams packets one at a time
 
 ```ts
+// Collect all packets
+const packets = await client.insert("INSERT INTO t", rows);
+const progress = packets.findLast(p => p.type === "Progress");
+if (progress?.type === "Progress") {
+  console.log(`Wrote ${progress.accumulated.writtenRows} rows`);
+}
+
+// Stream packets (useful for real-time progress on large inserts)
 for await (const packet of client.insert("INSERT INTO t", generateRows())) {
-  switch (packet.type) {
-    case "Progress":
-      const { accumulated } = packet;
-      console.log(`Written: ${accumulated.writtenRows} rows, ${accumulated.writtenBytes} bytes`);
-      console.log(`Elapsed: ${Number(accumulated.elapsedNs) / 1e9}s`);
-      break;
-    case "ProfileEvents":
-      console.log(`Selected rows: ${packet.accumulated.get("SelectedRows")}`);
-      break;
-    case "EndOfStream":
-      console.log("Insert complete");
-      break;
+  if (packet.type === "Progress") {
+    console.log(`Written: ${packet.accumulated.writtenRows} rows`);
   }
 }
 ```

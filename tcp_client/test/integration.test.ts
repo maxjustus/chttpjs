@@ -35,7 +35,7 @@ describe("TCP Client Integration", () => {
     await client.connect();
     try {
       const tableName = `test_tcp_insert_${Date.now()}`;
-      await client.execute(`CREATE TABLE ${tableName} (id UInt64, name String) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt64, name String) ENGINE = Memory`);
 
       const batch = batchFromRows([
         { name: "id", type: "UInt64" },
@@ -62,7 +62,7 @@ describe("TCP Client Integration", () => {
       assert.deepStrictEqual(allRows[0], { id: 1n, name: "Alice" });
       assert.deepStrictEqual(allRows[1], { id: 2n, name: "Bob" });
 
-      await client.execute(`DROP TABLE ${tableName}`);
+      await client.query(`DROP TABLE ${tableName}`);
     } finally {
       client.close();
     }
@@ -88,7 +88,7 @@ describe("TCP Client Integration", () => {
     await client.connect();
     try {
       const tableName = `test_row_objects_${Date.now()}`;
-      await client.execute(`CREATE TABLE ${tableName} (id UInt32, name String, value Float64) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt32, name String, value Float64) ENGINE = Memory`);
 
       // Insert row objects - types will be coerced based on server schema
       for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [
@@ -114,7 +114,7 @@ describe("TCP Client Integration", () => {
       assert.strictEqual(allRows[1].id, 2);
       assert.strictEqual(allRows[2].value, 3.5);
 
-      await client.execute(`DROP TABLE ${tableName}`);
+      await client.query(`DROP TABLE ${tableName}`);
     } finally {
       client.close();
     }
@@ -125,7 +125,7 @@ describe("TCP Client Integration", () => {
     await client.connect();
     try {
       const tableName = `test_generator_rows_${Date.now()}`;
-      await client.execute(`CREATE TABLE ${tableName} (id UInt32, value String) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt32, value String) ENGINE = Memory`);
 
       function* generateRows() {
         for (let i = 0; i < 250; i++) {
@@ -145,7 +145,7 @@ describe("TCP Client Integration", () => {
 
       assert.strictEqual(count, 250);
 
-      await client.execute(`DROP TABLE ${tableName}`);
+      await client.query(`DROP TABLE ${tableName}`);
     } finally {
       client.close();
     }
@@ -156,7 +156,7 @@ describe("TCP Client Integration", () => {
     await client.connect();
     try {
       const tableName = `test_schema_valid_${Date.now()}`;
-      await client.execute(`CREATE TABLE ${tableName} (id UInt32, name String) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt32, name String) ENGINE = Memory`);
 
       const schema: ColumnDef[] = [
         { name: "id", type: "UInt32" },
@@ -176,7 +176,7 @@ describe("TCP Client Integration", () => {
       }
       assert.strictEqual(count, 1);
 
-      await client.execute(`DROP TABLE ${tableName}`);
+      await client.query(`DROP TABLE ${tableName}`);
     } finally {
       client.close();
     }
@@ -187,7 +187,7 @@ describe("TCP Client Integration", () => {
 
     const setupClient = new TcpClient(options);
     await setupClient.connect();
-    await setupClient.execute(`CREATE TABLE ${tableName} (id UInt32, name String) ENGINE = Memory`);
+    await setupClient.query(`CREATE TABLE ${tableName} (id UInt32, name String) ENGINE = Memory`);
     setupClient.close();
 
     const client = new TcpClient(options);
@@ -205,7 +205,7 @@ describe("TCP Client Integration", () => {
 
     const cleanupClient = new TcpClient(options);
     await cleanupClient.connect();
-    await cleanupClient.execute(`DROP TABLE ${tableName}`);
+    await cleanupClient.query(`DROP TABLE ${tableName}`);
     cleanupClient.close();
   });
 
@@ -214,7 +214,7 @@ describe("TCP Client Integration", () => {
 
     const setupClient = new TcpClient(options);
     await setupClient.connect();
-    await setupClient.execute(`CREATE TABLE ${tableName} (id UInt32, name String) ENGINE = Memory`);
+    await setupClient.query(`CREATE TABLE ${tableName} (id UInt32, name String) ENGINE = Memory`);
     setupClient.close();
 
     const client = new TcpClient(options);
@@ -232,7 +232,7 @@ describe("TCP Client Integration", () => {
 
     const cleanupClient = new TcpClient(options);
     await cleanupClient.connect();
-    await cleanupClient.execute(`DROP TABLE ${tableName}`);
+    await cleanupClient.query(`DROP TABLE ${tableName}`);
     cleanupClient.close();
   });
 
@@ -241,7 +241,7 @@ describe("TCP Client Integration", () => {
 
     const setupClient = new TcpClient(options);
     await setupClient.connect();
-    await setupClient.execute(`CREATE TABLE ${tableName} (id UInt32, name String) ENGINE = Memory`);
+    await setupClient.query(`CREATE TABLE ${tableName} (id UInt32, name String) ENGINE = Memory`);
     setupClient.close();
 
     const client = new TcpClient(options);
@@ -259,7 +259,7 @@ describe("TCP Client Integration", () => {
 
     const cleanupClient = new TcpClient(options);
     await cleanupClient.connect();
-    await cleanupClient.execute(`DROP TABLE ${tableName}`);
+    await cleanupClient.query(`DROP TABLE ${tableName}`);
     cleanupClient.close();
   });
 
@@ -269,7 +269,7 @@ describe("TCP Client Integration", () => {
     try {
       const tableName = `test_json_typed_paths_${Date.now()}`;
       // Create table with JSON column that has typed paths
-      await client.execute(`
+      await client.query(`
         CREATE TABLE ${tableName} (
           id UInt32,
           data JSON(currency LowCardinality(String), amount Int64)
@@ -277,7 +277,7 @@ describe("TCP Client Integration", () => {
       `);
 
       // Insert data using JSONEachRow format (simpler than native for JSON)
-      await client.execute(`
+      await client.query(`
         INSERT INTO ${tableName} FORMAT JSONEachRow
         {"id": 1, "data": {"currency": "USD", "amount": 100}}
         {"id": 2, "data": {"currency": "EUR", "amount": 200, "extra": "dynamic"}}
@@ -309,7 +309,7 @@ describe("TCP Client Integration", () => {
       assert.strictEqual(allRows[1].data.amount, 200n);
       assert.strictEqual(allRows[1].data.extra, "dynamic");
 
-      await client.execute(`DROP TABLE ${tableName}`);
+      await client.query(`DROP TABLE ${tableName}`);
     } finally {
       client.close();
     }

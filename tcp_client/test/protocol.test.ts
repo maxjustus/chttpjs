@@ -80,7 +80,7 @@ describe("TCP Client Protocol Features", () => {
     await client.connect();
     try {
       const tableName = `test_insert_lz4_${Date.now()}`;
-      await client.execute(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
 
       const table = RecordBatch.fromColumnar(
         [{ name: "id", type: "UInt32" }, { name: "val", type: "String" }],
@@ -94,7 +94,7 @@ describe("TCP Client Protocol Features", () => {
       }
       assert.strictEqual(rows, 3, "Should have inserted 3 rows with LZ4 compression");
 
-      await client.execute(`DROP TABLE ${tableName}`);
+      await client.query(`DROP TABLE ${tableName}`);
     } finally {
       client.close();
     }
@@ -105,7 +105,7 @@ describe("TCP Client Protocol Features", () => {
     await client.connect();
     try {
       const tableName = `test_insert_zstd_${Date.now()}`;
-      await client.execute(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
+      await client.query(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
 
       const table = RecordBatch.fromColumnar(
         [{ name: "id", type: "UInt32" }, { name: "val", type: "String" }],
@@ -119,7 +119,7 @@ describe("TCP Client Protocol Features", () => {
       }
       assert.strictEqual(rows, 3, "Should have inserted 3 rows with ZSTD compression");
 
-      await client.execute(`DROP TABLE ${tableName}`);
+      await client.query(`DROP TABLE ${tableName}`);
     } finally {
       client.close();
     }

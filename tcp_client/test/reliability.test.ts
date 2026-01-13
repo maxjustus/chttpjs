@@ -161,7 +161,7 @@ describe("TCP Client Reliability", () => {
 
     try {
       // Create table for insert test
-      await client.execute("CREATE TABLE IF NOT EXISTS test_abort_insert (x UInt64) ENGINE = Memory");
+      await client.query("CREATE TABLE IF NOT EXISTS test_abort_insert (x UInt64) ENGINE = Memory");
 
       // Create an async generator that yields tables slowly
       async function* slowTables() {
@@ -192,7 +192,7 @@ describe("TCP Client Reliability", () => {
       // Clean up - use a fresh client since connection may be in bad state
       const cleanupClient = new TcpClient(options);
       await cleanupClient.connect();
-      await cleanupClient.execute("DROP TABLE IF EXISTS test_abort_insert");
+      await cleanupClient.query("DROP TABLE IF EXISTS test_abort_insert");
       cleanupClient.close();
       client.close();
     }
