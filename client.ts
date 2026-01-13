@@ -2,6 +2,7 @@ import {
   init,
   encodeBlock,
   decodeBlock,
+  decodeBlocks,
   Method,
   type MethodCode,
   zstdCompressRaw,
@@ -596,7 +597,19 @@ async function* query(
   }
 
   if (!response.ok) {
-    const body = await response.text();
+    // Error responses may be compressed if we requested compression
+    let body: string;
+    if (compressed && response.body) {
+      const raw = new Uint8Array(await response.arrayBuffer());
+      try {
+        body = new TextDecoder().decode(decodeBlocks(raw));
+      } catch {
+        // Decompression failed - response is likely plain text
+        body = new TextDecoder().decode(raw);
+      }
+    } else {
+      body = await response.text();
+    }
     throw new Error(`Query failed: ${response.status} - ${body}`);
   }
 
