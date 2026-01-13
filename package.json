@@ -4,6 +4,9 @@
   "description": "ClickHouse HTTP/TCP client with native compression (LZ4/ZSTD) and Native format support",
   "type": "module",
   "main": "./dist/chttp.js",
+  "bin": {
+    "chttp": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "import": "./dist/chttp.js",
@@ -33,7 +36,8 @@
   ],
   "scripts": {
     "prepublishOnly": "npm run build",
-    "build": "npm run build:native && npm run build:native:cjs && npm run build:full && npm run build:full:cjs && npm run build:lz4 && npm run build:lz4:cjs && npm run build:tcp && npm run build:tcp:cjs && npm run build:copy-wasm",
+    "build": "npm run build:native && npm run build:native:cjs && npm run build:full && npm run build:full:cjs && npm run build:lz4 && npm run build:lz4:cjs && npm run build:tcp && npm run build:tcp:cjs && npm run build:cli && npm run build:copy-wasm",
+    "build:cli": "esbuild tcp_client/cli.ts --bundle --format=esm --outfile=dist/cli.js --platform=node --target=es2022 --external:lz4-napi --external:zstd-napi",
     "build:copy-wasm": "cp node_modules/@bokuweb/zstd-wasm/dist/common/zstd.wasm dist/",
     "build:native": "esbuild native/index.ts --bundle --format=esm --outfile=dist/native.js --platform=neutral --target=es2022 --minify --external:lz4-napi --external:zstd-napi",
     "build:native:cjs": "esbuild native/index.ts --bundle --format=cjs --outfile=dist/native.cjs --platform=node --target=es2022 --minify --external:lz4-napi --external:zstd-napi",
