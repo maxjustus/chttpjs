@@ -446,7 +446,7 @@ for await (const packet of client.query("SELECT * FROM table")) {
 await client.execute("CREATE TABLE ...");
 
 // Insert (see Insert API section for details)
-await client.insert("INSERT INTO table", [{ id: 1, name: "alice" }]);
+for await (const _ of client.insert("INSERT INTO table", [{ id: 1, name: "alice" }])) {}
 
 client.close();
 ```
@@ -569,19 +569,22 @@ for await (const packet of client.query(sql)) {
 
 ### Insert API
 
-The `insert()` method accepts RecordBatches or row objects:
+The `insert()` method accepts RecordBatches or row objects. It returns an async generator that must be consumed:
 
 ```ts
-await client.insert("INSERT INTO t", batch);
+// Single batch
+for await (const _ of client.insert("INSERT INTO t", batch)) {}
 
-await client.insert("INSERT INTO t", [batch1, batch2]);
+// Multiple batches
+for await (const _ of client.insert("INSERT INTO t", [batch1, batch2])) {}
 
 // Row objects with auto-coercion (types inferred from server schema)
-await client.insert("INSERT INTO t", [
+for await (const _ of client.insert("INSERT INTO t", [
   { id: 1, name: "alice" },
   { id: 2, name: "bob" },
-]);
+])) {}
 
+// Streaming rows with generator
 async function* generateRows() {
   for (let i = 0; i < 1000000; i++) {
     yield { id: i, name: `user${i}` };
@@ -589,15 +592,37 @@ async function* generateRows() {
 }
 
 // batchSize dictates number of rows per RecordBatch (native insert block) sent
-await client.insert("INSERT INTO t", generateRows(), { batchSize: 10000 });
+for await (const _ of client.insert("INSERT INTO t", generateRows(), { batchSize: 10000 })) {}
 
 // Schema validation (fail fast if types don't match the schema the server sends for the insert table)
-await client.insert("INSERT INTO t", rows, {
+for await (const _ of client.insert("INSERT INTO t", rows, {
   schema: [
     { name: "id", type: "UInt32" },
     { name: "name", type: "String" },
   ],
-});
+})) {}
+```
+
+#### Insert Progress Tracking
+
+Handle packets to monitor insert progress:
+
+```ts
+for await (const packet of client.insert("INSERT INTO t", generateRows())) {
+  switch (packet.type) {
+    case "Progress":
+      const { accumulated } = packet;
+      console.log(`Written: ${accumulated.writtenRows} rows, ${accumulated.writtenBytes} bytes`);
+      console.log(`Elapsed: ${Number(accumulated.elapsedNs) / 1e9}s`);
+      break;
+    case "ProfileEvents":
+      console.log(`Selected rows: ${packet.accumulated.get("SelectedRows")}`);
+      break;
+    case "EndOfStream":
+      console.log("Insert complete");
+      break;
+  }
+}
 ```
 
 ### Streaming Between Tables
