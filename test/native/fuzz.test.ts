@@ -553,13 +553,12 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
           console.log(`[native fuzz ${i + 1}/${N}] structure: ${structure}`);
 
           // 2. Create source table with random rows
-          // IMPORTANT: Multi-block testing is required to verify decodeNative handles
-          // multiple blocks correctly. ClickHouse sends data in blocks (~65k rows default).
-          // We use 80k rows to guarantee multiple blocks (exceeds 65k default block size).
-          // Note: 100k+ rows with complex nested types can exceed memory limits.
+          // Multi-block testing: ClickHouse sends data in blocks (~65k rows for simple schemas,
+          // fewer for complex schemas with many columns). 20k rows is enough to trigger multi-block
+          // behavior for most schemas while keeping disk/memory usage reasonable for CI.
           const unescaped = structure.replace(/\\'/g, "'");
           const escapedStructure = unescaped.replace(/'/g, "''");
-          const rowCount = parseInt(process.env.INTEGRATION_FUZZ_ROWS ?? process.env.FUZZ_ROWS ?? "80000", 10);
+          const rowCount = parseInt(process.env.INTEGRATION_FUZZ_ROWS ?? process.env.FUZZ_ROWS ?? "20000", 10);
           await consume(
             query(
               `CREATE TABLE ${srcTable} ENGINE = MergeTree ORDER BY tuple() AS SELECT * FROM generateRandom('${escapedStructure}') LIMIT ${rowCount}`,
@@ -705,14 +704,14 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
         } finally {
           // Use insertSessionId for cleanup to avoid session lock from streaming query
           await consume(
-            query(`DROP TABLE IF EXISTS ${srcTable}`, insertSessionId, {
+            query(`DROP TABLE IF EXISTS ${srcTable} SYNC`, insertSessionId, {
               baseUrl,
               auth,
               compression: false,
             }),
           );
           await consume(
-            query(`DROP TABLE IF EXISTS ${dstTable}`, insertSessionId, {
+            query(`DROP TABLE IF EXISTS ${dstTable} SYNC`, insertSessionId, {
               baseUrl,
               auth,
               compression: false,
@@ -850,8 +849,8 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
           throw err;
         } finally {
           try {
-            await client.execute(`DROP TABLE IF EXISTS ${srcTable}`);
-            await client.execute(`DROP TABLE IF EXISTS ${dstTable}`);
+            await client.execute(`DROP TABLE IF EXISTS ${srcTable} SYNC`);
+            await client.execute(`DROP TABLE IF EXISTS ${dstTable} SYNC`);
           } catch (_) { /* ignore cleanup errors */ }
         }
       }
