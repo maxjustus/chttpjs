@@ -148,6 +148,73 @@ interface ProgressInfo {
   complete?: boolean;
 }
 
+/** Summary statistics from X-ClickHouse-Summary response header */
+export interface QuerySummary {
+  read_rows: string;
+  read_bytes: string;
+  written_rows: string;
+  written_bytes: string;
+  total_rows_to_read: string;
+  result_rows: string;
+  result_bytes: string;
+  elapsed_ns: string;
+}
+
+/** Progress info from X-ClickHouse-Progress header */
+export interface HttpProgress {
+  read_rows: string;
+  read_bytes: string;
+  total_rows_to_read: string;
+  written_rows?: string;
+  written_bytes?: string;
+  elapsed_ns?: string;
+}
+
+/** Packet types yielded by query() - mirrors TCP client pattern */
+export type QueryPacket =
+  | { type: "Progress"; progress: HttpProgress }
+  | { type: "Data"; chunk: Uint8Array }
+  | { type: "Summary"; summary: QuerySummary; queryId: string };
+
+/** Result from insert() with metadata */
+export interface InsertResult {
+  summary: QuerySummary;
+  queryId: string;
+}
+
+function parseSummary(response: Response): QuerySummary {
+  const header = response.headers.get("X-ClickHouse-Summary");
+  if (header) {
+    try {
+      return JSON.parse(header) as QuerySummary;
+    } catch {
+      // Fall through to default
+    }
+  }
+  return {
+    read_rows: "0",
+    read_bytes: "0",
+    written_rows: "0",
+    written_bytes: "0",
+    total_rows_to_read: "0",
+    result_rows: "0",
+    result_bytes: "0",
+    elapsed_ns: "0",
+  };
+}
+
+function parseProgress(header: string): HttpProgress {
+  try {
+    return JSON.parse(header) as HttpProgress;
+  } catch {
+    return {
+      read_rows: "0",
+      read_bytes: "0",
+      total_rows_to_read: "0",
+    };
+  }
+}
+
 export interface InsertOptions {
   baseUrl?: string;
   /** Compression method: "lz4" (default), "zstd", or false */
@@ -181,7 +248,7 @@ async function insert(
   data: InsertData,
   sessionId: string,
   options: InsertOptions = {},
-): Promise<string> {
+): Promise<InsertResult> {
   await init();
   const baseUrl = options.baseUrl || "http://localhost:8123/";
   const {
@@ -318,12 +385,15 @@ async function insert(
     signal: createSignal(options.signal, options.timeout),
   } as RequestInit);
 
-  const body = await response.text();
   if (!response.ok) {
+    const body = await response.text();
     throw new Error(`Insert failed: ${response.status} - ${body}`);
   }
 
-  return body;
+  return {
+    summary: parseSummary(response),
+    queryId: response.headers.get("X-ClickHouse-Query-Id") || "",
+  };
 }
 
 /**
@@ -492,10 +562,10 @@ function buildMultipartBody(
 }
 
 async function* query(
-  query: string,
+  sql: string,
   sessionId: string,
   options: QueryOptions & Record<string, any> = {},
-): AsyncGenerator<Uint8Array, void, unknown> {
+): AsyncGenerator<QueryPacket> {
   await init();
   const baseUrl = options.baseUrl || "http://localhost:8123/";
   const compression = options.compression ?? "lz4";
@@ -546,7 +616,7 @@ async function* query(
   // Handle external tables: query goes in URL, body is multipart
   const hasExternalTables = options.externalTables && Object.keys(options.externalTables).length > 0;
   if (hasExternalTables) {
-    params.query = query;
+    params.query = sql;
     for (const [name, table] of Object.entries(options.externalTables!)) {
       params[`${name}_structure`] = table.structure;
       if (table.format) {
@@ -579,9 +649,9 @@ async function* query(
     }
     response = await fetch(url.toString(), fetchOptions);
   } else {
-    let body: string | Uint8Array = query;
+    let body: string | Uint8Array = sql;
     if (options.compressQuery) {
-      const queryBytes = encoder.encode(query);
+      const queryBytes = encoder.encode(sql);
       body =
         options.compressQuery === "lz4"
           ? lz4CompressFrame(queryBytes)
@@ -617,52 +687,82 @@ async function* query(
     throw new Error("Response body is null");
   }
 
+  const summary = parseSummary(response);
+  const queryId = response.headers.get("X-ClickHouse-Query-Id") || "";
   const reader = response.body.getReader();
 
-  if (!compressed) {
-    // For non-compressed, stream data directly
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      yield value;
+  async function* createStream(): AsyncGenerator<Uint8Array, void, unknown> {
+    if (!compressed) {
+      // For non-compressed, stream data directly
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        yield value;
+      }
+    } else {
+      const streamBuffer = new StreamBuffer(64 * 1024);
+
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (value) streamBuffer.append(value);
+
+        // process complete blocks
+        while (streamBuffer.available >= 25) {
+          const bufferView = streamBuffer.view;
+
+          const compressedSize = readUInt32LE(bufferView, 17);
+          const blockSize = 16 + compressedSize;
+
+          if (streamBuffer.available < blockSize) break;
+
+          const block = bufferView.subarray(0, blockSize);
+
+          try {
+            const decompressed = decodeBlock(block);
+            yield decompressed;
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new Error(`Block decompression failed: ${message}`);
+          }
+
+          streamBuffer.consume(blockSize);
+        }
+
+        if (done) {
+          if (streamBuffer.available > 0) {
+            throw new Error("Incomplete block");
+          }
+
+          break;
+        }
+      }
     }
-  } else {
-    const streamBuffer = new StreamBuffer(64 * 1024);
+  }
 
-    while (true) {
-      const { done, value } = await reader.read();
+  // Yield Progress packets from X-ClickHouse-Progress headers (if present)
+  const progressHeader = response.headers.get("X-ClickHouse-Progress");
+  if (progressHeader) {
+    yield { type: "Progress", progress: parseProgress(progressHeader) };
+  }
 
-      if (value)  streamBuffer.append(value);
+  // Yield Data packets from body stream
+  for await (const chunk of createStream()) {
+    yield { type: "Data", chunk };
+  }
 
-      // process complete blocks
-      while (streamBuffer.available >= 25) {
-        const bufferView = streamBuffer.view;
+  // Yield Summary packet at end
+  yield { type: "Summary", summary, queryId };
+}
 
-        const compressedSize = readUInt32LE(bufferView, 17);
-        const blockSize = 16 + compressedSize;
+/** Input type for stream helpers - accepts query() result or any async iterable of packets */
+type QueryInput = AsyncIterable<QueryPacket>;
 
-        if (streamBuffer.available < blockSize) break;
-
-        const block = bufferView.subarray(0, blockSize);
-
-        try {
-          const decompressed = decodeBlock(block);
-          yield decompressed;
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          throw new Error(`Block decompression failed: ${message}`);
-        }
-
-        streamBuffer.consume(blockSize);
-      }
-
-      if (done) {
-        if (streamBuffer.available > 0) {
-          throw new Error("Incomplete block");
-        }
-
-        break;
-      }
+/** Extract Data chunks from packet stream */
+async function* dataChunks(input: QueryInput): AsyncGenerator<Uint8Array> {
+  for await (const packet of input) {
+    if (packet.type === "Data") {
+      yield packet.chunk;
     }
   }
 }
@@ -671,16 +771,16 @@ async function* query(
  * Buffer byte chunks, decode to text, and yield complete lines.
  *
  * @example
- * for await (const line of streamLines(query("SELECT * FROM t FORMAT CSV", session, config))) {
+ * for await (const line of streamLines(query("SELECT ...", session, config))) {
  *   console.log(line);
  * }
  */
 async function* streamLines(
-  chunks: AsyncIterable<Uint8Array>,
+  input: QueryInput,
   delimiter: string = "\n",
 ): AsyncGenerator<string> {
   let buffer = "";
-  for await (const text of streamText(chunks)) {
+  for await (const text of decodeText(dataChunks(input))) {
     buffer += text;
     const parts = buffer.split(delimiter);
     buffer = parts.pop() ?? "";
@@ -696,51 +796,57 @@ async function* streamLines(
  * Use with query() for JSONEachRow format.
  *
  * @example
- * for await (const row of streamDecodeJsonEachRow(query("SELECT * FROM t FORMAT JSONEachRow", session, config))) {
+ * for await (const row of streamDecodeJsonEachRow(query("SELECT ...", session, config))) {
  *   console.log(row.id, row.name);
  * }
  */
 async function* streamDecodeJsonEachRow<T = unknown>(
-  chunks: AsyncIterable<Uint8Array>,
+  input: QueryInput,
 ): AsyncGenerator<T> {
-  for await (const line of streamLines(chunks)) {
+  for await (const line of streamLines(input)) {
     yield JSON.parse(line) as T;
   }
 }
 
-/**
- * Decode bytes to text strings with streaming support.
- *
- * @example
- * for await (const text of streamText(query("SELECT * FROM t FORMAT JSON", session, config))) {
- *   console.log(text);
- * }
- */
-async function* streamText(
+/** Internal text decoder for raw streams */
+async function* decodeText(
   chunks: AsyncIterable<Uint8Array>,
 ): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   for await (const chunk of chunks) {
     yield decoder.decode(chunk, { stream: true });
   }
-  // Flush any remaining bytes
   const final = decoder.decode();
   if (final) yield final;
+}
+
+/**
+ * Decode bytes to text strings with streaming support.
+ *
+ * @example
+ * for await (const text of streamText(query("SELECT ...", session, config))) {
+ *   console.log(text);
+ * }
+ */
+async function* streamText(
+  input: QueryInput,
+): AsyncGenerator<string> {
+  yield* decodeText(dataChunks(input));
 }
 
 /**
  * Collect all chunks into a single Uint8Array.
  *
  * @example
- * const data = await collectBytes(query("SELECT * FROM t FORMAT Native", session, config));
+ * const data = await collectBytes(query("SELECT ...", session, config));
  * const result = await decodeNative(data);
  */
 async function collectBytes(
-  chunks: AsyncIterable<Uint8Array>,
+  input: QueryInput,
 ): Promise<Uint8Array> {
   const parts: Uint8Array[] = [];
   let totalLen = 0;
-  for await (const chunk of chunks) {
+  for await (const chunk of dataChunks(input)) {
     parts.push(chunk);
     totalLen += chunk.length;
   }
@@ -757,12 +863,12 @@ async function collectBytes(
  * Collect all bytes and decode to a single string.
  *
  * @example
- * const json = await collectText(query("SELECT * FROM t FORMAT JSON", session, config));
+ * const json = await collectText(query("SELECT ...", session, config));
  * const data = JSON.parse(json);
  */
-async function collectText(chunks: AsyncIterable<Uint8Array>): Promise<string> {
+async function collectText(input: QueryInput): Promise<string> {
   let result = "";
-  for await (const text of streamText(chunks)) {
+  for await (const text of decodeText(dataChunks(input))) {
     result += text;
   }
   return result;
@@ -772,13 +878,13 @@ async function collectText(chunks: AsyncIterable<Uint8Array>): Promise<string> {
  * collect all JSON lines into an array of objects.
  *
  * @example
- * const rows = await collectJsonEachRow<{ id: number; name: string }>(query("SELECT * FROM t FORMAT JSONEachRow", session, config));
+ * const rows = await collectJsonEachRow<{ id: number }>(query("SELECT ...", session, config));
  */
 async function collectJsonEachRow<T = unknown>(
-  chunks: AsyncIterable<Uint8Array>,
+  input: QueryInput,
 ): Promise<T[]> {
   const result: T[] = [];
-  for await (const row of streamDecodeJsonEachRow<T>(chunks)) {
+  for await (const row of streamDecodeJsonEachRow<T>(input)) {
     result.push(row);
   }
   return result;
@@ -796,4 +902,5 @@ export {
   collectBytes,
   collectText,
   collectJsonEachRow,
+  dataChunks,
 };

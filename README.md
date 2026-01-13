@@ -11,44 +11,48 @@ npm install @maxjustus/chttp
 ## Quick Start
 
 ```ts
-import { insert, query, streamEncodeJsonEachRow } from "@maxjustus/chttp";
+import { insert, query, streamEncodeJsonEachRow, collectText } from "@maxjustus/chttp";
 
 const config = {
   baseUrl: "http://localhost:8123/",
   auth: { username: "default", password: "" },
 };
 
-// Insert with JSON data (using streamEncodeJsonEachRow helper)
-await insert(
+// Insert - returns { summary, queryId }
+const { summary } = await insert(
   "INSERT INTO table FORMAT JSONEachRow",
   streamEncodeJsonEachRow([{ id: 1, name: "test" }]),
   "session123",
   config, // compression defaults to "lz4"
 );
+console.log(`Wrote ${summary.written_rows} rows`);
 
 // Insert raw bytes (any format)
 const encoder = new TextEncoder();
 const csvData = encoder.encode("1,test\n2,other\n");
 await insert("INSERT INTO table FORMAT CSV", csvData, "session123", config);
 
-// Query (yields Uint8Array, compression enabled by default)
-import { query, streamText, collectText } from "@maxjustus/chttp";
+// Query - yields packets: Progress, Data, Summary (mirrors TCP client API)
+// Helper functions filter for Data packets automatically:
+const json = await collectText(query("SELECT * FROM table FORMAT JSON", "session123", config));
 
-// Stream text chunks
-for await (const text of streamText(
-  query("SELECT * FROM table FORMAT JSON", "session123", config),
-)) {
-  console.log(text);
+// Or iterate packets directly for progress/summary access:
+for await (const packet of query("SELECT * FROM table FORMAT JSON", "session123", config)) {
+  switch (packet.type) {
+    case "Progress":
+      console.log(`Progress: ${packet.progress.read_rows} rows`);
+      break;
+    case "Data":
+      processChunk(packet.chunk);
+      break;
+    case "Summary":
+      console.log(`Done: ${packet.summary.read_rows} rows in ${packet.summary.elapsed_ns}ns`);
+      break;
+  }
 }
 
-// Or collect entire response
-const json = await collectText(
-  query("SELECT * FROM table FORMAT JSON", "session123", config),
-);
-
-// DDL statements (consume the iterator)
-for await (const _ of query("CREATE TABLE ...", "session123", config)) {
-}
+// DDL statements
+for await (const _ of query("CREATE TABLE ...", "session123", config)) {}
 ```
 
 ## Query Parameters

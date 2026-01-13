@@ -520,7 +520,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 // ============================================================================
 
 import { startClickHouse, stopClickHouse } from "../setup.ts";
-import { init, insert, query, collectText } from "../../client.ts";
+import { init, insert, query, collectText, dataChunks, type QueryPacket } from "../../client.ts";
 
 describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
   it("round-trips random data N times", async () => {
@@ -579,7 +579,7 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
 
           // 4. Stream decode and insert block-by-block to avoid memory pressure
           // This keeps only 1-2 blocks in memory at a time instead of 80k rows
-          const queryStream = query(
+          const queryResult = query(
             `SELECT * FROM ${srcTable} FORMAT Native SETTINGS output_format_native_use_flattened_dynamic_and_json_serialization=1`,
             sessionId,
             { baseUrl, auth },
@@ -591,7 +591,7 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
           const startTime = Date.now();
           let lastProgressTime = startTime;
 
-          for await (const block of streamDecodeNative(queryStream, { mapAsArray: true, debug: true })) {
+          for await (const block of streamDecodeNative(dataChunks(queryResult), { mapAsArray: true, debug: true })) {
             columns = block.columns;
             blocksProcessed++;
             rowsProcessed += block.rowCount;
@@ -727,9 +727,8 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
   });
 });
 
-async function consume(stream: AsyncIterable<Uint8Array>) {
-  for await (const _ of stream) {
-  }
+async function consume(input: AsyncIterable<QueryPacket>) {
+  for await (const _ of input) {}
 }
 
 // ============================================================================

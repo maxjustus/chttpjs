@@ -8,10 +8,11 @@ import {
   type DecodeOptions,
 } from "../native/index.ts";
 import { TcpClient } from "../tcp_client/client.ts";
+import type { QueryPacket } from "../client.ts";
 
 // Async iterable helpers
-export async function consume(s: AsyncIterable<unknown>): Promise<void> {
-  for await (const _ of s) {}
+export async function consume(input: AsyncIterable<QueryPacket>): Promise<void> {
+  for await (const _ of input) {}
 }
 
 export async function collect<T>(gen: AsyncIterable<T>): Promise<T[]> {

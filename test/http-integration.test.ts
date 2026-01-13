@@ -500,15 +500,18 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       let blocksDetected = 0;
       let lastChunkSize = 0;
 
-      for await (const chunk of query(
+      // Iterate over packets from query()
+      for await (const packet of query(
         "SELECT * FROM system.numbers LIMIT 1000000",
         sessionId,
         { baseUrl, auth },
       )) {
-        // Each chunk is a decompressed block
-        if (chunk.length !== lastChunkSize) {
-          blocksDetected++;
-          lastChunkSize = chunk.length;
+        // Each Data packet contains a decompressed block
+        if (packet.type === "Data") {
+          if (packet.chunk.length !== lastChunkSize) {
+            blocksDetected++;
+            lastChunkSize = packet.chunk.length;
+          }
         }
       }
 
