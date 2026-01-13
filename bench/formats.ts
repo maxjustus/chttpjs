@@ -578,7 +578,7 @@ async function main() {
   console.log(formatResult(nativeColEnc, ROWS));
 
   console.log(
-    `\nSpeedup: ${(nativeRowEnc.ms / nativeColEnc.ms).toFixed(2)}x faster with TypedArray columnar input`,
+    `\nSpeedup: ${(nativeRowEnc.meanMs / nativeColEnc.meanMs).toFixed(2)}x faster with TypedArray columnar input`,
   );
 }
 

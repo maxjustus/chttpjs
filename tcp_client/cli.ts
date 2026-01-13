@@ -84,7 +84,7 @@ function formatPacket(packet: Packet, compact: boolean = false): Record<string, 
       };
     }
     case "Progress":
-      return { type: "Progress", ...packet.progress };
+      return { type: "Progress", delta: packet.progress, accumulated: packet.accumulated };
     case "ProfileInfo":
       return { type: "ProfileInfo", ...packet.info };
     case "ProfileEvents":
@@ -122,8 +122,13 @@ async function runLoad(client: TcpClient, filePath: string, tableName: string): 
   const count = lines.length;
   console.log(`Loading ${count} rows from ${filePath} into ${tableName}...`);
 
-  await client.insert(`INSERT INTO ${tableName} VALUES`, rows(), { batchSize: 10000 });
-  console.log(`Inserted ${count} rows.`);
+  let writtenRows = 0n;
+  for await (const packet of client.insert(`INSERT INTO ${tableName} VALUES`, rows(), { batchSize: 10000 })) {
+    if (packet.type === "Progress") {
+      writtenRows = packet.accumulated.writtenRows;
+    }
+  }
+  console.log(`Inserted ${writtenRows > 0n ? writtenRows : count} rows.`);
 }
 
 async function runInteractive(client: TcpClient): Promise<void> {
