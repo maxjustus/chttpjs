@@ -101,9 +101,10 @@ describe("TCP progress accumulation", { timeout: 60000 }, () => {
       const elapsedMicros = lastProgress.elapsedNs / 1000n;
       const expectedCpuUsage = Number(lastProgress.cpuTimeMicroseconds) / Number(elapsedMicros);
 
-      // Allow some tolerance for floating point
+      // Allow tolerance for timing variations between when cpuUsage was calculated
+      // and when we recalculate it here from final values
       assert.ok(
-        Math.abs(lastProgress.cpuUsage - expectedCpuUsage) < 0.001,
+        Math.abs(lastProgress.cpuUsage - expectedCpuUsage) < 0.01,
         `CPU usage mismatch: got ${lastProgress.cpuUsage}, expected ~${expectedCpuUsage}`,
       );
 
