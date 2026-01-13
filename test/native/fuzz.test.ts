@@ -818,7 +818,7 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
           // Insert batches to dest (tests encoder)
           let insertedRows = 0;
           for (const batch of batches) {
-            await client.insert(`INSERT INTO ${dstTable} VALUES`, batch);
+            for await (const _ of client.insert(`INSERT INTO ${dstTable} VALUES`, batch)) {}
             insertedRows += batch.rowCount;
           }
 

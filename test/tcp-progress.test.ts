@@ -132,4 +132,50 @@ describe("TCP progress accumulation", { timeout: 60000 }, () => {
       }
     }
   });
+
+  it("yields progress packets from insert()", async () => {
+    const tableName = `test_insert_progress_${Date.now()}`;
+    await client.execute(`CREATE TABLE ${tableName} (id UInt32, name String) ENGINE = Memory`);
+
+    try {
+      const rows = Array.from({ length: 1000 }, (_, i) => ({ id: i, name: `row_${i}` }));
+
+      let lastProgress: AccumulatedProgress | null = null;
+      let progressCount = 0;
+      let profileInfoCount = 0;
+      let endOfStreamCount = 0;
+
+      for await (const packet of client.insert(`INSERT INTO ${tableName} VALUES`, rows)) {
+        if (packet.type === "Progress") {
+          lastProgress = packet.accumulated;
+          progressCount++;
+        } else if (packet.type === "ProfileInfo") {
+          profileInfoCount++;
+        } else if (packet.type === "EndOfStream") {
+          endOfStreamCount++;
+        }
+      }
+
+      // We should reach EndOfStream
+      assert.strictEqual(endOfStreamCount, 1, "Expected exactly one EndOfStream packet");
+
+      // Check that progress was received and writtenRows is populated
+      if (progressCount > 0) {
+        assert.ok(lastProgress, "Expected accumulated progress");
+        assert.ok(lastProgress.writtenRows > 0n, `Expected writtenRows > 0, got ${lastProgress.writtenRows}`);
+        console.log(`Insert progress: ${progressCount} packets, writtenRows=${lastProgress.writtenRows}`);
+      }
+
+      // Verify rows were actually inserted
+      let rowCount = 0n;
+      for await (const packet of client.query(`SELECT count() as cnt FROM ${tableName}`)) {
+        if (packet.type === "Data") {
+          rowCount = packet.batch.getColumn("cnt")?.get(0) as bigint;
+        }
+      }
+      assert.strictEqual(rowCount, 1000n, `Expected 1000 rows inserted, got ${rowCount}`);
+    } finally {
+      await client.execute(`DROP TABLE ${tableName}`);
+    }
+  });
 });

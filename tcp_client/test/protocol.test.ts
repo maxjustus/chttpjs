@@ -86,7 +86,7 @@ describe("TCP Client Protocol Features", () => {
         [{ name: "id", type: "UInt32" }, { name: "val", type: "String" }],
         [new Uint32Array([1, 2, 3]), ["a", "b", "c"]]
       );
-      await client.insert(`INSERT INTO ${tableName} VALUES`, table);
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, table)) {}
 
       let rows = 0;
       for await (const packet of client.query(`SELECT * FROM ${tableName} ORDER BY id`)) {
@@ -111,7 +111,7 @@ describe("TCP Client Protocol Features", () => {
         [{ name: "id", type: "UInt32" }, { name: "val", type: "String" }],
         [new Uint32Array([1, 2, 3]), ["a", "b", "c"]]
       );
-      await client.insert(`INSERT INTO ${tableName} VALUES`, table);
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, table)) {}
 
       let rows = 0;
       for await (const packet of client.query(`SELECT * FROM ${tableName} ORDER BY id`)) {

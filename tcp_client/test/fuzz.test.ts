@@ -93,7 +93,7 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
         }
       }
     })();
-    await writeClient.insert(`INSERT INTO ${dstTable} VALUES`, stream);
+    for await (const _ of writeClient.insert(`INSERT INTO ${dstTable} VALUES`, stream)) {}
     console.log(`  transferred ${rowsRead} rows`);
     await verifyTableEquality(writeClient, srcTable, dstTable, settings);
     console.log(`  verified OK`);
@@ -224,7 +224,7 @@ describe("TCP Client Fuzz Tests", { timeout: 600000, concurrency: 1 }, () => {
             }
           }
         })();
-        await writeClient.insert(`INSERT INTO ${dstTable} VALUES`, stream);
+        for await (const _ of writeClient.insert(`INSERT INTO ${dstTable} VALUES`, stream)) {}
         console.log(`  transferred ${rowsRead} rows, ${blocksRead} blocks (${((Date.now() - start) / 1000).toFixed(2)}s)`);
 
         await verifyTableEquality(writeClient, srcTable, dstTable);

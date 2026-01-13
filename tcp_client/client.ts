@@ -332,16 +332,16 @@ export class TcpClient {
   }
 
   /** Insert a single RecordBatch. */
-  async insert(sql: string, data: RecordBatch, options?: InsertOptions): Promise<void>;
+  insert(sql: string, data: RecordBatch, options?: InsertOptions): AsyncGenerator<Packet>;
   /** Insert an iterable of RecordBatches. */
-  async insert(sql: string, data: Iterable<RecordBatch> | AsyncIterable<RecordBatch>, options?: InsertOptions): Promise<void>;
+  insert(sql: string, data: Iterable<RecordBatch> | AsyncIterable<RecordBatch>, options?: InsertOptions): AsyncGenerator<Packet>;
   /** Insert row objects with auto-coercion using server schema. */
-  async insert(sql: string, data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>, options?: InsertOptions): Promise<void>;
-  async insert(
+  insert(sql: string, data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>, options?: InsertOptions): AsyncGenerator<Packet>;
+  async *insert(
     sql: string,
     data: RecordBatch | Iterable<RecordBatch | Record<string, unknown>> | AsyncIterable<RecordBatch | Record<string, unknown>>,
     options: InsertOptions = {}
-  ): Promise<void> {
+  ): AsyncGenerator<Packet> {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
     if (this.busy) throw new Error("Connection busy - cannot run concurrent operations on the same TcpClient");
     this.busy = true;
@@ -351,6 +351,10 @@ export class TcpClient {
     if (signal?.aborted) throw new Error("Insert aborted before start");
 
     let cancelled = false;
+    let reachedEndOfStream = false;
+    let receivedException = false;
+    let sentDataDelimiter = false;  // Track if we've finished sending data
+
     const abortHandler = () => {
       if (!cancelled && this.socket) {
         cancelled = true;
@@ -359,9 +363,10 @@ export class TcpClient {
     };
     signal?.addEventListener("abort", abortHandler);
 
+    const useCompression = !!this.options.compression;
+    const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
+
     try {
-      const useCompression = !!this.options.compression;
-      const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
       // Merge settings: client defaults < per-insert overrides
       const mergedSettings = { ...this.defaultSettings, ...options.settings };
 
@@ -478,10 +483,67 @@ export class TcpClient {
 
       const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
       this.socket!.write(delimiter);
+      sentDataDelimiter = true;
 
-      await this.drainInsertResponses(useCompression);
-      this.log(`Successfully inserted ${totalInserted} rows.`);
+      const { progress: progressAccumulated, profileEvents: profileEventsAccumulated } = this.createAccumulators();
+
+      // Read response packets until EndOfStream
+      while (true) {
+        const packetId = Number(await this.reader!.readVarInt());
+
+        switch (packetId) {
+          case ServerPacketId.Progress: {
+            const progress = await this.readProgress();
+            this.accumulateProgress(progress, progressAccumulated);
+            yield { type: "Progress", progress, accumulated: progressAccumulated };
+            break;
+          }
+          case ServerPacketId.ProfileInfo:
+            yield { type: "ProfileInfo", info: await this.readProfileInfo() };
+            break;
+          case ServerPacketId.ProfileEvents: {
+            const batch = await this.readBlock(false);
+            this.processProfileEventsBlock(batch, profileEventsAccumulated, progressAccumulated);
+            yield { type: "ProfileEvents", batch, accumulated: profileEventsAccumulated };
+            break;
+          }
+          case ServerPacketId.Data:
+            await this.readBlock(useCompression);
+            break;
+          case ServerPacketId.Log: {
+            const batch = await this.readBlock(false);
+            if (batch.rowCount > 0) {
+              yield { type: "Log", entries: this.parseLogBlock(batch) };
+            }
+            break;
+          }
+          case ServerPacketId.EndOfStream:
+            reachedEndOfStream = true;
+            this.log(`Successfully inserted ${totalInserted} rows.`);
+            yield { type: "EndOfStream" };
+            return;
+          case ServerPacketId.Exception:
+            receivedException = true;
+            throw await this.reader!.readException();
+        }
+      }
     } finally {
+      // If generator was abandoned early, drain remaining packets
+      // But only if we've sent the delimiter - otherwise server is waiting for data, not sending responses
+      if (!reachedEndOfStream && !receivedException && this.socket && this.reader) {
+        if (sentDataDelimiter) {
+          try {
+            await this.drainInsertResponses(useCompression);
+          } catch (err) {
+            this.log(`[insert] drain failed, closing connection: ${err instanceof Error ? err.message : err}`);
+            this.close();
+          }
+        } else {
+          // We're in the middle of sending data - can't drain, must close
+          this.log(`[insert] error before data sent, closing connection`);
+          this.close();
+        }
+      }
       this.busy = false;
       signal?.removeEventListener("abort", abortHandler);
     }
@@ -607,6 +669,89 @@ export class TcpClient {
       });
     }
     return entries;
+  }
+
+  private createAccumulators() {
+    return {
+      progress: {
+        readRows: 0n,
+        readBytes: 0n,
+        totalRowsToRead: 0n,
+        totalBytesToRead: 0n,
+        writtenRows: 0n,
+        writtenBytes: 0n,
+        elapsedNs: 0n,
+        percent: 0,
+        memoryUsage: 0n,
+        peakMemoryUsage: 0n,
+        cpuTimeMicroseconds: 0n,
+        cpuUsage: 0,
+      } as AccumulatedProgress,
+      profileEvents: new Map<string, bigint>(),
+    };
+  }
+
+  private accumulateProgress(progress: Progress, accumulated: AccumulatedProgress): void {
+    accumulated.readRows += progress.readRows;
+    accumulated.readBytes += progress.readBytes;
+    accumulated.totalRowsToRead += progress.totalRowsToRead;
+    accumulated.totalBytesToRead += progress.totalBytesToRead ?? 0n;
+    accumulated.writtenRows += progress.writtenRows ?? 0n;
+    accumulated.writtenBytes += progress.writtenBytes ?? 0n;
+    accumulated.elapsedNs += progress.elapsedNs ?? 0n;
+  }
+
+  private processProfileEventsBlock(
+    batch: RecordBatch,
+    profileEventsAccumulated: Map<string, bigint>,
+    progressAccumulated: AccumulatedProgress
+  ): void {
+    const nameCol = batch.getColumn("name");
+    const valueCol = batch.getColumn("value");
+    const typeCol = batch.getColumn("type");
+    const threadIdCol = batch.getColumn("thread_id");
+    if (!nameCol || !valueCol || !typeCol) return;
+
+    for (let i = 0; i < batch.rowCount; i++) {
+      const name = nameCol.get(i) as string;
+      const value = valueCol.get(i) as bigint;
+      const eventType = typeCol.get(i) as string;
+      const threadId = threadIdCol ? threadIdCol.get(i) as bigint : 0n;
+
+      if (eventType === "increment") {
+        profileEventsAccumulated.set(name, (profileEventsAccumulated.get(name) ?? 0n) + value);
+      } else {
+        profileEventsAccumulated.set(name, value);
+      }
+
+      // Extract memory/CPU metrics for query-level aggregates only
+      if (threadId === 0n) {
+        switch (name) {
+          case "MemoryTrackerUsage":
+            progressAccumulated.memoryUsage = value;
+            break;
+          case "MemoryTrackerPeakUsage":
+            if (value > progressAccumulated.peakMemoryUsage) {
+              progressAccumulated.peakMemoryUsage = value;
+            }
+            break;
+          case "UserTimeMicroseconds":
+          case "SystemTimeMicroseconds":
+            if (eventType === "increment") {
+              progressAccumulated.cpuTimeMicroseconds += value;
+            }
+            break;
+        }
+      }
+    }
+
+    // Recalculate CPU usage
+    if (progressAccumulated.elapsedNs > 0n) {
+      const elapsedMicros = progressAccumulated.elapsedNs / 1000n;
+      progressAccumulated.cpuUsage = elapsedMicros > 0n
+        ? Number(progressAccumulated.cpuTimeMicroseconds) / Number(elapsedMicros)
+        : 0;
+    }
   }
 
   private async readBlock(compressed: boolean = false): Promise<RecordBatch> {
@@ -742,24 +887,7 @@ export class TcpClient {
         this.currentSchema = null;
         this.log(`[query] waiting for response...`);
 
-        // Accumulate ProfileEvents deltas
-        const profileEventsAccumulated = new Map<string, bigint>();
-
-        // Accumulate Progress deltas
-        const progressAccumulated: AccumulatedProgress = {
-          readRows: 0n,
-          readBytes: 0n,
-          totalRowsToRead: 0n,
-          totalBytesToRead: 0n,
-          writtenRows: 0n,
-          writtenBytes: 0n,
-          elapsedNs: 0n,
-          percent: 0,
-          memoryUsage: 0n,
-          peakMemoryUsage: 0n,
-          cpuTimeMicroseconds: 0n,
-          cpuUsage: 0,
-        };
+        const { progress: progressAccumulated, profileEvents: profileEventsAccumulated } = this.createAccumulators();
 
         while (true) {
           this.log(`[query] reading packet id...`);
@@ -781,13 +909,8 @@ export class TcpClient {
             }
             case ServerPacketId.Progress: {
               const progress = await this.readProgress();
-              progressAccumulated.readRows += progress.readRows;
-              progressAccumulated.readBytes += progress.readBytes;
-              progressAccumulated.totalRowsToRead += progress.totalRowsToRead;
-              progressAccumulated.totalBytesToRead += progress.totalBytesToRead ?? 0n;
-              progressAccumulated.writtenRows += progress.writtenRows ?? 0n;
-              progressAccumulated.writtenBytes += progress.writtenBytes ?? 0n;
-              progressAccumulated.elapsedNs += progress.elapsedNs ?? 0n;
+              this.accumulateProgress(progress, progressAccumulated);
+              // Calculate percent for queries (based on read progress)
               const progressDenom = progressAccumulated.readRows > progressAccumulated.totalRowsToRead
                 ? progressAccumulated.readRows
                 : progressAccumulated.totalRowsToRead;
@@ -801,57 +924,8 @@ export class TcpClient {
               yield { type: "ProfileInfo", info: await this.readProfileInfo() };
               break;
             case ServerPacketId.ProfileEvents: {
-              // ProfileEvents blocks are always uncompressed (diagnostic metadata)
-              // They send deltas, so we accumulate values across packets
               const batch = await this.readBlock(false);
-              const nameCol = batch.getColumn("name");
-              const valueCol = batch.getColumn("value");
-              const typeCol = batch.getColumn("type");
-              const threadIdCol = batch.getColumn("thread_id");
-              if (nameCol && valueCol && typeCol) {
-                for (let i = 0; i < batch.rowCount; i++) {
-                  const name = nameCol.get(i) as string;
-                  const value = valueCol.get(i) as bigint;
-                  const eventType = typeCol.get(i) as string;
-                  // Only process query-level aggregates (thread_id == 0), not per-thread stats
-                  const threadId = threadIdCol ? threadIdCol.get(i) as bigint : 0n;
-                  if (eventType === "increment") {
-                    profileEventsAccumulated.set(name, (profileEventsAccumulated.get(name) ?? 0n) + value);
-                  } else {
-                    // Gauge: use latest value
-                    profileEventsAccumulated.set(name, value);
-                  }
-                  // Extract memory/CPU metrics for query-level aggregates only
-                  if (threadId === 0n) {
-                    switch (name) {
-                      case "MemoryTrackerUsage":
-                        // Current memory - use latest value
-                        progressAccumulated.memoryUsage = value;
-                        break;
-                      case "MemoryTrackerPeakUsage":
-                        // Use max for peak memory across all hosts
-                        if (value > progressAccumulated.peakMemoryUsage) {
-                          progressAccumulated.peakMemoryUsage = value;
-                        }
-                        break;
-                      case "UserTimeMicroseconds":
-                      case "SystemTimeMicroseconds":
-                        // CPU time is incremental, accumulate it
-                        if (eventType === "increment") {
-                          progressAccumulated.cpuTimeMicroseconds += value;
-                        }
-                        break;
-                    }
-                  }
-                }
-                // Recalculate CPU usage (equivalent CPUs busy)
-                if (progressAccumulated.elapsedNs > 0n) {
-                  const elapsedMicros = progressAccumulated.elapsedNs / 1000n;
-                  progressAccumulated.cpuUsage = elapsedMicros > 0n
-                    ? Number(progressAccumulated.cpuTimeMicroseconds) / Number(elapsedMicros)
-                    : 0;
-                }
-              }
+              this.processProfileEventsBlock(batch, profileEventsAccumulated, progressAccumulated);
               yield { type: "ProfileEvents", batch, accumulated: profileEventsAccumulated };
               break;
             }

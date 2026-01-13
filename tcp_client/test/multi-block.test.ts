@@ -71,7 +71,7 @@ describe("TCP Client Multi-block Integration", () => {
       }
 
       console.log(`Inserting ${blockCount * rowsPerBlock} rows in ${blockCount} blocks...`);
-      await client.insert(`INSERT INTO ${tableName} VALUES`, generateBlocks());
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, generateBlocks())) {}
       
       // Verify
       const stream = client.query(`SELECT count() FROM ${tableName}`);

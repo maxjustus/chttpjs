@@ -45,7 +45,7 @@ describe("TCP Client Integration", () => {
         [2n, "Bob"]
       ]);
 
-      await client.insert(`INSERT INTO ${tableName} VALUES`, batch);
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, batch)) {}
 
       // Verify
       const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`);
@@ -91,11 +91,11 @@ describe("TCP Client Integration", () => {
       await client.execute(`CREATE TABLE ${tableName} (id UInt32, name String, value Float64) ENGINE = Memory`);
 
       // Insert row objects - types will be coerced based on server schema
-      await client.insert(`INSERT INTO ${tableName} VALUES`, [
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [
         { id: 1, name: "alice", value: 1.5 },
         { id: 2, name: "bob", value: 2.5 },
         { id: 3, name: "charlie", value: 3.5 },
-      ]);
+      ])) {}
 
       // Verify
       const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`);
@@ -133,7 +133,7 @@ describe("TCP Client Integration", () => {
         }
       }
 
-      await client.insert(`INSERT INTO ${tableName} VALUES`, generateRows(), { batchSize: 100 });
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, generateRows(), { batchSize: 100 })) {}
 
       const stream = client.query(`SELECT count() as cnt FROM ${tableName}`);
       let count = 0;
@@ -163,9 +163,9 @@ describe("TCP Client Integration", () => {
         { name: "name", type: "String" },
       ];
 
-      await client.insert(`INSERT INTO ${tableName} VALUES`, [
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [
         { id: 1, name: "test" },
-      ], { schema });
+      ], { schema })) {}
 
       const stream = client.query(`SELECT count() as cnt FROM ${tableName}`);
       let count = 0;
@@ -198,7 +198,7 @@ describe("TCP Client Integration", () => {
     ];
 
     await assert.rejects(
-      () => client.insert(`INSERT INTO ${tableName} VALUES`, [{ id: 1, name: "test" }], { schema: wrongSchema }),
+      async () => { for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [{ id: 1, name: "test" }], { schema: wrongSchema })) {} },
       /Schema mismatch.*UInt64.*UInt32/
     );
     client.close();
@@ -225,7 +225,7 @@ describe("TCP Client Integration", () => {
     ];
 
     await assert.rejects(
-      () => client.insert(`INSERT INTO ${tableName} VALUES`, [{ id: 1, name: "test" }], { schema: wrongSchema }),
+      async () => { for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [{ id: 1, name: "test" }], { schema: wrongSchema })) {} },
       /Schema mismatch.*user_id.*id/
     );
     client.close();
@@ -252,7 +252,7 @@ describe("TCP Client Integration", () => {
     ];
 
     await assert.rejects(
-      () => client.insert(`INSERT INTO ${tableName} VALUES`, [{ id: 1 }], { schema: wrongSchema }),
+      async () => { for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [{ id: 1 }], { schema: wrongSchema })) {} },
       /Schema mismatch.*expected 1 columns.*got 2/
     );
     client.close();

@@ -46,7 +46,7 @@ describe("TCP Client Stress Tests", () => {
           [{ name: "id", type: "UInt64" }, { name: "value", type: "String" }],
           [[1n, "after_cancel"], [2n, "test"]]
         );
-        await client.insert(`INSERT INTO ${tableName} VALUES`, batch);
+        for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, batch)) {}
 
         // 3. Run another SELECT and verify it works
         let rowCount = 0;
@@ -72,7 +72,7 @@ describe("TCP Client Stress Tests", () => {
             [{ name: "id", type: "UInt64" }, { name: "cycle", type: "UInt32" }],
             [[BigInt(cycle * 10), cycle], [BigInt(cycle * 10 + 1), cycle]]
           );
-          await client.insert(`INSERT INTO ${tableName} VALUES`, batch);
+          for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, batch)) {}
 
           // QUERY and verify
           let count = 0n;
@@ -153,7 +153,7 @@ describe("TCP Client Stress Tests", () => {
         }
 
         try {
-          await client.insert(`INSERT INTO ${tableName} VALUES`, generateBlocks(), { signal: controller.signal });
+          for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, generateBlocks(), { signal: controller.signal })) {}
         } catch {
           // Expected cancellation
         }
@@ -219,7 +219,7 @@ describe("TCP Client Stress Tests", () => {
             [{ name: "id", type: "UInt64" }, { name: "batch", type: "UInt32" }],
             rows
           );
-          await client.insert(`INSERT INTO ${tableName} VALUES`, batch);
+          for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, batch)) {}
 
           // Verify count
           let count = 0n;
@@ -308,7 +308,7 @@ describe("TCP Client Stress Tests", () => {
           }
         }
 
-        await client.insert(`INSERT INTO ${tableName} VALUES`, generateBatches());
+        for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, generateBatches())) {}
 
         // Verify count
         let count = 0n;
@@ -358,7 +358,7 @@ describe("TCP Client Stress Tests", () => {
           [{ name: "id", type: "UInt64" }, { name: "data", type: "String" }],
           rows
         );
-        await client.insert(`INSERT INTO ${tableName} VALUES`, batch);
+        for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, batch)) {}
 
         // Verify count and compute aggregate hash server-side
         let count = 0n;
