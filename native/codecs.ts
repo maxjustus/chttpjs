@@ -702,16 +702,7 @@ class EnumCodec extends BaseCodec {
   }
 
   builder(size: number): ColumnBuilder {
-    const arr = new this.Ctor(size);
-    let offset = 0;
-    const b: ColumnBuilder = {
-      append: (v: unknown) => {
-        arr[offset++] = this.toEnumValue(v);
-        return b;
-      },
-      finish: () => new EnumColumn(this.type, arr, this.mapping.valueToName, false),
-    };
-    return b;
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue(): number {
@@ -721,30 +712,6 @@ class EnumCodec extends BaseCodec {
   estimateSize(rows: number): number {
     return rows * this.Ctor.BYTES_PER_ELEMENT;
   }
-}
-
-function SimpleArrayBuilder(
-  type: string,
-  size: number,
-  transform?: (v: unknown) => unknown,
-): ColumnBuilder {
-  const arr = new Array(size);
-  let offset = 0;
-  const builder: ColumnBuilder = {
-    append: (v: unknown) => {
-      arr[offset++] = transform ? transform(v) : v;
-      return builder;
-    },
-    finish: () => new DataColumn(type, arr),
-  };
-  return builder;
-}
-
-/** Default fromValues implementation using builder - reduces duplication. */
-function fromValuesViaBuilder(codec: Codec, values: unknown[]): Column {
-  const b = codec.builder(values.length);
-  for (let i = 0; i < values.length; i++) b.append(values[i]);
-  return b.finish();
 }
 
 class StringCodec extends BaseCodec {
@@ -766,11 +733,11 @@ class StringCodec extends BaseCodec {
   }
 
   fromValues(values: unknown[]): Column {
-    return fromValuesViaBuilder(this, values);
+    return new DataColumn(this.type, values.map(coerceToString));
   }
 
   builder(size: number): ColumnBuilder {
-    return SimpleArrayBuilder(this.type, size, (v) => coerceToString(v));
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -825,11 +792,11 @@ class UUIDCodec extends BaseCodec {
   }
 
   fromValues(values: unknown[]): Column {
-    return fromValuesViaBuilder(this, values);
+    return new DataColumn(this.type, values.map(toValidUUID));
   }
 
   builder(size: number): ColumnBuilder {
-    return SimpleArrayBuilder(this.type, size, toValidUUID);
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -886,39 +853,35 @@ class FixedStringCodec extends BaseCodec {
   }
 
   fromValues(values: unknown[]): Column {
-    return fromValuesViaBuilder(this, values);
+    const len = this.len;
+    const type = this.type;
+    const result: Uint8Array[] = new Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      if (v instanceof Uint8Array) {
+        if (v.length !== len) {
+          throw new TypeError(`${type} requires ${len} bytes, got ${v.length}`);
+        }
+        result[i] = v;
+      } else if (typeof v === "string") {
+        const encoded = TEXT_ENCODER.encode(v);
+        if (encoded.length > len) {
+          throw new TypeError(`${type} requires ${len} bytes, got ${encoded.length}`);
+        }
+        const buf = new Uint8Array(len);
+        buf.set(encoded);
+        result[i] = buf;
+      } else if (v == null) {
+        result[i] = new Uint8Array(len);
+      } else {
+        throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
+      }
+    }
+    return new DataColumn(type, result);
   }
 
   builder(size: number): ColumnBuilder {
-    const len = this.len;
-    const type = this.type;
-    const result: Uint8Array[] = new Array(size);
-    let offset = 0;
-    const builder: ColumnBuilder = {
-      append: (v: unknown) => {
-        if (v instanceof Uint8Array) {
-          if (v.length !== len) {
-            throw new TypeError(`${type} requires ${len} bytes, got ${v.length}`);
-          }
-          result[offset++] = v;
-        } else if (typeof v === "string") {
-          const encoded = TEXT_ENCODER.encode(v);
-          if (encoded.length > len) {
-            throw new TypeError(`${type} requires ${len} bytes, got ${encoded.length}`);
-          }
-          const buf = new Uint8Array(len);
-          buf.set(encoded);
-          result[offset++] = buf;
-        } else if (v == null) {
-          result[offset++] = new Uint8Array(len);
-        } else {
-          throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
-        }
-        return builder;
-      },
-      finish: () => new DataColumn(type, result),
-    };
-    return builder;
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -977,11 +940,11 @@ class BigIntCodec extends BaseCodec {
   }
 
   fromValues(values: unknown[]): Column {
-    return fromValuesViaBuilder(this, values);
+    return new DataColumn(this.type, values.map((v) => this.coerce(v)));
   }
 
   builder(size: number): ColumnBuilder {
-    return SimpleArrayBuilder(this.type, size, (v) => this.coerce(v));
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -1074,16 +1037,15 @@ class DecimalCodec extends BaseCodec {
   }
 
   fromValues(values: unknown[]): Column {
-    return fromValuesViaBuilder(this, values);
+    const scale = this.scale;
+    return new DataColumn(
+      this.type,
+      values.map((v) => (typeof v === "bigint" ? formatScaledBigInt(v, scale) : toValidDecimal(v))),
+    );
   }
 
   builder(size: number): ColumnBuilder {
-    const type = this.type;
-    const scale = this.scale;
-    return SimpleArrayBuilder(type, size, (v) => {
-      if (typeof v === "bigint") return formatScaledBigInt(v, scale);
-      return toValidDecimal(v);
-    });
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -1164,67 +1126,59 @@ class DateTime64Codec extends BaseCodec {
   }
 
   fromValues(values: unknown[]): Column {
-    return fromValuesViaBuilder(this, values);
-  }
-
-  builder(size: number): ColumnBuilder {
     const type = this.type;
     const precision = this.precision;
     const scale = 10n ** BigInt(Math.abs(precision - 3));
-    const result: ClickHouseDateTime64[] = new Array(size);
-    let offset = 0;
-    const builder: ColumnBuilder = {
-      append: (v: any) => {
-        if (v instanceof ClickHouseDateTime64) {
-          if (v.precision !== precision) {
-            throw new TypeError(
-              `${type} precision mismatch: expected ${precision}, got ${v.precision}`,
-            );
-          }
-          toBigIntInRange(v.ticks, type, INT64_MIN, INT64_MAX);
-          result[offset++] = v;
-        } else if (v instanceof Date) {
-          const msNum = v.getTime();
-          if (!Number.isFinite(msNum)) {
-            throw new TypeError(`Cannot coerce "${v}" to ${type}`);
-          }
-          const ms = BigInt(msNum);
-          const ticks = precision >= 3 ? ms * scale : ms / scale;
-          toBigIntInRange(ticks, type, INT64_MIN, INT64_MAX);
-          result[offset++] = new ClickHouseDateTime64(ticks, precision);
-        } else if (typeof v === "bigint") {
-          toBigIntInRange(v, type, INT64_MIN, INT64_MAX);
-          result[offset++] = new ClickHouseDateTime64(v, precision);
-        } else if (typeof v === "number") {
-          if (!Number.isFinite(v)) {
-            throw new TypeError(`Cannot coerce number "${v}" to ${type}`);
-          }
-          const msNum = Math.trunc(v);
-          if (!Number.isSafeInteger(msNum)) {
-            throw new RangeError(
-              `${type} cannot safely represent number "${v}". Use bigint, Date, or string.`,
-            );
-          }
-          const ms = BigInt(msNum);
-          const ticks = precision >= 3 ? ms * scale : ms / scale;
-          toBigIntInRange(ticks, type, INT64_MIN, INT64_MAX);
-          result[offset++] = new ClickHouseDateTime64(ticks, precision);
-        } else if (typeof v === "string") {
-          const d = toValidDate(v, type);
-          const ms = BigInt(d.getTime());
-          const ticks = precision >= 3 ? ms * scale : ms / scale;
-          toBigIntInRange(ticks, type, INT64_MIN, INT64_MAX);
-          result[offset++] = new ClickHouseDateTime64(ticks, precision);
-        } else if (v == null) {
-          result[offset++] = new ClickHouseDateTime64(0n, precision);
-        } else {
-          throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
+    const result: ClickHouseDateTime64[] = new Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      if (v instanceof ClickHouseDateTime64) {
+        if (v.precision !== precision) {
+          throw new TypeError(`${type} precision mismatch: expected ${precision}, got ${v.precision}`);
         }
-        return builder;
-      },
-      finish: () => new DataColumn(type, result),
-    };
-    return builder;
+        toBigIntInRange(v.ticks, type, INT64_MIN, INT64_MAX);
+        result[i] = v;
+      } else if (v instanceof Date) {
+        const msNum = v.getTime();
+        if (!Number.isFinite(msNum)) {
+          throw new TypeError(`Cannot coerce "${v}" to ${type}`);
+        }
+        const ms = BigInt(msNum);
+        const ticks = precision >= 3 ? ms * scale : ms / scale;
+        toBigIntInRange(ticks, type, INT64_MIN, INT64_MAX);
+        result[i] = new ClickHouseDateTime64(ticks, precision);
+      } else if (typeof v === "bigint") {
+        toBigIntInRange(v, type, INT64_MIN, INT64_MAX);
+        result[i] = new ClickHouseDateTime64(v, precision);
+      } else if (typeof v === "number") {
+        if (!Number.isFinite(v)) {
+          throw new TypeError(`Cannot coerce number "${v}" to ${type}`);
+        }
+        const msNum = Math.trunc(v);
+        if (!Number.isSafeInteger(msNum)) {
+          throw new RangeError(`${type} cannot safely represent number "${v}". Use bigint, Date, or string.`);
+        }
+        const ms = BigInt(msNum);
+        const ticks = precision >= 3 ? ms * scale : ms / scale;
+        toBigIntInRange(ticks, type, INT64_MIN, INT64_MAX);
+        result[i] = new ClickHouseDateTime64(ticks, precision);
+      } else if (typeof v === "string") {
+        const d = toValidDate(v, type);
+        const ms = BigInt(d.getTime());
+        const ticks = precision >= 3 ? ms * scale : ms / scale;
+        toBigIntInRange(ticks, type, INT64_MIN, INT64_MAX);
+        result[i] = new ClickHouseDateTime64(ticks, precision);
+      } else if (v == null) {
+        result[i] = new ClickHouseDateTime64(0n, precision);
+      } else {
+        throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
+      }
+    }
+    return new DataColumn(type, result);
+  }
+
+  builder(size: number): ColumnBuilder {
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -1298,31 +1252,27 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> extends BaseC
   }
 
   fromValues(values: unknown[]): Column {
-    return fromValuesViaBuilder(this, values);
+    const type = this.type;
+    const result: Date[] = new Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      if (v instanceof Date) {
+        result[i] = v;
+      } else if (typeof v === "number") {
+        result[i] = new Date(v);
+      } else if (typeof v === "string") {
+        result[i] = toValidDate(v, type);
+      } else if (v == null) {
+        result[i] = new Date(0);
+      } else {
+        throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
+      }
+    }
+    return new DataColumn(type, result);
   }
 
   builder(size: number): ColumnBuilder {
-    const type = this.type;
-    const result: Date[] = new Array(size);
-    let offset = 0;
-    const builder: ColumnBuilder = {
-      append: (v: any) => {
-        if (v instanceof Date) {
-          result[offset++] = v;
-        } else if (typeof v === "number") {
-          result[offset++] = new Date(v);
-        } else if (typeof v === "string") {
-          result[offset++] = toValidDate(v, type);
-        } else if (v == null) {
-          result[offset++] = new Date(0);
-        } else {
-          throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
-        }
-        return builder;
-      },
-      finish: () => new DataColumn(type, result),
-    };
-    return builder;
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -1365,11 +1315,11 @@ class IPv4Codec extends BaseCodec {
   }
 
   fromValues(values: unknown[]): Column {
-    return fromValuesViaBuilder(this, values);
+    return new DataColumn(this.type, values.map(toValidIPv4));
   }
 
   builder(size: number): ColumnBuilder {
-    return SimpleArrayBuilder(this.type, size, toValidIPv4);
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -1404,11 +1354,11 @@ class IPv6Codec extends BaseCodec {
   }
 
   fromValues(values: unknown[]): Column {
-    return fromValuesViaBuilder(this, values);
+    return new DataColumn(this.type, values.map(toValidIPv6));
   }
 
   builder(size: number): ColumnBuilder {
-    return SimpleArrayBuilder(this.type, size, toValidIPv6);
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -1541,29 +1491,7 @@ class ArrayCodec extends BaseCodec {
   }
 
   builder(size: number): ColumnBuilder {
-    const type = this.type;
-    const offsets = new BigUint64Array(size);
-    const allInner: unknown[] = [];
-    let offset = 0n;
-    let rowIdx = 0;
-    const builder: ColumnBuilder = {
-      append: (v: unknown) => {
-        if (v == null) {
-          offsets[rowIdx++] = offset;
-          return builder;
-        }
-        if (!isArrayLike(v)) {
-          throw new TypeError(`Expected array for ${type}, got ${typeof v}`);
-        }
-        const arr = v as ArrayLike<unknown> & Iterable<unknown>;
-        for (const item of arr) allInner.push(item);
-        offset += BigInt(arr.length);
-        offsets[rowIdx++] = offset;
-        return builder;
-      },
-      finish: () => new ArrayColumn(type, offsets, this.inner.fromValues(allInner)),
-    };
-    return builder;
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -1636,25 +1564,7 @@ class NullableCodec extends BaseCodec {
   }
 
   builder(size: number): ColumnBuilder {
-    const type = this.type;
-    const nullFlags = new Uint8Array(size);
-    const innerValues: unknown[] = new Array(size);
-    const zeroVal = this.inner.zeroValue();
-    let offset = 0;
-    const builder: ColumnBuilder = {
-      append: (v: unknown) => {
-        if (v === null || v === undefined) {
-          nullFlags[offset] = 1;
-          innerValues[offset] = zeroVal;
-        } else {
-          innerValues[offset] = v;
-        }
-        offset++;
-        return builder;
-      },
-      finish: () => new NullableColumn(type, nullFlags, this.inner.fromValues(innerValues)),
-    };
-    return builder;
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -1928,60 +1838,7 @@ class MapCodec extends BaseCodec {
   }
 
   builder(size: number): ColumnBuilder {
-    const type = this.type;
-    const keys: unknown[] = [];
-    const vals: unknown[] = [];
-    const offsets = new BigUint64Array(size);
-    let offset = 0n;
-    let rowIdx = 0;
-    const builder: ColumnBuilder = {
-      append: (m: any) => {
-        if (m == null) {
-          offsets[rowIdx++] = offset;
-          return builder;
-        }
-        if (m instanceof Map) {
-          for (const [k, v] of m) {
-            keys.push(k);
-            vals.push(v);
-          }
-          offset += BigInt(m.size);
-        } else if (Array.isArray(m)) {
-          for (let j = 0; j < m.length; j++) {
-            const pair = m[j];
-            if (!Array.isArray(pair) || pair.length !== 2) {
-              throw new TypeError(
-                `Invalid Map entry at index ${j}: expected [key, value] pair, got ${typeof pair}`,
-              );
-            }
-            keys.push(pair[0]);
-            vals.push(pair[1]);
-          }
-          offset += BigInt(m.length);
-        } else if (typeof m === "object" && m !== null) {
-          const entries = Object.entries(m);
-          for (const [k, v] of entries) {
-            keys.push(k);
-            vals.push(v);
-          }
-          offset += BigInt(entries.length);
-        } else {
-          throw new TypeError(
-            `Expected Map, Array, or object for ${type}, got ${m === null ? "null" : typeof m}`,
-          );
-        }
-        offsets[rowIdx++] = offset;
-        return builder;
-      },
-      finish: () =>
-        new MapColumn(
-          type,
-          offsets,
-          this.keyCodec.fromValues(keys),
-          this.valCodec.fromValues(vals),
-        ),
-    };
-    return builder;
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -2078,34 +1935,7 @@ class TupleCodec extends BaseCodec {
   }
 
   builder(size: number): ColumnBuilder {
-    const type = this.type;
-    const builders = this.elements.map((e) => e.codec.builder(size));
-    const builder: ColumnBuilder = {
-      append: (tuple: any) => {
-        if (tuple == null) {
-          for (let i = 0; i < this.elements.length; i++) builders[i].append(undefined);
-          return builder;
-        }
-        if (this.isNamed && typeof tuple !== "object") {
-          throw new TypeError(`Expected object for named tuple ${type}, got ${typeof tuple}`);
-        }
-        if (!this.isNamed && !Array.isArray(tuple)) {
-          throw new TypeError(`Expected array for tuple ${type}, got ${typeof tuple}`);
-        }
-        for (let i = 0; i < this.elements.length; i++) {
-          builders[i].append(this.isNamed ? tuple[this.elements[i].name!] : tuple[i]);
-        }
-        return builder;
-      },
-      finish: () =>
-        new TupleColumn(
-          type,
-          this.elements.map((e) => ({ name: e.name })),
-          builders.map((b) => b.finish()),
-          this.isNamed,
-        ),
-    };
-    return builder;
+    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
