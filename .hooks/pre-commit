@@ -1,0 +1,16 @@
+#!/bin/sh
+
+# Get staged .ts/.js files
+STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|js|mjs)$')
+
+if [ -z "$STAGED" ]; then
+  exit 0
+fi
+
+# Format staged files
+echo "$STAGED" | xargs npx biome format --write
+
+# Re-stage formatted files
+echo "$STAGED" | xargs git add
+
+exit 0

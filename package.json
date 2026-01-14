@@ -36,6 +36,7 @@
     "native"
   ],
   "scripts": {
+    "prepare": "cp .hooks/* .git/hooks/ 2>/dev/null || true",
     "prepublishOnly": "npm run build",
     "build": "npm run build:native && npm run build:native:cjs && npm run build:full && npm run build:full:cjs && npm run build:lz4 && npm run build:lz4:cjs && npm run build:tcp && npm run build:tcp:cjs && npm run build:cli && npm run build:copy-wasm",
     "build:cli": "esbuild tcp_client/cli.ts --bundle --format=esm --outfile=dist/cli.js --platform=node --target=es2022 --external:lz4-napi --external:zstd-napi",
