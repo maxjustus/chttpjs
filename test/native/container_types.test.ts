@@ -225,6 +225,20 @@ describe("Variant", () => {
     assert.deepStrictEqual(decodedRows[1][0], [1, "test"]);
     assert.deepStrictEqual(decodedRows[2][0], [0, []]);
   });
+
+  it("throws on unmatched Variant value type", () => {
+    const columns: ColumnDef[] = [{ name: "v", type: "Variant(String, UInt64)" }];
+    // Symbol doesn't match String or UInt64
+    assert.throws(
+      () => encodeNativeRows(columns, [[Symbol("test")]]),
+      /Cannot match value of type symbol to any variant in String \| UInt64/,
+    );
+    // Function doesn't match either
+    assert.throws(
+      () => encodeNativeRows(columns, [[() => {}]]),
+      /Cannot match value of type function to any variant/,
+    );
+  });
 });
 
 describe("Dynamic", () => {

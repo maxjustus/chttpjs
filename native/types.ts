@@ -599,23 +599,53 @@ export function expandIPv6(str: string): string[] {
 }
 
 export function ipv6ToBytes(ip: string): Uint8Array {
-  const bytes = new Uint8Array(16);
-  let parts = ip.split("::");
-  let left: string[] = [];
-  let right: string[] = [];
-
-  if (parts.length === 2) {
-    left = parts[0] ? parts[0].split(":") : [];
-    right = parts[1] ? parts[1].split(":") : [];
-    const missing = 8 - left.length - right.length;
-    const middle = new Array(missing).fill("0");
-    parts = [...left, ...middle, ...right];
-  } else {
-    parts = ip.split(":");
+  if (ip.length === 0) {
+    throw new TypeError(`Invalid IPv6 address: "${ip}"`);
   }
 
+  const parts = ip.split("::");
+  if (parts.length > 2) {
+    throw new TypeError(`Invalid IPv6 address: "${ip}"`);
+  }
+
+  let groups: string[];
+  if (parts.length === 2) {
+    const left = parts[0] === "" ? [] : parts[0].split(":");
+    const right = parts[1] === "" ? [] : parts[1].split(":");
+
+    for (const g of left) {
+      if (g.length === 0) throw new TypeError(`Invalid IPv6 address: "${ip}"`);
+    }
+    for (const g of right) {
+      if (g.length === 0) throw new TypeError(`Invalid IPv6 address: "${ip}"`);
+    }
+
+    const missing = 8 - (left.length + right.length);
+    // "::" must compress at least one group.
+    if (missing < 1) throw new TypeError(`Invalid IPv6 address: "${ip}"`);
+    groups = [...left, ...new Array(missing).fill("0"), ...right];
+  } else {
+    groups = ip.split(":");
+    if (groups.length !== 8) throw new TypeError(`Invalid IPv6 address: "${ip}"`);
+    for (const g of groups) {
+      if (g.length === 0) throw new TypeError(`Invalid IPv6 address: "${ip}"`);
+    }
+  }
+
+  if (groups.length !== 8) throw new TypeError(`Invalid IPv6 address: "${ip}"`);
+
+  const bytes = new Uint8Array(16);
   for (let i = 0; i < 8; i++) {
-    const val = parseInt(parts[i] || "0", 16);
+    const group = groups[i];
+    if (group.length < 1 || group.length > 4) {
+      throw new TypeError(`Invalid IPv6 address: "${ip}"`);
+    }
+    let val = 0;
+    for (let j = 0; j < group.length; j++) {
+      const nibble = HEX_LUT[group.charCodeAt(j)];
+      if (nibble === 255) throw new TypeError(`Invalid IPv6 address: "${ip}"`);
+      val = (val << 4) | nibble;
+    }
     bytes[i * 2] = (val >> 8) & 0xff;
     bytes[i * 2 + 1] = val & 0xff;
   }

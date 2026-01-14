@@ -149,12 +149,182 @@ function readKindsMany(reader: BufferReader, children: readonly Codec[]): Serial
 const { MS_PER_DAY, MS_PER_SECOND } = Time;
 
 // Coercion helpers for type conversion during insert.
-// TypedArrays handle overflow/clamping automatically, so we only need to convert to the base type.
-const toNumber = (v: unknown): number =>
-  typeof v === "number" ? v : typeof v === "bigint" ? Number(v) : +(v as any);
+// Note: TypedArrays wrap/truncate on overflow; validate ranges to avoid silent corruption.
+// Throws TypeError/RangeError for values that cannot be safely coerced.
+function toNumber(v: unknown): number {
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (typeof v === "bigint") return Number(v);
+  if (v == null) return 0;
+  const n = +(v as any);
+  if (Number.isNaN(n)) {
+    throw new TypeError(`Cannot coerce ${typeof v} "${v}" to number`);
+  }
+  return n;
+}
 
-const toBigInt = (v: unknown): bigint =>
-  typeof v === "bigint" ? v : typeof v === "number" ? BigInt(Math.trunc(v)) : BigInt(v as any);
+function toBigInt(v: unknown): bigint {
+  if (typeof v === "bigint") return v;
+  if (typeof v === "boolean") return v ? 1n : 0n;
+  if (typeof v === "number") return BigInt(Math.trunc(v));
+  if (v == null) return 0n;
+  try {
+    return BigInt(v as any);
+  } catch {
+    throw new TypeError(`Cannot coerce ${typeof v} "${v}" to bigint`);
+  }
+}
+
+const INT8_MIN = -0x80;
+const INT8_MAX = 0x7f;
+const UINT8_MAX = 0xff;
+const INT16_MIN = -0x8000;
+const INT16_MAX = 0x7fff;
+const UINT16_MAX = 0xffff;
+const INT32_MIN = -0x80000000;
+const INT32_MAX = 0x7fffffff;
+const UINT32_MAX = 0xffffffff;
+
+const INT64_MIN = -(1n << 63n);
+const INT64_MAX = (1n << 63n) - 1n;
+const UINT64_MAX = (1n << 64n) - 1n;
+const INT128_MIN = -(1n << 127n);
+const INT128_MAX = (1n << 127n) - 1n;
+const UINT128_MAX = (1n << 128n) - 1n;
+const INT256_MIN = -(1n << 255n);
+const INT256_MAX = (1n << 255n) - 1n;
+const UINT256_MAX = (1n << 256n) - 1n;
+
+function toIntInRange(
+  v: unknown,
+  typeName: string,
+  min: number,
+  max: number,
+): number {
+  const n = toNumber(v);
+  if (!Number.isFinite(n)) {
+    throw new TypeError(`Cannot coerce ${typeof v} "${v}" to ${typeName}`);
+  }
+  if (!Number.isInteger(n)) {
+    throw new TypeError(
+      `Cannot coerce ${typeof v} "${v}" to ${typeName} (expected integer)`,
+    );
+  }
+  if (n < min || n > max) {
+    throw new RangeError(`${typeName} out of range: ${n} not in [${min}, ${max}]`);
+  }
+  return n;
+}
+
+function toBigIntInRange(
+  v: unknown,
+  typeName: string,
+  min: bigint,
+  max: bigint,
+): bigint {
+  const b =
+    typeof v === "number"
+      ? (() => {
+          if (!Number.isFinite(v)) {
+            throw new TypeError(`Cannot coerce number "${v}" to ${typeName}`);
+          }
+          if (!Number.isInteger(v)) {
+            throw new TypeError(`Cannot coerce number "${v}" to ${typeName} (expected integer)`);
+          }
+          if (!Number.isSafeInteger(v)) {
+            throw new RangeError(
+              `${typeName} cannot safely represent number "${v}". Use bigint or string.`,
+            );
+          }
+          return BigInt(v);
+        })()
+      : toBigInt(v);
+
+  if (b < min || b > max) {
+    throw new RangeError(`${typeName} out of range: ${b} not in [${min}, ${max}]`);
+  }
+  return b;
+}
+
+const toUInt8 = (v: unknown) => toIntInRange(v, "UInt8", 0, UINT8_MAX);
+const toInt8 = (v: unknown) => toIntInRange(v, "Int8", INT8_MIN, INT8_MAX);
+const toUInt16 = (v: unknown) => toIntInRange(v, "UInt16", 0, UINT16_MAX);
+const toInt16 = (v: unknown) => toIntInRange(v, "Int16", INT16_MIN, INT16_MAX);
+const toUInt32 = (v: unknown) => toIntInRange(v, "UInt32", 0, UINT32_MAX);
+const toInt32 = (v: unknown) => toIntInRange(v, "Int32", INT32_MIN, INT32_MAX);
+const toUInt64 = (v: unknown) => toBigIntInRange(v, "UInt64", 0n, UINT64_MAX);
+const toInt64 = (v: unknown) => toBigIntInRange(v, "Int64", INT64_MIN, INT64_MAX);
+
+function toBool(v: unknown): number {
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (typeof v === "number") return v !== 0 ? 1 : 0;
+  if (v == null) return 0;
+  if (typeof v === "string") {
+    const lower = v.toLowerCase();
+    if (lower === "true" || lower === "1") return 1;
+    if (lower === "false" || lower === "0" || lower === "") return 0;
+    throw new TypeError(`Cannot coerce string "${v}" to Bool`);
+  }
+  throw new TypeError(`Cannot coerce ${typeof v} to Bool`);
+}
+
+function toValidDate(v: unknown, typeName: string): Date {
+  const d = new Date(v as any);
+  if (Number.isNaN(d.getTime())) {
+    throw new TypeError(`Cannot coerce "${v}" to ${typeName}`);
+  }
+  return d;
+}
+
+const IPV4_REGEX = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+
+function toValidIPv4(v: unknown): string {
+  if (v == null) return "0.0.0.0";
+  const s = String(v);
+  const m = IPV4_REGEX.exec(s);
+  if (!m) {
+    throw new TypeError(`Invalid IPv4 address: "${s}"`);
+  }
+  for (let i = 1; i <= 4; i++) {
+    const octet = parseInt(m[i], 10);
+    if (octet > 255) {
+      throw new TypeError(`Invalid IPv4 address: "${s}" (octet ${octet} > 255)`);
+    }
+  }
+  return s;
+}
+
+function toValidIPv6(v: unknown): string {
+  if (v == null) return "::";
+  return String(v);
+}
+
+const UUID_REGEX = /^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$/;
+
+function toValidUUID(v: unknown): string {
+  if (v == null) return "00000000-0000-0000-0000-000000000000";
+  const s = String(v);
+  if (!UUID_REGEX.test(s)) {
+    throw new TypeError(`Invalid UUID: "${s}"`);
+  }
+  return s;
+}
+
+function toValidDecimal(v: unknown): string {
+  if (v == null) return "0";
+  if (typeof v === "bigint") return String(v);
+  const s = String(v);
+  // Basic validation: optional sign, digits, optional decimal point with digits
+  if (!/^-?\d+(\.\d+)?$/.test(s)) {
+    throw new TypeError(`Invalid Decimal: "${s}"`);
+  }
+  return s;
+}
+
+/** Check if value is an array-like (regular array or TypedArray) */
+function isArrayLike(v: unknown): v is unknown[] | TypedArray {
+  return Array.isArray(v) || (ArrayBuffer.isView(v) && !(v instanceof DataView));
+}
 
 /**
  * Decode groups from reader based on discriminator counts.
@@ -394,7 +564,10 @@ class NumericCodec<T extends TypedArray> extends BaseCodec {
     // Fallback: virtual columns (Nullable, Variant, etc.) - materialize via get()
     const len = col.length;
     const arr = new this.Ctor(len);
-    for (let i = 0; i < len; i++) arr[i] = col.get(i) as any;
+    for (let i = 0; i < len; i++) {
+      const v = col.get(i);
+      arr[i] = (this.converter ? this.converter(v) : v) as any;
+    }
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
@@ -559,7 +732,7 @@ class StringCodec extends BaseCodec {
     const len = col.length;
     const writer = new BufferWriter(sizeHint ?? this.estimateSize(len));
     for (let i = 0; i < len; i++) {
-      writer.writeString(String(col.get(i)));
+      writer.writeString(String(col.get(i) ?? ""));
     }
     return writer.finish();
   }
@@ -598,16 +771,23 @@ class UUIDCodec extends BaseCodec {
     const buf = new Uint8Array(len * UUIDConst.BYTE_SIZE);
 
     for (let i = 0; i < len; i++) {
-      const u = String(col.get(i));
+      const u = toValidUUID(col.get(i));
       const clean = u.replace(/-/g, "");
-      const bytes = new Uint8Array(16);
-      for (let j = 0; j < 16; j++)
-        bytes[j] = parseInt(clean.substring(j * 2, j * 2 + 2), 16);
 
       // CH stores as: [low_64_reversed] [high_64_reversed]
       const off = i * 16;
-      for (let j = 0; j < 8; j++) buf[off + j] = bytes[7 - j];
-      for (let j = 0; j < 8; j++) buf[off + 8 + j] = bytes[15 - j];
+      for (let j = 0; j < 8; j++) {
+        buf[off + j] = parseInt(
+          clean.substring((7 - j) * 2, (7 - j) * 2 + 2),
+          16,
+        );
+      }
+      for (let j = 0; j < 8; j++) {
+        buf[off + 8 + j] = parseInt(
+          clean.substring((15 - j) * 2, (15 - j) * 2 + 2),
+          16,
+        );
+      }
     }
     return buf;
   }
@@ -641,7 +821,7 @@ class UUIDCodec extends BaseCodec {
   }
 
   builder(size: number): ColumnBuilder {
-    return SimpleArrayBuilder(this.type, size, (v) => String(v ?? ""));
+    return SimpleArrayBuilder(this.type, size, toValidUUID);
   }
 
   zeroValue() {
@@ -663,14 +843,25 @@ class FixedStringCodec extends BaseCodec {
 
   encode(col: Column): Uint8Array {
     const count = col.length;
-    const buf = new Uint8Array(count * this.len);
+    const len = this.len;
+    const type = this.type;
+    const buf = new Uint8Array(count * len);
     for (let i = 0; i < count; i++) {
       const v = col.get(i);
       if (v instanceof Uint8Array) {
-        buf.set(v.subarray(0, this.len), i * this.len);
+        if (v.length !== len) {
+          throw new TypeError(`${type} requires ${len} bytes, got ${v.length}`);
+        }
+        buf.set(v, i * len);
+      } else if (typeof v === "string") {
+        const bytes = TEXT_ENCODER.encode(v);
+        if (bytes.length > len) {
+          throw new TypeError(`${type} requires ${len} bytes, got ${bytes.length}`);
+        }
+        buf.set(bytes, i * len);
+      } else if (v == null) {
       } else {
-        const bytes = TEXT_ENCODER.encode(String(v));
-        buf.set(bytes.subarray(0, this.len), i * this.len);
+        throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
       }
     }
     return buf;
@@ -702,14 +893,22 @@ class FixedStringCodec extends BaseCodec {
     const builder: ColumnBuilder = {
       append: (v: unknown) => {
         if (v instanceof Uint8Array) {
+          if (v.length !== len) {
+            throw new TypeError(`${type} requires ${len} bytes, got ${v.length}`);
+          }
           result[offset++] = v;
         } else if (typeof v === "string") {
-          const buf = new Uint8Array(len);
           const encoded = TEXT_ENCODER.encode(v);
-          buf.set(encoded.subarray(0, len));
+          if (encoded.length > len) {
+            throw new TypeError(`${type} requires ${len} bytes, got ${encoded.length}`);
+          }
+          const buf = new Uint8Array(len);
+          buf.set(encoded);
           result[offset++] = buf;
-        } else {
+        } else if (v == null) {
           result[offset++] = new Uint8Array(len);
+        } else {
+          throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
         }
         return builder;
       },
@@ -730,12 +929,25 @@ class BigIntCodec extends BaseCodec {
   readonly type: string;
   private byteSize: 16 | 32;
   private signed: boolean;
+  private min: bigint;
+  private max: bigint;
 
   constructor(type: string, byteSize: 16 | 32, signed: boolean) {
     super();
     this.type = type;
     this.byteSize = byteSize;
     this.signed = signed;
+    if (byteSize === 16) {
+      this.min = signed ? INT128_MIN : 0n;
+      this.max = signed ? INT128_MAX : UINT128_MAX;
+    } else {
+      this.min = signed ? INT256_MIN : 0n;
+      this.max = signed ? INT256_MAX : UINT256_MAX;
+    }
+  }
+
+  private coerce(v: unknown): bigint {
+    return toBigIntInRange(v, this.type, this.min, this.max);
   }
 
   encode(col: Column): Uint8Array {
@@ -744,7 +956,7 @@ class BigIntCodec extends BaseCodec {
     const view = new DataView(buf.buffer);
     const writer = this.byteSize === 16 ? writeBigInt128 : writeBigInt256;
     for (let i = 0; i < len; i++) {
-      writer(view, i * this.byteSize, BigInt(col.get(i) as any), this.signed);
+      writer(view, i * this.byteSize, this.coerce(col.get(i)), this.signed);
     }
     return buf;
   }
@@ -769,7 +981,7 @@ class BigIntCodec extends BaseCodec {
   }
 
   builder(size: number): ColumnBuilder {
-    return SimpleArrayBuilder(this.type, size, (v) => BigInt(v as any));
+    return SimpleArrayBuilder(this.type, size, (v) => this.coerce(v));
   }
 
   zeroValue() {
@@ -784,12 +996,27 @@ class DecimalCodec extends BaseCodec {
   readonly type: string;
   private byteSize: 4 | 8 | 16 | 32;
   private scale: number;
+  private min: bigint;
+  private max: bigint;
 
   constructor(type: string) {
     super();
     this.type = type;
     this.byteSize = decimalByteSize(type);
     this.scale = extractDecimalScale(type);
+    if (this.byteSize === 4) {
+      this.min = BigInt(INT32_MIN);
+      this.max = BigInt(INT32_MAX);
+    } else if (this.byteSize === 8) {
+      this.min = INT64_MIN;
+      this.max = INT64_MAX;
+    } else if (this.byteSize === 16) {
+      this.min = INT128_MIN;
+      this.max = INT128_MAX;
+    } else {
+      this.min = INT256_MIN;
+      this.max = INT256_MAX;
+    }
   }
 
   encode(col: Column): Uint8Array {
@@ -802,10 +1029,14 @@ class DecimalCodec extends BaseCodec {
       let scaled: bigint;
       if (typeof v === "bigint") {
         scaled = v;
-      } else if (typeof v === "string") {
-        scaled = parseDecimalToScaledBigInt(v, this.scale);
       } else {
-        scaled = parseDecimalToScaledBigInt(String(v), this.scale);
+        scaled = parseDecimalToScaledBigInt(toValidDecimal(v), this.scale);
+      }
+
+      if (scaled < this.min || scaled > this.max) {
+        throw new RangeError(
+          `${this.type} out of range: ${scaled} not in [${this.min}, ${this.max}]`,
+        );
       }
 
       const off = i * this.byteSize;
@@ -854,9 +1085,8 @@ class DecimalCodec extends BaseCodec {
     const type = this.type;
     const scale = this.scale;
     return SimpleArrayBuilder(type, size, (v) => {
-      if (typeof v === "string") return v;
       if (typeof v === "bigint") return formatScaledBigInt(v, scale);
-      return String(v);
+      return toValidDecimal(v);
     });
   }
 
@@ -880,18 +1110,49 @@ class DateTime64Codec extends BaseCodec {
   encode(col: Column): Uint8Array {
     const len = col.length;
     const arr = new BigInt64Array(len);
+    const precision = this.precision;
+    const scale = 10n ** BigInt(Math.abs(precision - 3));
     for (let i = 0; i < len; i++) {
       const v = col.get(i);
       if (v instanceof ClickHouseDateTime64) {
-        arr[i] = v.ticks;
+        if (v.precision !== precision) {
+          throw new TypeError(
+            `${this.type} precision mismatch: expected ${precision}, got ${v.precision}`,
+          );
+        }
+        arr[i] = toBigIntInRange(v.ticks, this.type, INT64_MIN, INT64_MAX);
       } else if (typeof v === "bigint") {
-        arr[i] = v;
+        arr[i] = toBigIntInRange(v, this.type, INT64_MIN, INT64_MAX);
       } else if (v instanceof Date) {
-        const ms = BigInt(v.getTime());
-        const scale = 10n ** BigInt(Math.abs(this.precision - 3));
-        arr[i] = this.precision >= 3 ? ms * scale : ms / scale;
+        const msNum = v.getTime();
+        if (!Number.isFinite(msNum)) {
+          throw new TypeError(`Cannot coerce "${v}" to ${this.type}`);
+        }
+        const ms = BigInt(msNum);
+        const ticks = precision >= 3 ? ms * scale : ms / scale;
+        arr[i] = toBigIntInRange(ticks, this.type, INT64_MIN, INT64_MAX);
+      } else if (typeof v === "number") {
+        if (!Number.isFinite(v)) {
+          throw new TypeError(`Cannot coerce number "${v}" to ${this.type}`);
+        }
+        const msNum = Math.trunc(v);
+        if (!Number.isSafeInteger(msNum)) {
+          throw new RangeError(
+            `${this.type} cannot safely represent number "${v}". Use bigint, Date, or string.`,
+          );
+        }
+        const ms = BigInt(msNum);
+        const ticks = precision >= 3 ? ms * scale : ms / scale;
+        arr[i] = toBigIntInRange(ticks, this.type, INT64_MIN, INT64_MAX);
+      } else if (typeof v === "string") {
+        const d = toValidDate(v, this.type);
+        const ms = BigInt(d.getTime());
+        const ticks = precision >= 3 ? ms * scale : ms / scale;
+        arr[i] = toBigIntInRange(ticks, this.type, INT64_MIN, INT64_MAX);
+      } else if (v == null) {
+        arr[i] = 0n;
       } else {
-        arr[i] = BigInt(v as number);
+        throw new TypeError(`Cannot coerce ${typeof v} to ${this.type}`);
       }
     }
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
@@ -917,21 +1178,55 @@ class DateTime64Codec extends BaseCodec {
   builder(size: number): ColumnBuilder {
     const type = this.type;
     const precision = this.precision;
+    const scale = 10n ** BigInt(Math.abs(precision - 3));
     const result: ClickHouseDateTime64[] = new Array(size);
     let offset = 0;
     const builder: ColumnBuilder = {
       append: (v: any) => {
         if (v instanceof ClickHouseDateTime64) {
+          if (v.precision !== precision) {
+            throw new TypeError(
+              `${type} precision mismatch: expected ${precision}, got ${v.precision}`,
+            );
+          }
+          toBigIntInRange(v.ticks, type, INT64_MIN, INT64_MAX);
           result[offset++] = v;
         } else if (v instanceof Date) {
-          const ms = BigInt(v.getTime());
-          const scale = 10n ** BigInt(Math.abs(precision - 3));
+          const msNum = v.getTime();
+          if (!Number.isFinite(msNum)) {
+            throw new TypeError(`Cannot coerce "${v}" to ${type}`);
+          }
+          const ms = BigInt(msNum);
           const ticks = precision >= 3 ? ms * scale : ms / scale;
+          toBigIntInRange(ticks, type, INT64_MIN, INT64_MAX);
           result[offset++] = new ClickHouseDateTime64(ticks, precision);
         } else if (typeof v === "bigint") {
+          toBigIntInRange(v, type, INT64_MIN, INT64_MAX);
           result[offset++] = new ClickHouseDateTime64(v, precision);
-        } else {
+        } else if (typeof v === "number") {
+          if (!Number.isFinite(v)) {
+            throw new TypeError(`Cannot coerce number "${v}" to ${type}`);
+          }
+          const msNum = Math.trunc(v);
+          if (!Number.isSafeInteger(msNum)) {
+            throw new RangeError(
+              `${type} cannot safely represent number "${v}". Use bigint, Date, or string.`,
+            );
+          }
+          const ms = BigInt(msNum);
+          const ticks = precision >= 3 ? ms * scale : ms / scale;
+          toBigIntInRange(ticks, type, INT64_MIN, INT64_MAX);
+          result[offset++] = new ClickHouseDateTime64(ticks, precision);
+        } else if (typeof v === "string") {
+          const d = toValidDate(v, type);
+          const ms = BigInt(d.getTime());
+          const ticks = precision >= 3 ? ms * scale : ms / scale;
+          toBigIntInRange(ticks, type, INT64_MIN, INT64_MAX);
+          result[offset++] = new ClickHouseDateTime64(ticks, precision);
+        } else if (v == null) {
           result[offset++] = new ClickHouseDateTime64(0n, precision);
+        } else {
+          throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
         }
         return builder;
       },
@@ -970,11 +1265,33 @@ class EpochCodec<
   encode(col: Column): Uint8Array {
     const len = col.length;
     const arr = new this.Ctor(len);
+    const type = this.type;
+    const multiplier = this.multiplier;
+    const [minUnits, maxUnits] =
+      type === "Date" ? [0, UINT16_MAX] :
+      type === "DateTime" ? [0, UINT32_MAX] :
+      [INT32_MIN, INT32_MAX];
     for (let i = 0; i < len; i++) {
       const v = col.get(i);
-      arr[i] = Math.floor(
-        new Date(v as any).getTime() / this.multiplier,
-      ) as any;
+      const ms =
+        v instanceof Date ? v.getTime() :
+        typeof v === "number" ? v :
+        typeof v === "string" ? toValidDate(v, type).getTime() :
+        v == null ? 0 :
+        (() => {
+          throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
+        })();
+
+      if (!Number.isFinite(ms)) {
+        throw new TypeError(`Cannot coerce "${v}" to ${type}`);
+      }
+
+      const units = Math.floor(ms / multiplier);
+      if (units < minUnits || units > maxUnits) {
+        throw new RangeError(`${type} out of range: ${v}`);
+      }
+
+      arr[i] = units as any;
     }
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
@@ -1006,8 +1323,12 @@ class EpochCodec<
           result[offset++] = v;
         } else if (typeof v === "number") {
           result[offset++] = new Date(v);
-        } else {
+        } else if (typeof v === "string") {
+          result[offset++] = toValidDate(v, type);
+        } else if (v == null) {
           result[offset++] = new Date(0);
+        } else {
+          throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
         }
         return builder;
       },
@@ -1031,8 +1352,15 @@ class IPv4Codec extends BaseCodec {
     const len = col.length;
     const arr = new Uint32Array(len);
     for (let i = 0; i < len; i++) {
-      const v = String(col.get(i));
-      const parts = v.split(".").map(Number);
+      const v = toValidIPv4(col.get(i));
+      const m = IPV4_REGEX.exec(v);
+      if (!m) throw new TypeError(`Invalid IPv4 address: "${v}"`);
+      const parts = [
+        parseInt(m[1], 10),
+        parseInt(m[2], 10),
+        parseInt(m[3], 10),
+        parseInt(m[4], 10),
+      ];
       arr[i] =
         (parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24)) >>>
         0;
@@ -1060,7 +1388,7 @@ class IPv4Codec extends BaseCodec {
   }
 
   builder(size: number): ColumnBuilder {
-    return SimpleArrayBuilder(this.type, size, (v) => String(v ?? ""));
+    return SimpleArrayBuilder(this.type, size, toValidIPv4);
   }
 
   zeroValue() {
@@ -1078,7 +1406,7 @@ class IPv6Codec extends BaseCodec {
     const len = col.length;
     const result = new Uint8Array(len * IPv6Const.BYTE_SIZE);
     for (let i = 0; i < len; i++) {
-      const v = String(col.get(i));
+      const v = toValidIPv6(col.get(i));
       const bytes = ipv6ToBytes(v);
       result.set(bytes, i * 16);
     }
@@ -1103,7 +1431,7 @@ class IPv6Codec extends BaseCodec {
   }
 
   builder(size: number): ColumnBuilder {
-    return SimpleArrayBuilder(this.type, size, (v) => String(v ?? ""));
+    return SimpleArrayBuilder(this.type, size, toValidIPv6);
   }
 
   zeroValue() {
@@ -1169,6 +1497,13 @@ class ArrayCodec extends BaseCodec {
   fromValues(values: unknown[]): ArrayColumn {
     const offsets = new BigUint64Array(values.length);
 
+    // Validate all values are arrays (regular or TypedArray)
+    for (let i = 0; i < values.length; i++) {
+      if (!isArrayLike(values[i])) {
+        throw new TypeError(`Expected array for ${this.type}, got ${typeof values[i]}`);
+      }
+    }
+
     // Fast path for numeric inner types: build TypedArray directly
     // Use a type guard rather than casting to an internal codec class.
     if (isNumericLikeCodec(this.inner)) {
@@ -1220,7 +1555,10 @@ class ArrayCodec extends BaseCodec {
     let rowIdx = 0;
     const builder: ColumnBuilder = {
       append: (v: unknown) => {
-        const arr = v as unknown[];
+        if (!isArrayLike(v)) {
+          throw new TypeError(`Expected array for ${type}, got ${typeof v}`);
+        }
+        const arr = v as ArrayLike<unknown> & Iterable<unknown>;
         for (const item of arr) allInner.push(item);
         offset += BigInt(arr.length);
         offsets[rowIdx++] = offset;
@@ -1592,11 +1930,13 @@ class MapCodec extends BaseCodec {
         }
         offset += BigInt(m.size);
       } else if (Array.isArray(m)) {
-        for (const pair of m) {
-          if (Array.isArray(pair) && pair.length === 2) {
-            keys.push(pair[0]);
-            vals.push(pair[1]);
+        for (let j = 0; j < m.length; j++) {
+          const pair = m[j];
+          if (!Array.isArray(pair) || pair.length !== 2) {
+            throw new TypeError(`Invalid Map entry at index ${j}: expected [key, value] pair, got ${typeof pair}`);
           }
+          keys.push(pair[0]);
+          vals.push(pair[1]);
         }
         offset += BigInt(m.length);
       } else if (typeof m === "object" && m !== null) {
@@ -1606,6 +1946,8 @@ class MapCodec extends BaseCodec {
           vals.push(v);
         }
         offset += BigInt(entries.length);
+      } else {
+        throw new TypeError(`Expected Map, Array, or object for ${this.type}, got ${m === null ? "null" : typeof m}`);
       }
       offsets[i] = offset;
     }
@@ -1633,11 +1975,13 @@ class MapCodec extends BaseCodec {
           }
           offset += BigInt(m.size);
         } else if (Array.isArray(m)) {
-          for (const pair of m) {
-            if (Array.isArray(pair) && pair.length === 2) {
-              keys.push(pair[0]);
-              vals.push(pair[1]);
+          for (let j = 0; j < m.length; j++) {
+            const pair = m[j];
+            if (!Array.isArray(pair) || pair.length !== 2) {
+              throw new TypeError(`Invalid Map entry at index ${j}: expected [key, value] pair, got ${typeof pair}`);
             }
+            keys.push(pair[0]);
+            vals.push(pair[1]);
           }
           offset += BigInt(m.length);
         } else if (typeof m === "object" && m !== null) {
@@ -1647,6 +1991,8 @@ class MapCodec extends BaseCodec {
             vals.push(v);
           }
           offset += BigInt(entries.length);
+        } else {
+          throw new TypeError(`Expected Map, Array, or object for ${type}, got ${m === null ? "null" : typeof m}`);
         }
         offsets[rowIdx++] = offset;
         return builder;
@@ -1739,6 +2085,20 @@ class TupleCodec extends BaseCodec {
   }
 
   fromValues(values: unknown[]): TupleColumn {
+    // Validate all values have the expected shape
+    for (let i = 0; i < values.length; i++) {
+      const tuple = values[i];
+      if (tuple == null) {
+        throw new TypeError(`Expected tuple for ${this.type}, got ${tuple}`);
+      }
+      if (this.isNamed && typeof tuple !== "object") {
+        throw new TypeError(`Expected object for named tuple ${this.type}, got ${typeof tuple}`);
+      }
+      if (!this.isNamed && !Array.isArray(tuple)) {
+        throw new TypeError(`Expected array for tuple ${this.type}, got ${typeof tuple}`);
+      }
+    }
+
     const columns: Column[] = [];
     for (let ei = 0; ei < this.elements.length; ei++) {
       const elem = this.elements[ei];
@@ -1762,6 +2122,15 @@ class TupleCodec extends BaseCodec {
     const builders = this.elements.map((e) => e.codec.builder(size));
     const builder: ColumnBuilder = {
       append: (tuple: any) => {
+        if (tuple == null) {
+          throw new TypeError(`Expected tuple for ${type}, got ${tuple}`);
+        }
+        if (this.isNamed && typeof tuple !== "object") {
+          throw new TypeError(`Expected object for named tuple ${type}, got ${typeof tuple}`);
+        }
+        if (!this.isNamed && !Array.isArray(tuple)) {
+          throw new TypeError(`Expected array for tuple ${type}, got ${typeof tuple}`);
+        }
         for (let i = 0; i < this.elements.length; i++) {
           builders[i].append(
             this.isNamed ? tuple[this.elements[i].name!] : tuple[i],
@@ -1915,6 +2284,11 @@ class VariantCodec implements Codec {
         typeof v[0] === "number"
       ) {
         const disc = v[0] as number;
+        if (disc < 0 || disc >= this.codecs.length) {
+          throw new TypeError(
+            `Variant discriminator ${disc} out of range [0, ${this.codecs.length - 1}]`,
+          );
+        }
         discriminators[i] = disc;
         variantValues[disc].push(v[1]);
       } else {
@@ -1972,7 +2346,9 @@ class VariantCodec implements Codec {
       )
         return i;
     }
-    return 0; // default to first type
+    throw new TypeError(
+      `Cannot match value of type ${typeof value} to any variant in ${types.join(" | ")}`,
+    );
   }
 
   readKinds(reader: BufferReader): SerializationNode {
@@ -2411,27 +2787,27 @@ function createCodec(type: string): Codec {
 
   switch (type) {
     case "UInt8":
-      return new NumericCodec(type, Uint8Array, toNumber);
+      return new NumericCodec(type, Uint8Array, toUInt8);
     case "Int8":
-      return new NumericCodec(type, Int8Array, toNumber);
+      return new NumericCodec(type, Int8Array, toInt8);
     case "UInt16":
-      return new NumericCodec(type, Uint16Array, toNumber);
+      return new NumericCodec(type, Uint16Array, toUInt16);
     case "Int16":
-      return new NumericCodec(type, Int16Array, toNumber);
+      return new NumericCodec(type, Int16Array, toInt16);
     case "UInt32":
-      return new NumericCodec(type, Uint32Array, toNumber);
+      return new NumericCodec(type, Uint32Array, toUInt32);
     case "Int32":
-      return new NumericCodec(type, Int32Array, toNumber);
+      return new NumericCodec(type, Int32Array, toInt32);
     case "UInt64":
-      return new NumericCodec(type, BigUint64Array, toBigInt);
+      return new NumericCodec(type, BigUint64Array, toUInt64);
     case "Int64":
-      return new NumericCodec(type, BigInt64Array, toBigInt);
+      return new NumericCodec(type, BigInt64Array, toInt64);
     case "Float32":
       return new NumericCodec(type, Float32Array, toNumber);
     case "Float64":
       return new NumericCodec(type, Float64Array, toNumber);
     case "Bool":
-      return new NumericCodec(type, Uint8Array, (v) => (v ? 1 : 0));
+      return new NumericCodec(type, Uint8Array, toBool);
     case "Date":
       return new EpochCodec(type, Uint16Array, MS_PER_DAY);
     case "Date32":

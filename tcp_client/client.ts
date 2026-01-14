@@ -25,6 +25,7 @@ import {
 import { init as initCompression, Method, type MethodCode } from "../compression.ts";
 import type { ClickHouseSettings } from "../settings.ts";
 import { collectable, type CollectableAsyncGenerator } from "../util.ts";
+import { transposeRowObjectsToColumns } from "./row_object_insert.ts";
 
 export type { CollectableAsyncGenerator } from "../util.ts";
 
@@ -330,12 +331,12 @@ export class TcpClient {
     this.log("Handshake: Complete!");
   }
 
-  /** Insert a single RecordBatch. */
-  insert(sql: string, data: RecordBatch, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
-  /** Insert an iterable of RecordBatches. */
-  insert(sql: string, data: Iterable<RecordBatch> | AsyncIterable<RecordBatch>, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
-  /** Insert row objects with auto-coercion using server schema. */
-  insert(sql: string, data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
+	  /** Insert a single RecordBatch. */
+	  insert(sql: string, data: RecordBatch, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
+	  /** Insert an iterable of RecordBatches. */
+	  insert(sql: string, data: Iterable<RecordBatch> | AsyncIterable<RecordBatch>, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
+	  /** Insert row objects with auto-coercion using server schema (must contain all columns, no extras). */
+	  insert(sql: string, data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
   insert(
     sql: string,
     data: RecordBatch | Iterable<RecordBatch | Record<string, unknown>> | AsyncIterable<RecordBatch | Record<string, unknown>>,
@@ -416,14 +417,7 @@ export class TcpClient {
         const numCols = serverSchema.length;
         const codecs = serverSchema.map(c => getCodec(c.type));
 
-        // Transpose row objects to columns
-        const columns: unknown[][] = serverSchema.map(() => new Array(rows.length));
-        for (let r = 0; r < rows.length; r++) {
-          const row = rows[r];
-          for (let c = 0; c < numCols; c++) {
-            columns[c][r] = row[serverSchema[c].name];
-          }
-        }
+        const columns = transposeRowObjectsToColumns(serverSchema, rows);
 
         // Build Column objects via codecs (coercion happens in fromValues)
         const encodedColumns = [];
