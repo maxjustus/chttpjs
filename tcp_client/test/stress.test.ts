@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { describe, test } from "node:test";
-import { batchFromRows, RecordBatch } from "../../native/table.ts";
+import { getCodec } from "../../native/codecs.ts";
+import { batchFromCols, batchFromRows } from "../../native/table.ts";
 import { TcpClient } from "../client.ts";
 import { ClickHouseException } from "../types.ts";
 
@@ -164,10 +165,11 @@ describe("TCP Client Stress Tests", () => {
 
         async function* generateBlocks() {
           for (let i = 0; i < 20; i++) {
-            yield RecordBatch.fromColumnar(
-              [{ name: "id", type: "UInt64" }],
-              [BigInt64Array.from({ length: 1000 }, (_, j) => BigInt(i * 1000 + j))],
-            );
+            yield batchFromCols({
+              id: getCodec("UInt64").fromValues(
+                BigInt64Array.from({ length: 1000 }, (_, j) => BigInt(i * 1000 + j)),
+              ),
+            });
             blocksYielded++;
             if (blocksYielded >= 5) {
               controller.abort();

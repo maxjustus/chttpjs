@@ -18,16 +18,7 @@ import {
   type DeserializerState,
   type SerializationNode,
 } from "./serialization.ts";
-import {
-  batchBuilder,
-  batchFromArrays,
-  batchFromCols,
-  batchFromRows,
-  type MaterializeOptions,
-  RecordBatch,
-  RecordBatchBuilder,
-  type Row,
-} from "./table.ts";
+import { batchFromCols, batchFromRows, type MaterializeOptions, RecordBatch, type Row } from "./table.ts";
 import { type ColumnDef, type DecodeOptions, parseTupleElements, parseTypeList } from "./types.ts";
 
 // Re-export types for public API
@@ -40,27 +31,14 @@ export {
 } from "./types.ts";
 
 // Re-export table helpers / types
-export {
-  type Column,
-  RecordBatch,
-  RecordBatchBuilder,
-  type Row,
-  type MaterializeOptions,
-  EnumColumn,
-};
-export { batchFromArrays, batchFromRows, batchFromCols, batchBuilder };
+export { type Column, RecordBatch, type Row, type MaterializeOptions, EnumColumn };
+export { batchFromRows, batchFromCols };
 export { rows, collectRows };
-export { type ColumnBuilder, getCodec, makeBuilder } from "./codecs.ts";
+export { getCodec } from "./codecs.ts";
 // Re-export constants needed by tcp_client
 export { BlockInfoField, Compression } from "./constants.ts";
 // Re-export IO utilities needed by tcp_client
-export {
-  BufferReader,
-  BufferUnderflowError,
-  BufferWriter,
-  readVarInt64,
-  StreamBuffer,
-} from "./io.ts";
+export { BufferReader, BufferUnderflowError, BufferWriter, readVarInt64, StreamBuffer } from "./io.ts";
 
 export interface Block {
   columns: ColumnDef[];

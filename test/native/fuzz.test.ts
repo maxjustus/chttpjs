@@ -9,19 +9,17 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import {
+  batchFromRows,
   type ColumnDef,
   encodeNative,
-  type RecordBatch,
-  RecordBatchBuilder,
+  RecordBatch,
   streamDecodeNative,
 } from "../../native/index.ts";
 import { decodeBatch, toArrayRows } from "../test_utils.ts";
 
-// Helper to encode rows via RecordBatchBuilder
+// Helper to encode rows via batchFromRows
 function encodeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
-  const builder = new RecordBatchBuilder(columns);
-  for (const row of rows) builder.appendRow(row);
-  return encodeNative(builder.finish());
+  return encodeNative(batchFromRows(columns, rows));
 }
 
 // ============================================================================

@@ -1,7 +1,70 @@
-import { type ColumnBuilder, getCodec, makeBuilder } from "./codecs.ts";
+import {
+  getCodec,
+  toInt8,
+  toInt16,
+  toInt32,
+  toInt64,
+  toNumber,
+  toUInt8,
+  toUInt16,
+  toUInt32,
+  toUInt64,
+} from "./codecs.ts";
 import { type Column, DataColumn } from "./columns.ts";
 import type { Block } from "./index.ts";
+import type { TypedArrayConstructor } from "./io.ts";
 import type { ColumnDef, TypedArray } from "./types.ts";
+
+type NumericConverter = (v: unknown) => number | bigint;
+
+/** Map of numeric ClickHouse types to their TypedArray constructors and converters. */
+const NUMERIC_TYPES: Record<string, { ctor: TypedArrayConstructor<any>; convert: NumericConverter }> = {
+  Int8: { ctor: Int8Array, convert: toInt8 },
+  Int16: { ctor: Int16Array, convert: toInt16 },
+  Int32: { ctor: Int32Array, convert: toInt32 },
+  Int64: { ctor: BigInt64Array, convert: toInt64 },
+  UInt8: { ctor: Uint8Array, convert: toUInt8 },
+  UInt16: { ctor: Uint16Array, convert: toUInt16 },
+  UInt32: { ctor: Uint32Array, convert: toUInt32 },
+  UInt64: { ctor: BigUint64Array, convert: toUInt64 },
+  Float32: { ctor: Float32Array, convert: toNumber },
+  Float64: { ctor: Float64Array, convert: toNumber },
+};
+
+function getNumericTypeInfo(type: string): { ctor: TypedArrayConstructor<any>; convert: NumericConverter } | undefined {
+  return NUMERIC_TYPES[type];
+}
+
+/**
+ * Growing TypedArray for efficient numeric accumulation.
+ * Doubles capacity when full, returns trimmed subarray at finish.
+ * Coerces values using the provided converter function.
+ */
+class GrowingTypedArray<T extends TypedArray> {
+  private arr: T;
+  private offset = 0;
+  private Ctor: TypedArrayConstructor<T>;
+  private convert: NumericConverter;
+
+  constructor(Ctor: TypedArrayConstructor<T>, convert: NumericConverter, initialCapacity = 1024) {
+    this.Ctor = Ctor;
+    this.convert = convert;
+    this.arr = new Ctor(initialCapacity) as T;
+  }
+
+  push(value: unknown): void {
+    if (this.offset >= this.arr.length) {
+      const newArr = new this.Ctor(this.arr.length * 2) as T;
+      (newArr as any).set(this.arr);
+      this.arr = newArr;
+    }
+    (this.arr as any)[this.offset++] = this.convert(value);
+  }
+
+  finish(): T {
+    return this.arr.subarray(0, this.offset) as T;
+  }
+}
 
 /** Options for materializing row data. */
 export interface MaterializeOptions {
@@ -52,27 +115,6 @@ export class RecordBatch implements Iterable<Row> {
 
   static from(block: Block): RecordBatch {
     return new RecordBatch(block);
-  }
-
-  /**
-   * Create a RecordBatch from columnar data.
-   * Accepts TypedArrays, plain arrays, or Column objects.
-   */
-  static fromColumnar(
-    columns: ColumnDef[],
-    columnData: (unknown[] | TypedArray | Column)[],
-  ): RecordBatch {
-    const rowCount = columnData[0]?.length ?? 0;
-    const cols: Column[] = columnData.map((data, i) => {
-      // Already a Column - use as-is
-      if (data && typeof (data as any).get === "function") return data as Column;
-      // TypedArray - wrap in DataColumn with type from schema
-      if (ArrayBuffer.isView(data) && !(data instanceof DataView))
-        return new DataColumn(columns[i].type, data as TypedArray);
-      // Array - use codec.fromValues
-      return getCodec(columns[i].type).fromValues(data as unknown[]);
-    });
-    return new RecordBatch({ columns, columnData: cols, rowCount });
   }
 
   get length(): number {
@@ -201,24 +243,28 @@ function createRowProxy(batch: RecordBatch, rowIndex: number, options?: Material
  */
 export class RecordBatchBuilder {
   private schema: ColumnDef[];
-  private builders: ColumnBuilder[];
+  private accumulators: (unknown[] | GrowingTypedArray<any>)[];
   private _rowCount: number = 0;
   private finished: boolean = false;
 
-  constructor(schema: ColumnDef[]) {
+  constructor(schema: ColumnDef[], expectedRows?: number) {
     this.schema = schema;
-    this.builders = schema.map((col) => makeBuilder(col.type));
+    const initialCapacity = expectedRows ?? 1024;
+    this.accumulators = schema.map((col) => {
+      const info = getNumericTypeInfo(col.type);
+      return info ? new GrowingTypedArray(info.ctor, info.convert, initialCapacity) : [];
+    });
   }
 
   get rowCount(): number {
     return this._rowCount;
   }
 
-  /** Append a row (values in column order). */
+  /** Append a row (values in column order). Coerces values to correct types. */
   appendRow(values: unknown[]): this {
     if (values.length !== this.schema.length) throw new Error("Row length mismatch");
     for (let i = 0; i < values.length; i++) {
-      this.builders[i].append(values[i]);
+      this.accumulators[i].push(values[i]);
     }
     this._rowCount++;
     return this;
@@ -228,71 +274,77 @@ export class RecordBatchBuilder {
   finish(): RecordBatch {
     if (this.finished) throw new Error("Builder already finished");
     this.finished = true;
+    const columnData = this.accumulators.map((acc, i) => {
+      if (acc instanceof GrowingTypedArray) {
+        return new DataColumn(this.schema[i].type, acc.finish());
+      }
+      return getCodec(this.schema[i].type).fromValues(acc);
+    });
     return new RecordBatch({
       columns: this.schema,
-      columnData: this.builders.map((b) => b.finish()),
+      columnData,
       rowCount: this._rowCount,
     });
   }
 }
 
 /**
- * Create a RecordBatch from columnar data keyed by column name.
- *
- * @param schema - Column definitions (name and type)
- * @param data - Object with column names as keys, arrays/TypedArrays as values
+ * Create a RecordBatch from row data.
+ * Accepts arrays, sync iterables/generators, or async iterables/generators.
+ * Returns Promise<RecordBatch> for async iterables.
  *
  * @example
- * const batch = batchFromArrays(
- *   [{ name: 'id', type: 'UInt32' }, { name: 'name', type: 'String' }],
- *   { id: new Uint32Array([1, 2, 3]), name: ['alice', 'bob', 'charlie'] }
- * );
+ * // From array
+ * batchFromRows(schema, [[1, "a"], [2, "b"]]);
+ *
+ * // From generator
+ * batchFromRows(schema, function*() { yield [1, "a"]; }());
+ *
+ * // From async generator
+ * await batchFromRows(schema, async function*() { yield [1, "a"]; }());
  */
-export function batchFromArrays(
+export function batchFromRows(
   schema: ColumnDef[],
-  data: Record<string, unknown[] | TypedArray | Column>,
-): RecordBatch {
-  const columnData = schema.map((col) => data[col.name]);
-  return RecordBatch.fromColumnar(schema, columnData);
-}
-
-/**
- * Create a RecordBatch from row arrays.
- *
- * @param schema - Column definitions (name and type)
- * @param rows - Array of rows, each row is an array of values in schema order
- *
- * @example
- * const batch = batchFromRows(
- *   [{ name: 'id', type: 'UInt32' }, { name: 'name', type: 'String' }],
- *   [[1, 'alice'], [2, 'bob'], [3, 'charlie']]
- * );
- */
-export function batchFromRows(schema: ColumnDef[], rows: unknown[][]): RecordBatch {
-  // Transpose rows to columns
-  const numCols = schema.length;
-  const columns: unknown[][] = schema.map(() => new Array(rows.length));
-  for (let r = 0; r < rows.length; r++) {
-    const row = rows[r];
-    for (let c = 0; c < numCols; c++) {
-      columns[c][r] = row[c];
-    }
+  rows: unknown[][] | Iterable<unknown[]>,
+  expectedRows?: number,
+): RecordBatch;
+export function batchFromRows(
+  schema: ColumnDef[],
+  rows: AsyncIterable<unknown[]>,
+  expectedRows?: number,
+): Promise<RecordBatch>;
+export function batchFromRows(
+  schema: ColumnDef[],
+  rows: unknown[][] | Iterable<unknown[]> | AsyncIterable<unknown[]>,
+  expectedRows?: number,
+): RecordBatch | Promise<RecordBatch> {
+  // Detect async iterable
+  if (typeof (rows as any)[Symbol.asyncIterator] === "function") {
+    return (async () => {
+      const builder = new RecordBatchBuilder(schema, expectedRows);
+      for await (const row of rows as AsyncIterable<unknown[]>) {
+        builder.appendRow(row);
+      }
+      return builder.finish();
+    })();
   }
-  // Use codec.fromValues for each column
-  const columnData = columns.map((arr, i) => getCodec(schema[i].type).fromValues(arr));
-  return new RecordBatch({ columns: schema, columnData, rowCount: rows.length });
+  // Sync path: array or iterable
+  const builder = new RecordBatchBuilder(schema, expectedRows);
+  for (const row of rows as Iterable<unknown[]>) {
+    builder.appendRow(row);
+  }
+  return builder.finish();
 }
 
 /**
  * Create a RecordBatch from pre-built Column objects.
- * Schema is derived from the columns themselves (each Column has a type property).
- *
- * @param columns - Object with column names as keys, Column objects as values
+ * Schema is inferred from the columns.
  *
  * @example
- * const idCol = makeBuilder('UInt32').append(1).append(2).finish();
- * const nameCol = makeBuilder('String').append('alice').append('bob').finish();
- * const batch = batchFromCols({ id: idCol, name: nameCol });
+ * batchFromCols({
+ *   id: getCodec("UInt32").fromValues([1, 2, 3]),
+ *   name: getCodec("String").fromValues(["a", "b", "c"]),
+ * });
  */
 export function batchFromCols(columns: Record<string, Column>): RecordBatch {
   const names = Object.keys(columns);
@@ -300,18 +352,4 @@ export function batchFromCols(columns: Record<string, Column>): RecordBatch {
   const columnData = names.map((name) => columns[name]);
   const rowCount = columnData[0]?.length ?? 0;
   return new RecordBatch({ columns: schema, columnData, rowCount });
-}
-
-/**
- * Create a RecordBatchBuilder for incremental row construction.
- *
- * @param schema - Column definitions (name and type)
- *
- * @example
- * const builder = batchBuilder([{ name: 'id', type: 'UInt32' }]);
- * builder.appendRow([1]).appendRow([2]);
- * const batch = builder.finish();
- */
-export function batchBuilder(schema: ColumnDef[]): RecordBatchBuilder {
-  return new RecordBatchBuilder(schema);
 }

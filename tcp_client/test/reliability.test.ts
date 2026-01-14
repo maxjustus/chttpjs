@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { after, before, describe, test } from "node:test";
-import { RecordBatch } from "../../native/table.ts";
+import { batchFromCols } from "../../native/table.ts";
+import { getCodec } from "../../native/codecs.ts";
 import { startClickHouse, stopClickHouse } from "../../test/setup.ts";
 import { TcpClient } from "../client.ts";
 import { ClickHouseException } from "../types.ts";
@@ -182,10 +183,9 @@ describe("TCP Client Reliability", () => {
       // Create an async generator that yields tables slowly
       async function* slowTables() {
         for (let i = 0; i < 100; i++) {
-          yield RecordBatch.fromColumnar(
-            [{ name: "x", type: "UInt64" }],
-            [BigInt64Array.from([BigInt(i)])],
-          );
+          yield batchFromCols({
+            x: getCodec("UInt64").fromValues(BigInt64Array.from([BigInt(i)])),
+          });
           await new Promise((r) => setTimeout(r, 10));
         }
       }
@@ -221,10 +221,9 @@ describe("TCP Client Reliability", () => {
       controller.abort();
 
       try {
-        const table = RecordBatch.fromColumnar(
-          [{ name: "x", type: "UInt64" }],
-          [BigInt64Array.from([1n, 2n, 3n])],
-        );
+        const table = batchFromCols({
+          x: getCodec("UInt64").fromValues(BigInt64Array.from([1n, 2n, 3n])),
+        });
         for await (const _ of client.insert("INSERT INTO system.numbers FORMAT Native", table, {
           signal: controller.signal,
         })) {

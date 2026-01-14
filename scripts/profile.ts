@@ -8,15 +8,25 @@
 
 import { parseArgs } from "node:util";
 import {
+  batchFromCols,
   batchFromRows,
   type ColumnDef,
   encodeNative,
+  getCodec,
   RecordBatch,
   streamDecodeNative,
 } from "../native/index.ts";
 
 function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
   return encodeNative(batchFromRows(columns, rows));
+}
+
+function buildColumnar(columns: ColumnDef[], columnarData: unknown[][]): RecordBatch {
+  const cols: Record<string, ReturnType<ReturnType<typeof getCodec>["fromValues"]>> = {};
+  for (let i = 0; i < columns.length; i++) {
+    cols[columns[i].name] = getCodec(columns[i].type).fromValues(columnarData[i] as unknown[]);
+  }
+  return batchFromCols(cols);
 }
 
 async function* toAsync<T>(iter: Iterable<T>): AsyncIterable<T> {
@@ -376,7 +386,7 @@ async function main() {
   const run = async () => {
     if (format === "native") {
       if (operation === "encode") {
-        if (columnar) encodeNative(RecordBatch.fromColumnar(columns, columnarData));
+        if (columnar) encodeNative(buildColumnar(columns, columnarData));
         else encodeNativeRows(columns, rows);
       } else await Array.fromAsync(streamDecodeNative(toAsync([encNative])));
     } else {

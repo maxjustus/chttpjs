@@ -21,8 +21,7 @@ export {
   streamDecodeNative,
   streamEncodeNative,
 } from "@maxjustus/chttp/native";
-
-import { StreamBuffer } from "@maxjustus/chttp/native";
+import { StreamBuffer } from "./native/io.ts";
 import { type CollectableAsyncGenerator, collectable } from "./util.ts";
 
 export type { CollectableAsyncGenerator } from "./util.ts";

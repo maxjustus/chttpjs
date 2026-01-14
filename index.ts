@@ -1,6 +1,4 @@
 export {
-  batchBuilder,
-  batchFromArrays,
   batchFromCols,
   batchFromRows,
   ClickHouseDateTime64,
@@ -8,9 +6,8 @@ export {
   collectRows,
   type DecodeResult,
   encodeNative,
-  makeBuilder,
+  getCodec,
   RecordBatch,
-  RecordBatchBuilder,
   rows,
   streamDecodeNative,
   streamEncodeNative,

@@ -186,11 +186,9 @@ import {
   streamDecodeNative,
   rows,
   collectRows,
-  batchFromArrays,
   batchFromRows,
   batchFromCols,
-  batchBuilder,
-  makeBuilder,
+  getCodec,
 } from "@maxjustus/chttp";
 
 const schema = [
@@ -198,25 +196,26 @@ const schema = [
   { name: "name", type: "String" },
 ];
 
-// From columnar data (named columns)
-const batch = batchFromArrays(schema, {
-  id: new Uint32Array([1, 2, 3]),
-  name: ["alice", "bob", "charlie"],
-});
-
 // From row arrays
-const batch2 = batchFromRows(schema, [
+const batch = batchFromRows(schema, [
   [1, "alice"],
   [2, "bob"],
   [3, "charlie"],
 ]);
 
-// Row-by-row builder
-const builder = batchBuilder(schema);
-builder.appendRow([1, "alice"]);
-builder.appendRow([2, "bob"]);
-builder.appendRow([3, "charlie"]);
-const batch3 = builder.finish();
+// From pre-built columns (zero-copy for TypedArrays)
+const batch2 = batchFromCols({
+  id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])),
+  name: getCodec("String").fromValues(["alice", "bob", "charlie"]),
+});
+
+// From generators (streaming row construction)
+function* generateRows() {
+  yield [1, "alice"];
+  yield [2, "bob"];
+  yield [3, "charlie"];
+}
+const batch3 = batchFromRows(schema, generateRows());
 
 // Encode and insert
 await insert(
@@ -249,17 +248,13 @@ for await (const batch of streamDecodeNative(
 }
 ```
 
-### Column Builders
+### Building Columns from Values
 
-Build columns independently with `makeBuilder`:
+Build columns independently with `getCodec().fromValues()`:
 
 ```ts
-const idCol = makeBuilder("UInt32").append(1).append(2).append(3).finish();
-const nameCol = makeBuilder("String")
-  .append("alice")
-  .append("bob")
-  .append("charlie")
-  .finish();
+const idCol = getCodec("UInt32").fromValues([1, 2, 3]);
+const nameCol = getCodec("String").fromValues(["alice", "bob", "charlie"]);
 
 // Columns carry their type - schema is derived automatically
 const batch = batchFromCols({ id: idCol, name: nameCol });
@@ -270,100 +265,62 @@ const batch = batchFromCols({ id: idCol, name: nameCol });
 
 ```ts
 // Array(Int32)
-batchFromArrays([{ name: "tags", type: "Array(Int32)" }], {
-  tags: [[1, 2], [3, 4, 5], [6]],
+batchFromCols({
+  tags: getCodec("Array(Int32)").fromValues([[1, 2], [3, 4, 5], [6]]),
 });
 
 // Tuple(Float64, Float64) - positional
-batchFromArrays([{ name: "point", type: "Tuple(Float64, Float64)" }], {
-  point: [
-    [1.0, 2.0],
-    [3.0, 4.0],
-  ],
+batchFromCols({
+  point: getCodec("Tuple(Float64, Float64)").fromValues([[1.0, 2.0], [3.0, 4.0]]),
 });
 
 // Tuple(x Float64, y Float64) - named tuples use objects
-batchFromArrays([{ name: "point", type: "Tuple(x Float64, y Float64)" }], {
-  point: [
+batchFromCols({
+  point: getCodec("Tuple(x Float64, y Float64)").fromValues([
     { x: 1.0, y: 2.0 },
     { x: 3.0, y: 4.0 },
-  ],
+  ]),
 });
 
 // Map(String, Int32)
-batchFromArrays([{ name: "meta", type: "Map(String, Int32)" }], {
-  meta: [{ a: 1, b: 2 }, new Map([["c", 3]])],
+batchFromCols({
+  meta: getCodec("Map(String, Int32)").fromValues([{ a: 1, b: 2 }, new Map([["c", 3]])]),
 });
 
 // Nullable(String)
-batchFromArrays([{ name: "note", type: "Nullable(String)" }], {
-  note: ["hello", null, "world"],
+batchFromCols({
+  note: getCodec("Nullable(String)").fromValues(["hello", null, "world"]),
 });
 
 // Variant(String, Int64, Bool) - type inferred from values
-batchFromArrays([{ name: "val", type: "Variant(String, Int64, Bool)" }], {
-  val: ["hello", 42n, true, null],
+batchFromCols({
+  val: getCodec("Variant(String, Int64, Bool)").fromValues(["hello", 42n, true, null]),
 });
 
 // Variant with explicit discriminators (for ambiguous cases)
-batchFromArrays(
-  [{ name: "val", type: "Variant(String, Int64, Bool)" }],
-  { val: [[0, "hello"], [1, 42n], [2, true], null] }, // [discriminator, value]
-);
+batchFromCols({
+  val: getCodec("Variant(String, Int64, Bool)").fromValues([
+    [0, "hello"], [1, 42n], [2, true], null
+  ]),
+});
 
 // Dynamic - types inferred automatically
-batchFromArrays([{ name: "dyn", type: "Dynamic" }], {
-  dyn: ["hello", 42, true, [1, 2, 3], null],
+batchFromCols({
+  dyn: getCodec("Dynamic").fromValues(["hello", 42, true, [1, 2, 3], null]),
 });
 
 // JSON - plain objects
-batchFromArrays([{ name: "data", type: "JSON" }], {
-  data: [
-    { a: 1, b: "x" },
-    { a: 2, c: true },
-  ],
+batchFromCols({
+  data: getCodec("JSON").fromValues([{ a: 1, b: "x" }, { a: 2, c: true }]),
 });
-
-// Building complex columns
-const pointCol = makeBuilder("Tuple(Float64, Float64)")
-  .append([1.0, 2.0])
-  .append([3.0, 4.0])
-  .finish();
 ```
 
-### Streaming
+### Streaming Insert
 
 ```ts
-import {
-  query,
-  streamEncodeNative,
-  streamDecodeNative,
-  rows,
-  batchFromArrays,
-} from "@maxjustus/chttp";
-
-// Streaming decode - rows as objects (lazy)
-for await (const row of rows(
-  streamDecodeNative(query("SELECT * FROM t FORMAT Native", "session", config)),
-)) {
-  console.log(row.id, row.name);
-}
-
-// Or work with RecordBatch blocks directly
-for await (const batch of streamDecodeNative(
-  query("SELECT * FROM t FORMAT Native", "session", config),
-)) {
-  // Iterate rows from a RecordBatch
-  for (const row of batch) {
-    console.log(row.id, row.name);
-  }
-}
+import { insert, streamEncodeNative, batchFromCols, getCodec } from "@maxjustus/chttp";
 
 async function* generateBatches() {
-  const schema = [
-    { name: "id", type: "UInt32" },
-    { name: "value", type: "Float64" },
-  ];
   const batchSize = 10000;
   for (let i = 0; i < 100; i++) {
     const ids = new Uint32Array(batchSize);
@@ -372,7 +329,10 @@ async function* generateBatches() {
       ids[j] = i * batchSize + j;
       values[j] = Math.random();
     }
-    yield batchFromArrays(schema, { id: ids, value: values });
+    yield batchFromCols({
+      id: getCodec("UInt32").fromValues(ids),
+      value: getCodec("Float64").fromValues(values),
+    });
   }
 }
 
@@ -669,12 +629,12 @@ await using client = await TcpClient.connect(options);
 Send data as temporary in-memory tables available during query execution:
 
 ```ts
-import { batchFromArrays } from "@maxjustus/chttp";
+import { batchFromCols, getCodec } from "@maxjustus/chttp";
 
-const users = batchFromArrays(
-  [{ name: "id", type: "UInt32" }, { name: "name", type: "String" }],
-  { id: new Uint32Array([1, 2, 3]), name: ["Alice", "Bob", "Charlie"] }
-);
+const users = batchFromCols({
+  id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])),
+  name: getCodec("String").fromValues(["Alice", "Bob", "Charlie"]),
+});
 
 for await (const packet of client.query(
   "SELECT * FROM users WHERE id > 1",
@@ -688,10 +648,10 @@ for await (const packet of client.query(
 }
 
 // Multiple tables for JOINs
-const orders = batchFromArrays(
-  [{ name: "user_id", type: "UInt32" }, { name: "amount", type: "Float64" }],
-  { user_id: new Uint32Array([1, 2, 1]), amount: new Float64Array([10.5, 20.0, 15.5]) }
-);
+const orders = batchFromCols({
+  user_id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 1])),
+  amount: getCodec("Float64").fromValues(new Float64Array([10.5, 20.0, 15.5])),
+});
 
 client.query(
   "SELECT u.name, sum(o.amount) FROM users u JOIN orders o ON u.id = o.user_id GROUP BY u.name",
@@ -701,7 +661,9 @@ client.query(
 // Stream large external tables with async generators
 async function* generateBatches() {
   for (let i = 0; i < 100; i++) {
-    yield batchFromArrays(schema, { id: new Uint32Array([i]) });
+    yield batchFromCols({
+      id: getCodec("UInt32").fromValues(new Uint32Array([i])),
+    });
   }
 }
 client.query("SELECT count() FROM data", { externalTables: { data: generateBatches() } });
@@ -712,13 +674,13 @@ client.query("SELECT count() FROM data", { externalTables: { data: generateBatch
 Send temporary tables via multipart/form-data. Schema must be specified explicitly.
 
 ```ts
-import { query, collectText, encodeNative, batchFromArrays } from "@maxjustus/chttp";
+import { query, collectText, encodeNative, batchFromCols, getCodec } from "@maxjustus/chttp";
 
 // Native format (recommended - compact binary encoding)
-const batch = batchFromArrays(
-  [{ name: "id", type: "UInt32" }, { name: "name", type: "String" }],
-  { id: new Uint32Array([1, 2, 3]), name: ["Alice", "Bob", "Charlie"] }
-);
+const batch = batchFromCols({
+  id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])),
+  name: getCodec("String").fromValues(["Alice", "Bob", "Charlie"]),
+});
 
 const result = await collectText(query(
   "SELECT * FROM mydata ORDER BY id FORMAT JSON",
@@ -857,3 +819,34 @@ make fuzz-tcp  # TCP fuzz tests (FUZZ_ITERATIONS=10 FUZZ_ROWS=20000)
 ```
 
 Requires Node.js 24+ (uses `--experimental-strip-types` for direct TS execution).
+
+## CLI
+
+Run queries directly from the command line via the bundled TCP client:
+
+```bash
+# Single query (outputs NDJSON packets)
+npx @maxjustus/chttp 'SELECT version()'
+bunx @maxjustus/chttp 'SELECT 1 + 1'
+
+# Interactive REPL with history
+npx @maxjustus/chttp
+
+# Deno (with Node compatibility)
+deno run -A npm:@maxjustus/chttp 'SELECT now()'
+```
+
+Configure via environment variables:
+
+```bash
+CH_HOST=clickhouse.example.com CH_PORT=9000 npx @maxjustus/chttp 'SELECT 1'
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| CH_HOST | localhost | ClickHouse host |
+| CH_PORT | 9000 | TCP native port |
+| CH_USER | default | Username |
+| CH_PASSWORD | "" | Password |
+
+The REPL supports `\load file.jsonl INTO table` for bulk inserts from NDJSON files.

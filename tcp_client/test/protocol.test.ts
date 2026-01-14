@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { describe, test } from "node:test";
-import { RecordBatch } from "../../native/table.ts";
+import { batchFromCols } from "../../native/table.ts";
+import { getCodec } from "../../native/codecs.ts";
 import { TcpClient } from "../client.ts";
 
 describe("TCP Client Protocol Features", () => {
@@ -81,13 +82,10 @@ describe("TCP Client Protocol Features", () => {
       const tableName = `test_insert_lz4_${Date.now()}`;
       await client.query(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
 
-      const table = RecordBatch.fromColumnar(
-        [
-          { name: "id", type: "UInt32" },
-          { name: "val", type: "String" },
-        ],
-        [new Uint32Array([1, 2, 3]), ["a", "b", "c"]],
-      );
+      const table = batchFromCols({
+        id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])),
+        val: getCodec("String").fromValues(["a", "b", "c"]),
+      });
       for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, table)) {
       }
 
@@ -110,13 +108,10 @@ describe("TCP Client Protocol Features", () => {
       const tableName = `test_insert_zstd_${Date.now()}`;
       await client.query(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
 
-      const table = RecordBatch.fromColumnar(
-        [
-          { name: "id", type: "UInt32" },
-          { name: "val", type: "String" },
-        ],
-        [new Uint32Array([1, 2, 3]), ["a", "b", "c"]],
-      );
+      const table = batchFromCols({
+        id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])),
+        val: getCodec("String").fromValues(["a", "b", "c"]),
+      });
       for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, table)) {
       }
 

@@ -12,25 +12,6 @@ function isNumericLikeCodec(codec: Codec): codec is NumericLikeCodec {
   return typeof (codec as any)?.Ctor === "function";
 }
 
-/**
- * Shared helper for codecs whose builder just collects values then finalizes.
- *
- * This is intentionally simple and allocation-friendly (packed array) and keeps
- * builder implementations consistent across codecs.
- */
-function CollectingBuilder(size: number, finish: (values: unknown[]) => Column): ColumnBuilder {
-  const values = new Array(size);
-  let offset = 0;
-  const builder: ColumnBuilder = {
-    append: (v: unknown) => {
-      values[offset++] = v;
-      return builder;
-    },
-    finish: () => finish(values),
-  };
-  return builder;
-}
-
 import {
   ArrayColumn,
   type Column,
@@ -138,7 +119,7 @@ const { MS_PER_DAY, MS_PER_SECOND } = Time;
 // Coercion helpers for type conversion during insert.
 // Note: TypedArrays wrap/truncate on overflow; validate ranges to avoid silent corruption.
 // Throws TypeError/RangeError for values that cannot be safely coerced.
-function toNumber(v: unknown): number {
+export function toNumber(v: unknown): number {
   if (typeof v === "number") return v;
   if (typeof v === "boolean") return v ? 1 : 0;
   if (typeof v === "bigint") return Number(v);
@@ -190,7 +171,7 @@ function coerceToString(v: unknown): string {
   }
 }
 
-function toBigInt(v: unknown): bigint {
+export function toBigInt(v: unknown): bigint {
   if (typeof v === "bigint") return v;
   if (typeof v === "boolean") return v ? 1n : 0n;
   if (typeof v === "number") return BigInt(Math.trunc(v));
@@ -261,14 +242,14 @@ function toBigIntInRange(v: unknown, typeName: string, min: bigint, max: bigint)
   return b;
 }
 
-const toUInt8 = (v: unknown) => toIntInRange(v, "UInt8", 0, UINT8_MAX);
-const toInt8 = (v: unknown) => toIntInRange(v, "Int8", INT8_MIN, INT8_MAX);
-const toUInt16 = (v: unknown) => toIntInRange(v, "UInt16", 0, UINT16_MAX);
-const toInt16 = (v: unknown) => toIntInRange(v, "Int16", INT16_MIN, INT16_MAX);
-const toUInt32 = (v: unknown) => toIntInRange(v, "UInt32", 0, UINT32_MAX);
-const toInt32 = (v: unknown) => toIntInRange(v, "Int32", INT32_MIN, INT32_MAX);
-const toUInt64 = (v: unknown) => toBigIntInRange(v, "UInt64", 0n, UINT64_MAX);
-const toInt64 = (v: unknown) => toBigIntInRange(v, "Int64", INT64_MIN, INT64_MAX);
+export const toUInt8 = (v: unknown) => toIntInRange(v, "UInt8", 0, UINT8_MAX);
+export const toInt8 = (v: unknown) => toIntInRange(v, "Int8", INT8_MIN, INT8_MAX);
+export const toUInt16 = (v: unknown) => toIntInRange(v, "UInt16", 0, UINT16_MAX);
+export const toInt16 = (v: unknown) => toIntInRange(v, "Int16", INT16_MIN, INT16_MAX);
+export const toUInt32 = (v: unknown) => toIntInRange(v, "UInt32", 0, UINT32_MAX);
+export const toInt32 = (v: unknown) => toIntInRange(v, "Int32", INT32_MIN, INT32_MAX);
+export const toUInt64 = (v: unknown) => toBigIntInRange(v, "UInt64", 0n, UINT64_MAX);
+export const toInt64 = (v: unknown) => toBigIntInRange(v, "Int64", INT64_MIN, INT64_MAX);
 
 function toBool(v: unknown): number {
   if (typeof v === "boolean") return v ? 1 : 0;
@@ -360,51 +341,12 @@ function decodeGroups(
   return groups;
 }
 
-export interface ColumnBuilder {
-  append(value: unknown): ColumnBuilder;
-  finish(): Column;
-}
-
-/**
- * A column builder that accumulates values and produces a Column at finish().
- * Chainable append returns self.
- */
-export class ColumnBuilderImpl implements ColumnBuilder {
-  private values: unknown[] = [];
-  private codec: Codec;
-
-  constructor(type: string) {
-    this.codec = getCodec(type);
-  }
-
-  /** Append a value. Returns self for chaining. */
-  append(value: unknown): this {
-    this.values.push(value);
-    return this;
-  }
-
-  /** Finalize and return immutable Column. */
-  finish(): Column {
-    return this.codec.fromValues(this.values);
-  }
-}
-
-/**
- * Create a column builder for the given ClickHouse type.
- *
- * @param type - ClickHouse type string (e.g., "UInt32", "Array(String)")
- */
-export function makeBuilder(type: string): ColumnBuilder {
-  return new ColumnBuilderImpl(type);
-}
-
 export interface Codec {
   /** ClickHouse type string this codec handles */
   readonly type: string;
   encode(col: Column, sizeHint?: number): Uint8Array;
   decode(reader: BufferReader, rows: number, state: DeserializerState): Column;
-  fromValues(values: unknown[]): Column;
-  builder(size: number): ColumnBuilder;
+  fromValues(values: unknown[] | TypedArray): Column;
   zeroValue(): unknown;
   estimateSize(rows: number): number;
   writePrefix?(writer: BufferWriter, col: Column): void;
@@ -419,8 +361,7 @@ export interface Codec {
 export abstract class BaseCodec implements Codec {
   abstract readonly type: string;
   abstract encode(col: Column, sizeHint?: number): Uint8Array;
-  abstract fromValues(values: unknown[]): Column;
-  abstract builder(size: number): ColumnBuilder;
+  abstract fromValues(values: unknown[] | TypedArray): Column;
   abstract zeroValue(): unknown;
   abstract estimateSize(rows: number): number;
   abstract decodeDense(reader: BufferReader, rows: number, state: DeserializerState): Column;
@@ -583,28 +524,18 @@ class NumericCodec<T extends TypedArray> extends BaseCodec {
     return new DataColumn(this.type, reader.readTypedArray(this.Ctor, rows));
   }
 
-  fromValues(values: unknown[]): DataColumn<T> {
+  fromValues(values: unknown[] | TypedArray): DataColumn<T> {
+    // Zero-copy if already the correct TypedArray type
+    if (values instanceof this.Ctor) {
+      return new DataColumn(this.type, values);
+    }
     const arr = new this.Ctor(values.length);
     if (this.converter) {
-      for (let i = 0; i < values.length; i++) arr[i] = this.converter(values[i]) as any;
+      for (let i = 0; i < values.length; i++) arr[i] = this.converter((values as unknown[])[i]) as any;
     } else {
-      for (let i = 0; i < values.length; i++) arr[i] = values[i] as any;
+      for (let i = 0; i < values.length; i++) arr[i] = (values as unknown[])[i] as any;
     }
     return new DataColumn(this.type, arr);
-  }
-
-  builder(size: number): ColumnBuilder {
-    const arr = new this.Ctor(size);
-    const type = this.type;
-    let offset = 0;
-    const builder: ColumnBuilder = {
-      append: (v: unknown) => {
-        arr[offset++] = (this.converter ? this.converter(v) : v) as any;
-        return builder;
-      },
-      finish: () => new DataColumn(type, arr),
-    };
-    return builder;
   }
 
   zeroValue() {
@@ -701,10 +632,6 @@ class EnumCodec extends BaseCodec {
     return new EnumColumn(this.type, arr, this.mapping.valueToName, false);
   }
 
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
-  }
-
   zeroValue(): number {
     return 0;
   }
@@ -734,10 +661,6 @@ class StringCodec extends BaseCodec {
 
   fromValues(values: unknown[]): Column {
     return new DataColumn(this.type, values.map(coerceToString));
-  }
-
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -793,10 +716,6 @@ class UUIDCodec extends BaseCodec {
 
   fromValues(values: unknown[]): Column {
     return new DataColumn(this.type, values.map(toValidUUID));
-  }
-
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -880,10 +799,6 @@ class FixedStringCodec extends BaseCodec {
     return new DataColumn(type, result);
   }
 
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
-  }
-
   zeroValue() {
     return new Uint8Array(this.len);
   }
@@ -940,11 +855,10 @@ class BigIntCodec extends BaseCodec {
   }
 
   fromValues(values: unknown[]): Column {
-    return new DataColumn(this.type, values.map((v) => this.coerce(v)));
-  }
-
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
+    return new DataColumn(
+      this.type,
+      values.map((v) => this.coerce(v)),
+    );
   }
 
   zeroValue() {
@@ -1044,10 +958,6 @@ class DecimalCodec extends BaseCodec {
     );
   }
 
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
-  }
-
   zeroValue() {
     return formatScaledBigInt(0n, this.scale);
   }
@@ -1134,7 +1044,9 @@ class DateTime64Codec extends BaseCodec {
       const v = values[i];
       if (v instanceof ClickHouseDateTime64) {
         if (v.precision !== precision) {
-          throw new TypeError(`${type} precision mismatch: expected ${precision}, got ${v.precision}`);
+          throw new TypeError(
+            `${type} precision mismatch: expected ${precision}, got ${v.precision}`,
+          );
         }
         toBigIntInRange(v.ticks, type, INT64_MIN, INT64_MAX);
         result[i] = v;
@@ -1156,7 +1068,9 @@ class DateTime64Codec extends BaseCodec {
         }
         const msNum = Math.trunc(v);
         if (!Number.isSafeInteger(msNum)) {
-          throw new RangeError(`${type} cannot safely represent number "${v}". Use bigint, Date, or string.`);
+          throw new RangeError(
+            `${type} cannot safely represent number "${v}". Use bigint, Date, or string.`,
+          );
         }
         const ms = BigInt(msNum);
         const ticks = precision >= 3 ? ms * scale : ms / scale;
@@ -1175,10 +1089,6 @@ class DateTime64Codec extends BaseCodec {
       }
     }
     return new DataColumn(type, result);
-  }
-
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -1271,10 +1181,6 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> extends BaseC
     return new DataColumn(type, result);
   }
 
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
-  }
-
   zeroValue() {
     return new Date(0);
   }
@@ -1318,10 +1224,6 @@ class IPv4Codec extends BaseCodec {
     return new DataColumn(this.type, values.map(toValidIPv4));
   }
 
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
-  }
-
   zeroValue() {
     return "0.0.0.0";
   }
@@ -1355,10 +1257,6 @@ class IPv6Codec extends BaseCodec {
 
   fromValues(values: unknown[]): Column {
     return new DataColumn(this.type, values.map(toValidIPv6));
-  }
-
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -1490,10 +1388,6 @@ class ArrayCodec extends BaseCodec {
     return new ArrayColumn(this.type, offsets, this.inner.fromValues(allInner));
   }
 
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
-  }
-
   zeroValue() {
     return [];
   }
@@ -1561,10 +1455,6 @@ class NullableCodec extends BaseCodec {
       }
     }
     return new NullableColumn(this.type, nullFlags, this.inner.fromValues(innerValues));
-  }
-
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -1697,10 +1587,6 @@ class LowCardinalityCodec extends BaseCodec {
   fromValues(values: unknown[]): Column {
     // LowCardinality is just storage optimization - pass through to inner
     return this.inner.fromValues(values);
-  }
-
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.inner.fromValues(values));
   }
 
   zeroValue() {
@@ -1837,10 +1723,6 @@ class MapCodec extends BaseCodec {
     );
   }
 
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
-  }
-
   zeroValue() {
     return new Map();
   }
@@ -1932,10 +1814,6 @@ class TupleCodec extends BaseCodec {
       columns,
       this.isNamed,
     );
-  }
-
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -2039,48 +1917,6 @@ class VariantCodec implements Codec {
     }
 
     return new VariantColumn(this.type, discriminators, groups);
-  }
-
-  builder(size: number): ColumnBuilder {
-    const type = this.type;
-    return CollectingBuilder(
-      size,
-      (values) => new VariantColumn(type, ...this.buildVariantFromValues(values)),
-    );
-  }
-
-  private buildVariantFromValues(values: unknown[]): [Uint8Array, Map<number, Column>] {
-    const discriminators = new Uint8Array(values.length);
-    const variantValues: unknown[][] = this.codecs.map(() => []);
-
-    for (let i = 0; i < values.length; i++) {
-      const v = values[i];
-      if (v == null) {
-        discriminators[i] = Variant.NULL_DISCRIMINATOR;
-      } else if (Array.isArray(v) && v.length === 2 && typeof v[0] === "number") {
-        const disc = v[0] as number;
-        if (disc < 0 || disc >= this.codecs.length) {
-          throw new TypeError(
-            `Variant discriminator ${disc} out of range [0, ${this.codecs.length - 1}]`,
-          );
-        }
-        discriminators[i] = disc;
-        variantValues[disc].push(v[1]);
-      } else {
-        const variantIdx = this.findVariantIndex(v, this.typeStrings);
-        discriminators[i] = variantIdx;
-        variantValues[variantIdx].push(v);
-      }
-    }
-
-    const groups = new Map<number, Column>();
-    for (let vi = 0; vi < this.codecs.length; vi++) {
-      if (variantValues[vi].length > 0) {
-        groups.set(vi, this.codecs[vi].fromValues(variantValues[vi]));
-      }
-    }
-
-    return [discriminators, groups];
   }
 
   zeroValue() {
@@ -2233,10 +2069,6 @@ class DynamicCodec implements Codec {
     }
 
     return new DynamicColumn(typeOrder, discriminators, groups);
-  }
-
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {
@@ -2413,10 +2245,6 @@ class JsonCodec implements Codec {
     }
 
     return new JsonColumn([...typedPathNames, ...sortedDynamic], pathColumns, values.length);
-  }
-
-  builder(size: number): ColumnBuilder {
-    return CollectingBuilder(size, (values) => this.fromValues(values));
   }
 
   zeroValue() {

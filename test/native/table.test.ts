@@ -1,13 +1,11 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import {
-  batchBuilder,
-  batchFromArrays,
   batchFromCols,
   batchFromRows,
   type ColumnDef,
   encodeNative,
-  makeBuilder,
+  getCodec,
   RecordBatch,
   streamDecodeNative,
   streamEncodeNative,
@@ -16,13 +14,11 @@ import { collect, decodeBatch, encodeNativeRows, toArrayRows, toAsync } from "..
 
 describe("streamEncodeNative", () => {
   it("streams tables", async () => {
-    const columns: ColumnDef[] = [{ name: "id", type: "Int32" }];
-
     // Create tables to stream
     async function* generateTables() {
-      yield RecordBatch.fromColumnar(columns, [new Int32Array([1, 2])]);
-      yield RecordBatch.fromColumnar(columns, [new Int32Array([3, 4])]);
-      yield RecordBatch.fromColumnar(columns, [new Int32Array([5])]);
+      yield batchFromCols({ id: getCodec("Int32").fromValues([1, 2]) });
+      yield batchFromCols({ id: getCodec("Int32").fromValues([3, 4]) });
+      yield batchFromCols({ id: getCodec("Int32").fromValues([5]) });
     }
 
     const chunks = await collect(streamEncodeNative(generateTables()));
@@ -114,20 +110,20 @@ describe("streamDecodeNative", () => {
   });
 });
 
-describe("Arrow-style factory functions", () => {
-  it("batchFromArrays creates table from named columns", async () => {
-    const schema: ColumnDef[] = [
-      { name: "id", type: "UInt32" },
-      { name: "name", type: "String" },
-    ];
-    const table = batchFromArrays(schema, {
-      id: new Uint32Array([1, 2, 3]),
-      name: ["alice", "bob", "charlie"],
+describe("RecordBatch static methods", () => {
+  it("fromCols creates table from pre-built columns", async () => {
+    const table = batchFromCols({
+      id: getCodec("UInt32").fromValues([1, 2, 3]),
+      name: getCodec("String").fromValues(["alice", "bob", "charlie"]),
     });
 
     assert.strictEqual(table.length, 3);
     assert.strictEqual(table.numCols, 2);
     assert.deepStrictEqual(table.columnNames, ["id", "name"]);
+
+    // Columns should have correct types
+    assert.strictEqual(table.getColumn("id")?.type, "UInt32");
+    assert.strictEqual(table.getColumn("name")?.type, "String");
 
     const rows = toArrayRows(table);
     assert.deepStrictEqual(rows[0], [1, "alice"]);
@@ -140,7 +136,7 @@ describe("Arrow-style factory functions", () => {
     assert.deepStrictEqual(toArrayRows(decoded), rows);
   });
 
-  it("batchFromRows creates table from row arrays", async () => {
+  it("fromRows creates table from row arrays", async () => {
     const schema: ColumnDef[] = [
       { name: "id", type: "UInt32" },
       { name: "value", type: "Float64" },
@@ -157,34 +153,19 @@ describe("Arrow-style factory functions", () => {
     assert.deepStrictEqual(rows[2], [3, 3.5]);
   });
 
-  it("batchFromCols creates table from pre-built columns", async () => {
-    const idCol = makeBuilder("UInt32").append(1).append(2).append(3).finish();
-    const nameCol = makeBuilder("String").append("alice").append("bob").append("charlie").finish();
-
-    const table = batchFromCols({ id: idCol, name: nameCol });
-
-    assert.strictEqual(table.length, 3);
-    assert.deepStrictEqual(table.columnNames, ["id", "name"]);
-
-    // Columns should have correct types
-    assert.strictEqual(table.getColumn("id")?.type, "UInt32");
-    assert.strictEqual(table.getColumn("name")?.type, "String");
-
-    const rows = toArrayRows(table);
-    assert.deepStrictEqual(rows[0], [1, "alice"]);
-  });
-
-  it("batchBuilder creates row-by-row builder", async () => {
+  it("fromRows accepts sync generator", async () => {
     const schema: ColumnDef[] = [
       { name: "x", type: "Int32" },
       { name: "y", type: "Int32" },
     ];
-    const builder = batchBuilder(schema);
-    builder.appendRow([1, 2]);
-    builder.appendRow([3, 4]);
-    builder.appendRow([5, 6]);
 
-    const table = builder.finish();
+    function* generateRows() {
+      yield [1, 2];
+      yield [3, 4];
+      yield [5, 6];
+    }
+
+    const table = batchFromRows(schema, generateRows());
     assert.strictEqual(table.length, 3);
     assert.deepStrictEqual(toArrayRows(table), [
       [1, 2],
@@ -192,11 +173,70 @@ describe("Arrow-style factory functions", () => {
       [5, 6],
     ]);
   });
+
+  it("fromRows accepts async generator and returns Promise", async () => {
+    const schema: ColumnDef[] = [
+      { name: "id", type: "UInt32" },
+      { name: "name", type: "String" },
+    ];
+
+    async function* generateRows() {
+      yield [1, "alice"];
+      yield [2, "bob"];
+    }
+
+    const table = await batchFromRows(schema, generateRows());
+    assert.strictEqual(table.length, 2);
+    assert.deepStrictEqual(toArrayRows(table), [
+      [1, "alice"],
+      [2, "bob"],
+    ]);
+  });
+
+  it("fromRows coerces string values to numbers", async () => {
+    const schema: ColumnDef[] = [
+      { name: "id", type: "UInt32" },
+      { name: "value", type: "Int64" },
+    ];
+    const table = batchFromRows(schema, [
+      ["123", "456"],
+      ["789", "-100"],
+    ]);
+
+    assert.strictEqual(table.length, 2);
+    assert.strictEqual(table.get(0).id, 123);
+    assert.strictEqual(table.get(0).value, 456n);
+    assert.strictEqual(table.get(1).id, 789);
+    assert.strictEqual(table.get(1).value, -100n);
+  });
+
+  it("fromRows throws on overflow and invalid values", () => {
+    assert.throws(
+      () => batchFromRows([{ name: "x", type: "Int8" }], [[128]]),
+      /Int8 out of range/,
+    );
+    assert.throws(
+      () => batchFromRows([{ name: "x", type: "UInt8" }], [[-1]]),
+      /UInt8 out of range/,
+    );
+    assert.throws(
+      () => batchFromRows([{ name: "x", type: "Int32" }], [[1.5]]),
+      /expected integer/,
+    );
+    assert.throws(
+      () => batchFromRows([{ name: "x", type: "UInt64" }], [[-1n]]),
+      /UInt64 out of range/,
+    );
+    assert.throws(
+      () => batchFromRows([{ name: "x", type: "Int32" }], [["abc"]]),
+      /Cannot coerce/,
+    );
+  });
 });
 
-describe("makeBuilder", () => {
-  it("supports chainable append", () => {
-    const col = makeBuilder("Int32").append(1).append(2).append(3).finish();
+describe("getCodec().fromValues()", () => {
+  it("creates columns from value arrays", () => {
+    const col = getCodec("Int32").fromValues([1, 2, 3]);
 
     assert.strictEqual(col.length, 3);
     assert.strictEqual(col.type, "Int32");
@@ -205,48 +245,40 @@ describe("makeBuilder", () => {
     assert.strictEqual(col.get(2), 3);
   });
 
-  it("makeBuilder works with complex types", async () => {
+  it("works with complex types", async () => {
     // Array(Int32)
-    const arrCol = makeBuilder("Array(Int32)")
-      .append([1, 2, 3])
-      .append([4, 5])
-      .append([6])
-      .finish();
+    const arrCol = getCodec("Array(Int32)").fromValues([[1, 2, 3], [4, 5], [6]]);
     assert.strictEqual(arrCol.type, "Array(Int32)");
     assert.deepStrictEqual(arrCol.get(0), [1, 2, 3]);
     assert.deepStrictEqual(arrCol.get(2), [6]);
 
     // Tuple(Float64, Float64)
-    const tupleCol = makeBuilder("Tuple(Float64, Float64)")
-      .append([1.0, 2.0])
-      .append([3.0, 4.0])
-      .finish();
+    const tupleCol = getCodec("Tuple(Float64, Float64)").fromValues([
+      [1.0, 2.0],
+      [3.0, 4.0],
+    ]);
     assert.strictEqual(tupleCol.type, "Tuple(Float64, Float64)");
     assert.deepStrictEqual(tupleCol.get(0), [1.0, 2.0]);
 
     // Named Tuple
-    const namedTupleCol = makeBuilder("Tuple(x Float64, y Float64)")
-      .append({ x: 1.0, y: 2.0 })
-      .append({ x: 3.0, y: 4.0 })
-      .finish();
+    const namedTupleCol = getCodec("Tuple(x Float64, y Float64)").fromValues([
+      { x: 1.0, y: 2.0 },
+      { x: 3.0, y: 4.0 },
+    ]);
     assert.deepStrictEqual(namedTupleCol.get(0), { x: 1.0, y: 2.0 });
 
     // Nullable(String)
-    const nullableCol = makeBuilder("Nullable(String)")
-      .append("hello")
-      .append(null)
-      .append("world")
-      .finish();
+    const nullableCol = getCodec("Nullable(String)").fromValues(["hello", null, "world"]);
     assert.strictEqual(nullableCol.get(0), "hello");
     assert.strictEqual(nullableCol.get(1), null);
     assert.strictEqual(nullableCol.get(2), "world");
   });
 
   it("columns carry their type for batchFromCols", () => {
-    const pointCol = makeBuilder("Tuple(Float64, Float64)")
-      .append([1.0, 2.0])
-      .append([3.0, 4.0])
-      .finish();
+    const pointCol = getCodec("Tuple(Float64, Float64)").fromValues([
+      [1.0, 2.0],
+      [3.0, 4.0],
+    ]);
 
     const table = batchFromCols({ point: pointCol });
 
@@ -284,10 +316,10 @@ describe("Column type property", () => {
   });
 });
 
-describe("Complex types via batchFromArrays", () => {
+describe("Complex types via fromCols", () => {
   it("Array(Int32)", async () => {
-    const table = batchFromArrays([{ name: "tags", type: "Array(Int32)" }], {
-      tags: [[1, 2], [3, 4, 5], [6]],
+    const table = batchFromCols({
+      tags: getCodec("Array(Int32)").fromValues([[1, 2], [3, 4, 5], [6]]),
     });
     assert.strictEqual(table.length, 3);
     assert.deepStrictEqual(table.getColumn("tags")?.get(0), [1, 2]);
@@ -300,11 +332,11 @@ describe("Complex types via batchFromArrays", () => {
   });
 
   it("Tuple(Float64, Float64) - positional", async () => {
-    const table = batchFromArrays([{ name: "point", type: "Tuple(Float64, Float64)" }], {
-      point: [
+    const table = batchFromCols({
+      point: getCodec("Tuple(Float64, Float64)").fromValues([
         [1.0, 2.0],
         [3.0, 4.0],
-      ],
+      ]),
     });
     assert.deepStrictEqual(table.getColumn("point")?.get(0), [1.0, 2.0]);
     assert.deepStrictEqual(table.getColumn("point")?.get(1), [3.0, 4.0]);
@@ -314,11 +346,11 @@ describe("Complex types via batchFromArrays", () => {
   });
 
   it("Tuple(x Float64, y Float64) - named", async () => {
-    const table = batchFromArrays([{ name: "point", type: "Tuple(x Float64, y Float64)" }], {
-      point: [
+    const table = batchFromCols({
+      point: getCodec("Tuple(x Float64, y Float64)").fromValues([
         { x: 1.0, y: 2.0 },
         { x: 3.0, y: 4.0 },
-      ],
+      ]),
     });
     assert.deepStrictEqual(table.getColumn("point")?.get(0), { x: 1.0, y: 2.0 });
     assert.deepStrictEqual(table.getColumn("point")?.get(1), { x: 3.0, y: 4.0 });
@@ -328,8 +360,8 @@ describe("Complex types via batchFromArrays", () => {
   });
 
   it("Map(String, Int32)", async () => {
-    const table = batchFromArrays([{ name: "meta", type: "Map(String, Int32)" }], {
-      meta: [{ a: 1, b: 2 }, new Map([["c", 3]])],
+    const table = batchFromCols({
+      meta: getCodec("Map(String, Int32)").fromValues([{ a: 1, b: 2 }, new Map([["c", 3]])]),
     });
     assert.deepStrictEqual(
       table.getColumn("meta")?.get(0),
@@ -345,8 +377,8 @@ describe("Complex types via batchFromArrays", () => {
   });
 
   it("Nullable(String)", async () => {
-    const table = batchFromArrays([{ name: "note", type: "Nullable(String)" }], {
-      note: ["hello", null, "world"],
+    const table = batchFromCols({
+      note: getCodec("Nullable(String)").fromValues(["hello", null, "world"]),
     });
     assert.strictEqual(table.getColumn("note")?.get(0), "hello");
     assert.strictEqual(table.getColumn("note")?.get(1), null);
@@ -357,8 +389,8 @@ describe("Complex types via batchFromArrays", () => {
   });
 
   it("Variant(String, Int64, Bool) - type inferred", async () => {
-    const table = batchFromArrays([{ name: "val", type: "Variant(String, Int64, Bool)" }], {
-      val: ["hello", 42n, true, null],
+    const table = batchFromCols({
+      val: getCodec("Variant(String, Int64, Bool)").fromValues(["hello", 42n, true, null]),
     });
     // Type inference: string->0, bigint->1, bool->2
     assert.deepStrictEqual(table.getColumn("val")?.get(0), [0, "hello"]);
@@ -372,8 +404,8 @@ describe("Complex types via batchFromArrays", () => {
   });
 
   it("Variant(String, Int64, Bool) - explicit discriminators", async () => {
-    const table = batchFromArrays([{ name: "val", type: "Variant(String, Int64, Bool)" }], {
-      val: [[0, "hello"], [1, 42n], [2, true], null],
+    const table = batchFromCols({
+      val: getCodec("Variant(String, Int64, Bool)").fromValues([[0, "hello"], [1, 42n], [2, true], null]),
     });
     assert.deepStrictEqual(table.getColumn("val")?.get(0), [0, "hello"]);
     assert.deepStrictEqual(table.getColumn("val")?.get(1), [1, 42n]);
@@ -385,8 +417,8 @@ describe("Complex types via batchFromArrays", () => {
   });
 
   it("Dynamic", async () => {
-    const table = batchFromArrays([{ name: "dyn", type: "Dynamic" }], {
-      dyn: ["hello", 42, true, [1, 2, 3], null],
+    const table = batchFromCols({
+      dyn: getCodec("Dynamic").fromValues(["hello", 42, true, [1, 2, 3], null]),
     });
     assert.strictEqual(table.getColumn("dyn")?.get(0), "hello");
     assert.strictEqual(table.getColumn("dyn")?.get(1), 42n); // integers become Int64
@@ -399,11 +431,11 @@ describe("Complex types via batchFromArrays", () => {
   });
 
   it("JSON", async () => {
-    const table = batchFromArrays([{ name: "data", type: "JSON" }], {
-      data: [
+    const table = batchFromCols({
+      data: getCodec("JSON").fromValues([
         { a: 1, b: "x" },
         { a: 2, c: true },
-      ],
+      ]),
     });
     // JSON returns objects with dynamic values per path
     // Missing keys are omitted from the object (not set to null)
@@ -427,9 +459,9 @@ describe("Complex types via batchFromArrays", () => {
   });
 });
 
-describe("Complex types via makeBuilder", () => {
+describe("Complex types via getCodec().fromValues()", () => {
   it("Array(Int32)", async () => {
-    const col = makeBuilder("Array(Int32)").append([1, 2]).append([3, 4, 5]).append([6]).finish();
+    const col = getCodec("Array(Int32)").fromValues([[1, 2], [3, 4, 5], [6]]);
     assert.strictEqual(col.type, "Array(Int32)");
     assert.deepStrictEqual(col.get(0), [1, 2]);
     assert.deepStrictEqual(col.get(1), [3, 4, 5]);
@@ -440,10 +472,10 @@ describe("Complex types via makeBuilder", () => {
   });
 
   it("Tuple(Float64, Float64) - positional", async () => {
-    const col = makeBuilder("Tuple(Float64, Float64)")
-      .append([1.0, 2.0])
-      .append([3.0, 4.0])
-      .finish();
+    const col = getCodec("Tuple(Float64, Float64)").fromValues([
+      [1.0, 2.0],
+      [3.0, 4.0],
+    ]);
     assert.strictEqual(col.type, "Tuple(Float64, Float64)");
     assert.deepStrictEqual(col.get(0), [1.0, 2.0]);
 
@@ -453,10 +485,10 @@ describe("Complex types via makeBuilder", () => {
   });
 
   it("Tuple(x Float64, y Float64) - named", async () => {
-    const col = makeBuilder("Tuple(x Float64, y Float64)")
-      .append({ x: 1.0, y: 2.0 })
-      .append({ x: 3.0, y: 4.0 })
-      .finish();
+    const col = getCodec("Tuple(x Float64, y Float64)").fromValues([
+      { x: 1.0, y: 2.0 },
+      { x: 3.0, y: 4.0 },
+    ]);
     assert.strictEqual(col.type, "Tuple(x Float64, y Float64)");
     assert.deepStrictEqual(col.get(0), { x: 1.0, y: 2.0 });
 
@@ -466,10 +498,7 @@ describe("Complex types via makeBuilder", () => {
   });
 
   it("Map(String, Int32)", async () => {
-    const col = makeBuilder("Map(String, Int32)")
-      .append({ a: 1, b: 2 })
-      .append(new Map([["c", 3]]))
-      .finish();
+    const col = getCodec("Map(String, Int32)").fromValues([{ a: 1, b: 2 }, new Map([["c", 3]])]);
     assert.strictEqual(col.type, "Map(String, Int32)");
     assert.deepStrictEqual(
       col.get(0),
@@ -486,11 +515,7 @@ describe("Complex types via makeBuilder", () => {
   });
 
   it("Nullable(String)", async () => {
-    const col = makeBuilder("Nullable(String)")
-      .append("hello")
-      .append(null)
-      .append("world")
-      .finish();
+    const col = getCodec("Nullable(String)").fromValues(["hello", null, "world"]);
     assert.strictEqual(col.type, "Nullable(String)");
     assert.strictEqual(col.get(0), "hello");
     assert.strictEqual(col.get(1), null);
@@ -502,12 +527,7 @@ describe("Complex types via makeBuilder", () => {
   });
 
   it("Variant(String, Int64, Bool) - type inferred", async () => {
-    const col = makeBuilder("Variant(String, Int64, Bool)")
-      .append("hello")
-      .append(42n)
-      .append(true)
-      .append(null)
-      .finish();
+    const col = getCodec("Variant(String, Int64, Bool)").fromValues(["hello", 42n, true, null]);
     assert.strictEqual(col.type, "Variant(String, Int64, Bool)");
     assert.deepStrictEqual(col.get(0), [0, "hello"]);
     assert.deepStrictEqual(col.get(1), [1, 42n]);
@@ -520,12 +540,12 @@ describe("Complex types via makeBuilder", () => {
   });
 
   it("Variant(String, Int64, Bool) - explicit discriminators", async () => {
-    const col = makeBuilder("Variant(String, Int64, Bool)")
-      .append([0, "hello"])
-      .append([1, 42n])
-      .append([2, true])
-      .append(null)
-      .finish();
+    const col = getCodec("Variant(String, Int64, Bool)").fromValues([
+      [0, "hello"],
+      [1, 42n],
+      [2, true],
+      null,
+    ]);
     assert.strictEqual(col.type, "Variant(String, Int64, Bool)");
     assert.deepStrictEqual(col.get(0), [0, "hello"]);
     assert.deepStrictEqual(col.get(1), [1, 42n]);
@@ -537,13 +557,7 @@ describe("Complex types via makeBuilder", () => {
   });
 
   it("Dynamic", async () => {
-    const col = makeBuilder("Dynamic")
-      .append("hello")
-      .append(42)
-      .append(true)
-      .append([1, 2, 3])
-      .append(null)
-      .finish();
+    const col = getCodec("Dynamic").fromValues(["hello", 42, true, [1, 2, 3], null]);
     assert.strictEqual(col.type, "Dynamic");
     assert.strictEqual(col.get(0), "hello");
     assert.strictEqual(col.get(1), 42n); // integers become Int64
@@ -557,7 +571,10 @@ describe("Complex types via makeBuilder", () => {
   });
 
   it("JSON", async () => {
-    const col = makeBuilder("JSON").append({ a: 1, b: "x" }).append({ a: 2, c: true }).finish();
+    const col = getCodec("JSON").fromValues([
+      { a: 1, b: "x" },
+      { a: 2, c: true },
+    ]);
     assert.strictEqual(col.type, "JSON");
 
     const row0 = col.get(0) as Record<string, unknown>;
@@ -573,14 +590,14 @@ describe("Complex types via makeBuilder", () => {
   });
 
   it("nested: Array(Tuple(String, Int32))", async () => {
-    const col = makeBuilder("Array(Tuple(String, Int32))")
-      .append([
+    const col = getCodec("Array(Tuple(String, Int32))").fromValues([
+      [
         ["a", 1],
         ["b", 2],
-      ])
-      .append([["c", 3]])
-      .append([])
-      .finish();
+      ],
+      [["c", 3]],
+      [],
+    ]);
     assert.strictEqual(col.type, "Array(Tuple(String, Int32))");
     assert.deepStrictEqual(col.get(0), [
       ["a", 1],
@@ -595,10 +612,10 @@ describe("Complex types via makeBuilder", () => {
   });
 
   it("nested: Map(String, Array(Int32))", async () => {
-    const col = makeBuilder("Map(String, Array(Int32))")
-      .append({ x: [1, 2], y: [3, 4, 5] })
-      .append(new Map([["z", [6]]]))
-      .finish();
+    const col = getCodec("Map(String, Array(Int32))").fromValues([
+      { x: [1, 2], y: [3, 4, 5] },
+      new Map([["z", [6]]]),
+    ]);
     assert.strictEqual(col.type, "Map(String, Array(Int32))");
 
     const table = batchFromCols({ nested: col });
@@ -609,13 +626,10 @@ describe("Complex types via makeBuilder", () => {
 
 describe("bigIntAsString option", () => {
   it("batch.get() converts bigint to string when option is set", () => {
-    const batch = batchFromArrays(
-      [
-        { name: "id", type: "Int64" },
-        { name: "name", type: "String" },
-      ],
-      { id: [1n, 9223372036854775807n], name: ["small", "max"] },
-    );
+    const batch = batchFromCols({
+      id: getCodec("Int64").fromValues([1n, 9223372036854775807n]),
+      name: getCodec("String").fromValues(["small", "max"]),
+    });
 
     const row1 = batch.get(1);
     assert.strictEqual(typeof row1.id, "bigint");
@@ -628,8 +642,8 @@ describe("bigIntAsString option", () => {
   });
 
   it("row.toObject() converts bigint to string when option is set", () => {
-    const batch = batchFromArrays([{ name: "val", type: "UInt64" }], {
-      val: [18446744073709551615n],
+    const batch = batchFromCols({
+      val: getCodec("UInt64").fromValues([18446744073709551615n]),
     });
     const row = batch.get(0);
 
@@ -641,13 +655,10 @@ describe("bigIntAsString option", () => {
   });
 
   it("row.toArray() converts bigint to string when option is set", () => {
-    const batch = batchFromArrays(
-      [
-        { name: "a", type: "Int64" },
-        { name: "b", type: "Int32" },
-      ],
-      { a: [123n], b: [456] },
-    );
+    const batch = batchFromCols({
+      a: getCodec("Int64").fromValues([123n]),
+      b: getCodec("Int32").fromValues([456]),
+    });
     const row = batch.get(0);
 
     assert.strictEqual(typeof row.toArray()[0], "bigint");
@@ -659,8 +670,8 @@ describe("bigIntAsString option", () => {
   });
 
   it("batch.toArray() converts bigint to string when option is set", () => {
-    const batch = batchFromArrays([{ name: "big", type: "Int128" }], {
-      big: [170141183460469231731687303715884105727n],
+    const batch = batchFromCols({
+      big: getCodec("Int128").fromValues([170141183460469231731687303715884105727n]),
     });
 
     assert.strictEqual(typeof batch.toArray()[0].big, "bigint");
@@ -671,14 +682,14 @@ describe("bigIntAsString option", () => {
   });
 
   it("option set on batch.get() applies to row property access", () => {
-    const batch = batchFromArrays([{ name: "x", type: "Int64" }], { x: [42n] });
+    const batch = batchFromCols({ x: getCodec("Int64").fromValues([42n]) });
     const row = batch.get(0, { bigIntAsString: true });
     assert.strictEqual(typeof row.x, "string");
     assert.strictEqual(row.x, "42");
   });
 
   it("option can be overridden in toObject/toArray", () => {
-    const batch = batchFromArrays([{ name: "n", type: "UInt64" }], { n: [999n] });
+    const batch = batchFromCols({ n: getCodec("UInt64").fromValues([999n]) });
     const row = batch.get(0, { bigIntAsString: true });
 
     assert.strictEqual(typeof row.toObject({ bigIntAsString: false }).n, "bigint");

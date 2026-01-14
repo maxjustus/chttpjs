@@ -4,7 +4,7 @@
 
 import assert from "node:assert";
 import { after, before, describe, it } from "node:test";
-import { batchFromArrays, type ColumnDef, type RecordBatch } from "../native/index.ts";
+import { batchFromCols, getCodec, RecordBatch } from "../native/index.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 import { collectQueryResults, connectTcpClient, type TcpConfig } from "./test_utils.ts";
 
@@ -24,13 +24,9 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("queries a single external table (object form)", async () => {
     const client = await connectTcpClient(chConfig);
     try {
-      const schema: ColumnDef[] = [
-        { name: "id", type: "UInt32" },
-        { name: "name", type: "String" },
-      ];
-      const batch = batchFromArrays(schema, {
-        id: new Uint32Array([1, 2, 3]),
-        name: ["Alice", "Bob", "Charlie"],
+      const batch = batchFromCols({
+        id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])),
+        name: getCodec("String").fromValues(["Alice", "Bob", "Charlie"]),
       });
 
       const rows = await collectQueryResults(client, "SELECT * FROM mydata ORDER BY id", {
@@ -50,9 +46,8 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("aggregates external table data", async () => {
     const client = await connectTcpClient(chConfig);
     try {
-      const schema: ColumnDef[] = [{ name: "value", type: "Int64" }];
-      const batch = batchFromArrays(schema, {
-        value: new BigInt64Array([100n, 200n, 300n]),
+      const batch = batchFromCols({
+        value: getCodec("Int64").fromValues(new BigInt64Array([100n, 200n, 300n])),
       });
 
       const rows = await collectQueryResults(client, "SELECT sum(value) as total FROM ext_table", {
@@ -69,24 +64,15 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("queries with multiple external tables", async () => {
     const client = await connectTcpClient(chConfig);
     try {
-      const usersSchema: ColumnDef[] = [
-        { name: "user_id", type: "UInt32" },
-        { name: "user_name", type: "String" },
-      ];
-      const users = batchFromArrays(usersSchema, {
-        user_id: new Uint32Array([1, 2]),
-        user_name: ["Alice", "Bob"],
+      const users = batchFromCols({
+        user_id: getCodec("UInt32").fromValues(new Uint32Array([1, 2])),
+        user_name: getCodec("String").fromValues(["Alice", "Bob"]),
       });
 
-      const ordersSchema: ColumnDef[] = [
-        { name: "order_id", type: "UInt32" },
-        { name: "user_id", type: "UInt32" },
-        { name: "amount", type: "Float64" },
-      ];
-      const orders = batchFromArrays(ordersSchema, {
-        order_id: new Uint32Array([101, 102, 103]),
-        user_id: new Uint32Array([1, 2, 1]),
-        amount: new Float64Array([10.5, 20.0, 15.5]),
+      const orders = batchFromCols({
+        order_id: getCodec("UInt32").fromValues(new Uint32Array([101, 102, 103])),
+        user_id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 1])),
+        amount: getCodec("Float64").fromValues(new Float64Array([10.5, 20.0, 15.5])),
       });
 
       const rows = await collectQueryResults(
@@ -112,11 +98,9 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("handles multiple batches for single external table (sync iterable)", async () => {
     const client = await connectTcpClient(chConfig);
     try {
-      const schema: ColumnDef[] = [{ name: "n", type: "UInt32" }];
-
-      const batch1 = batchFromArrays(schema, { n: new Uint32Array([1, 2, 3]) });
-      const batch2 = batchFromArrays(schema, { n: new Uint32Array([4, 5]) });
-      const batch3 = batchFromArrays(schema, { n: new Uint32Array([6, 7, 8, 9, 10]) });
+      const batch1 = batchFromCols({ n: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])) });
+      const batch2 = batchFromCols({ n: getCodec("UInt32").fromValues(new Uint32Array([4, 5])) });
+      const batch3 = batchFromCols({ n: getCodec("UInt32").fromValues(new Uint32Array([6, 7, 8, 9, 10])) });
 
       const rows = await collectQueryResults(
         client,
@@ -135,14 +119,12 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("handles async iterable for external table", async () => {
     const client = await connectTcpClient(chConfig);
     try {
-      const schema: ColumnDef[] = [{ name: "x", type: "UInt32" }];
-
       async function* generateBatches(): AsyncIterable<RecordBatch> {
-        yield batchFromArrays(schema, { x: new Uint32Array([1, 2]) });
+        yield batchFromCols({ x: getCodec("UInt32").fromValues(new Uint32Array([1, 2])) });
         await new Promise((resolve) => setTimeout(resolve, 10));
-        yield batchFromArrays(schema, { x: new Uint32Array([3, 4]) });
+        yield batchFromCols({ x: getCodec("UInt32").fromValues(new Uint32Array([3, 4])) });
         await new Promise((resolve) => setTimeout(resolve, 10));
-        yield batchFromArrays(schema, { x: new Uint32Array([5]) });
+        yield batchFromCols({ x: getCodec("UInt32").fromValues(new Uint32Array([5])) });
       }
 
       const rows = await collectQueryResults(client, "SELECT sum(x) as total FROM async_data", {
@@ -159,11 +141,6 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("works with compression enabled", async () => {
     const client = await connectTcpClient(chConfig, { compression: "lz4" });
     try {
-      const schema: ColumnDef[] = [
-        { name: "id", type: "UInt32" },
-        { name: "data", type: "String" },
-      ];
-
       // Create a batch with enough data to make compression meaningful
       const ids = new Uint32Array(100);
       const data: string[] = [];
@@ -172,7 +149,10 @@ describe("TCP external tables", { timeout: 120000 }, () => {
         data.push(`value_${i}_${"x".repeat(50)}`);
       }
 
-      const batch = batchFromArrays(schema, { id: ids, data });
+      const batch = batchFromCols({
+        id: getCodec("UInt32").fromValues(ids),
+        data: getCodec("String").fromValues(data),
+      });
 
       const rows = await collectQueryResults(
         client,
@@ -191,8 +171,9 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("handles empty external table", async () => {
     const client = await connectTcpClient(chConfig);
     try {
-      const schema: ColumnDef[] = [{ name: "id", type: "UInt32" }];
-      const emptyBatch = batchFromArrays(schema, { id: new Uint32Array(0) });
+      const emptyBatch = batchFromCols({
+        id: getCodec("UInt32").fromValues(new Uint32Array(0)),
+      });
 
       const rows = await collectQueryResults(client, "SELECT count() as cnt FROM empty_table", {
         externalTables: { empty_table: emptyBatch },
@@ -208,13 +189,9 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("filters external table data in query", async () => {
     const client = await connectTcpClient(chConfig);
     try {
-      const schema: ColumnDef[] = [
-        { name: "id", type: "UInt32" },
-        { name: "active", type: "UInt8" },
-      ];
-      const batch = batchFromArrays(schema, {
-        id: new Uint32Array([1, 2, 3, 4, 5]),
-        active: new Uint8Array([1, 0, 1, 0, 1]),
+      const batch = batchFromCols({
+        id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3, 4, 5])),
+        active: getCodec("UInt8").fromValues(new Uint8Array([1, 0, 1, 0, 1])),
       });
 
       const rows = await collectQueryResults(
@@ -235,9 +212,8 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("uses external table in subquery", async () => {
     const client = await connectTcpClient(chConfig);
     try {
-      const schema: ColumnDef[] = [{ name: "val", type: "UInt32" }];
-      const batch = batchFromArrays(schema, {
-        val: new Uint32Array([10, 20, 30]),
+      const batch = batchFromCols({
+        val: getCodec("UInt32").fromValues(new Uint32Array([10, 20, 30])),
       });
 
       const rows = await collectQueryResults(

@@ -1,11 +1,11 @@
 import assert from "node:assert";
 import type { QueryPacket } from "../client.ts";
 import {
+  batchFromRows,
   type ColumnDef,
   type DecodeOptions,
   encodeNative,
   RecordBatch,
-  RecordBatchBuilder,
   streamDecodeNative,
 } from "../native/index.ts";
 import { TcpClient } from "../tcp_client/client.ts";
@@ -50,9 +50,7 @@ export function assertArrayEqual(
 
 // Encoding helpers
 export function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
-  const builder = new RecordBatchBuilder(columns);
-  for (const row of rows) builder.appendRow(row);
-  return encodeNative(builder.finish());
+  return encodeNative(batchFromRows(columns, rows));
 }
 
 /**
