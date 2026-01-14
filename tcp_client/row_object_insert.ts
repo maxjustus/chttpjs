@@ -28,9 +28,7 @@ export function transposeRowObjectsToColumns(
   for (let r = 0; r < rowCount; r++) {
     const row = rows[r] as Record<string, unknown>;
     if (row === null || typeof row !== "object" || Array.isArray(row)) {
-      throw new TypeError(
-        `Row ${r} must be an object, got ${row === null ? "null" : typeof row}`,
-      );
+      throw new TypeError(`Row ${r} must be an object, got ${row === null ? "null" : typeof row}`);
     }
 
     for (const key in row) {
@@ -55,4 +53,3 @@ export function transposeRowObjectsToColumns(
 
   return columns;
 }
-

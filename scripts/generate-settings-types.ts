@@ -7,7 +7,7 @@
  *   node --experimental-strip-types scripts/generate-settings-types.ts --no-cache  # Force re-fetch all versions
  */
 
-import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const BASELINE = { year: 24, month: 11 };
 
@@ -87,7 +87,8 @@ function parseEnums(enumsCpp: string): Map<string, string[]> {
 
   // Match IMPLEMENT_SETTING_ENUM(EnumName, ..., {{"value1", ...}, {"value2", ...}})
   // Pattern captures the enum name and the entire block of value mappings
-  const implPattern = /IMPLEMENT_SETTING_(?:MULTI_)?ENUM\s*\(\s*(\w+)\s*,\s*\w+::\w+\s*,\s*\{([\s\S]*?)\}\s*\)/g;
+  const implPattern =
+    /IMPLEMENT_SETTING_(?:MULTI_)?ENUM\s*\(\s*(\w+)\s*,\s*\w+::\w+\s*,\s*\{([\s\S]*?)\}\s*\)/g;
 
   for (const match of enumsCpp.matchAll(implPattern)) {
     const enumName = match[1];
@@ -143,11 +144,7 @@ function parseSettings(cpp: string, enums: Map<string, string[]>): Setting[] {
 }
 
 function cleanDescription(desc: string): string {
-  return desc
-    .replace(/\n/g, " ")
-    .replace(/\s+/g, " ")
-    .replace(/\\/g, "")
-    .trim();
+  return desc.replace(/\n/g, " ").replace(/\s+/g, " ").replace(/\\/g, "").trim();
 }
 
 function loadVersionCache(): VersionCache | null {
@@ -160,14 +157,12 @@ function loadVersionCache(): VersionCache | null {
 }
 
 function saveVersionCache(cache: VersionCache): void {
-  writeFileSync(VERSION_CACHE_FILE, JSON.stringify(cache, null, 2) + "\n");
+  writeFileSync(VERSION_CACHE_FILE, `${JSON.stringify(cache, null, 2)}\n`);
 }
 
 async function buildVersionMap(noCache: boolean): Promise<Map<string, string>> {
   const cache = noCache ? null : loadVersionCache();
-  const firstSeen = new Map<string, string>(
-    cache ? Object.entries(cache.settings) : []
-  );
+  const firstSeen = new Map<string, string>(cache ? Object.entries(cache.settings) : []);
 
   // Determine starting point
   let startYear = BASELINE.year;
@@ -202,7 +197,7 @@ async function buildVersionMap(noCache: boolean): Promise<Map<string, string>> {
 
     // Quick parse to get setting names
     const names = [...cpp.matchAll(/DECLARE(?:_WITH_ALIAS)?\s*\(\s*\w+\s*,\s*(\w+)/g)].map(
-      (m) => m[1]
+      (m) => m[1],
     );
 
     let newSettings = 0;
@@ -233,7 +228,7 @@ async function buildVersionMap(noCache: boolean): Promise<Map<string, string>> {
 function generateTypeScript(
   settings: Setting[],
   versionMap: Map<string, string>,
-  latestTag: string
+  latestTag: string,
 ): string {
   const baseline = `${BASELINE.year}.${BASELINE.month}`;
 

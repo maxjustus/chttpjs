@@ -1,31 +1,31 @@
+import { randomUUID } from "node:crypto";
 import * as net from "node:net";
 import * as tls from "node:tls";
-import { randomUUID } from "node:crypto";
-import { StreamingReader } from "./reader.ts";
-import { StreamingWriter } from "./writer.ts";
 import {
-  ServerPacketId,
-  type Progress,
-  type AccumulatedProgress,
-  type ServerHello,
-  type ProfileInfo,
-  type Packet,
-  type LogEntry,
-  DBMS_TCP_PROTOCOL_VERSION,
-  REVISIONS,
-} from "./types.ts";
-import {
-  getCodec,
-  BufferWriter,
   BufferUnderflowError,
-  RecordBatch,
-  decodeNativeBlock,
+  BufferWriter,
   type ColumnDef,
+  decodeNativeBlock,
+  getCodec,
+  RecordBatch,
 } from "@maxjustus/chttp/native";
 import { init as initCompression, Method, type MethodCode } from "../compression.ts";
 import type { ClickHouseSettings } from "../settings.ts";
-import { collectable, type CollectableAsyncGenerator } from "../util.ts";
+import { type CollectableAsyncGenerator, collectable } from "../util.ts";
+import { StreamingReader } from "./reader.ts";
 import { transposeRowObjectsToColumns } from "./row_object_insert.ts";
+import {
+  type AccumulatedProgress,
+  DBMS_TCP_PROTOCOL_VERSION,
+  type LogEntry,
+  type Packet,
+  type ProfileInfo,
+  type Progress,
+  REVISIONS,
+  type ServerHello,
+  ServerPacketId,
+} from "./types.ts";
+import { StreamingWriter } from "./writer.ts";
 
 export type { CollectableAsyncGenerator } from "../util.ts";
 
@@ -51,7 +51,7 @@ export interface TcpClientOptions {
   password?: string;
   debug?: boolean;
   /** Compression: 'lz4', 'zstd', or false to disable */
-  compression?: 'lz4' | 'zstd' | false;
+  compression?: "lz4" | "zstd" | false;
   /** Connection timeout in ms (default: 10000) */
   connectTimeout?: number;
   /** Query timeout in ms (default: 30000) */
@@ -98,7 +98,6 @@ export interface QueryOptions {
   queryId?: string;
 }
 
-
 /** Validates that expected schema matches server schema exactly. */
 function validateSchema(expected: ColumnDef[], actual: ColumnSchema[]): void {
   if (expected.length !== actual.length) {
@@ -106,10 +105,14 @@ function validateSchema(expected: ColumnDef[], actual: ColumnSchema[]): void {
   }
   for (let i = 0; i < expected.length; i++) {
     if (expected[i].name !== actual[i].name) {
-      throw new Error(`Schema mismatch: column ${i} expected name '${expected[i].name}', got '${actual[i].name}'`);
+      throw new Error(
+        `Schema mismatch: column ${i} expected name '${expected[i].name}', got '${actual[i].name}'`,
+      );
     }
     if (expected[i].type !== actual[i].type) {
-      throw new Error(`Schema mismatch: column '${expected[i].name}' expected type '${expected[i].type}', got '${actual[i].type}'`);
+      throw new Error(
+        `Schema mismatch: column '${expected[i].name}' expected type '${expected[i].type}', got '${actual[i].type}'`,
+      );
     }
   }
 }
@@ -134,15 +137,19 @@ export class TcpClient {
   /** Write with backpressure - waits for drain if socket buffer is full */
   private async writeWithBackpressure(data: Uint8Array): Promise<void> {
     if (!this.socket!.write(data)) {
-      await new Promise<void>(resolve => this.socket!.once('drain', resolve));
+      await new Promise<void>((resolve) => this.socket!.once("drain", resolve));
     }
   }
 
   /** Server info from handshake, available after connect() */
-  get serverHello() { return this._serverHello; }
+  get serverHello() {
+    return this._serverHello;
+  }
 
   /** Session timezone, updated by server TimezoneUpdate packets */
-  get timezone(): string | null { return this.sessionTimezone; }
+  get timezone(): string | null {
+    return this.sessionTimezone;
+  }
 
   constructor(options: TcpClientOptions) {
     this.options = {
@@ -151,7 +158,7 @@ export class TcpClient {
       password: "",
       debug: false,
       compression: false,
-      ...options
+      ...options,
     };
     this.defaultSettings = options.settings ?? {};
   }
@@ -200,7 +207,7 @@ export class TcpClient {
         const opts: tls.ConnectionOptions = {
           host: this.options.host,
           port: this.options.port,
-          ...(typeof tlsOpts === 'object' ? tlsOpts : {})
+          ...(typeof tlsOpts === "object" ? tlsOpts : {}),
         };
         this.socket = tls.connect(opts, onConnected);
       } else {
@@ -220,12 +227,16 @@ export class TcpClient {
 
     const abortPromise = new Promise<void>((_, reject) => {
       if (signal) {
-        signal.addEventListener("abort", () => reject(new Error("Connect aborted")), { once: true });
+        signal.addEventListener("abort", () => reject(new Error("Connect aborted")), {
+          once: true,
+        });
       }
     });
 
     try {
-      await Promise.race(signal ? [connectPromise, timeoutPromise, abortPromise] : [connectPromise, timeoutPromise]);
+      await Promise.race(
+        signal ? [connectPromise, timeoutPromise, abortPromise] : [connectPromise, timeoutPromise],
+      );
     } finally {
       cleanup();
     }
@@ -238,7 +249,7 @@ export class TcpClient {
     const hello = this.writer.encodeHello(
       this.options.database!,
       this.options.user!,
-      this.options.password!
+      this.options.password!,
     );
     this.socket.write(hello);
 
@@ -257,16 +268,28 @@ export class TcpClient {
     const revision = await this.reader.readVarInt();
 
     // Use minimum of our supported version and server version
-    const effectiveRevision = revision < DBMS_TCP_PROTOCOL_VERSION ? revision : DBMS_TCP_PROTOCOL_VERSION;
+    const effectiveRevision =
+      revision < DBMS_TCP_PROTOCOL_VERSION ? revision : DBMS_TCP_PROTOCOL_VERSION;
 
-    if (effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_VERSIONED_PARALLEL_REPLICAS_PROTOCOL) {
+    if (
+      effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_VERSIONED_PARALLEL_REPLICAS_PROTOCOL
+    ) {
       // Server-side parallel replicas protocol version
       await this.reader.readVarInt();
     }
 
-    const timezone = effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_SERVER_TIMEZONE ? await this.reader.readString() : "";
-    const displayName = effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_SERVER_DISPLAY_NAME ? await this.reader.readString() : "";
-    const patch = effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_VERSION_PATCH ? await this.reader.readVarInt() : effectiveRevision;
+    const timezone =
+      effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_SERVER_TIMEZONE
+        ? await this.reader.readString()
+        : "";
+    const displayName =
+      effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_SERVER_DISPLAY_NAME
+        ? await this.reader.readString()
+        : "";
+    const patch =
+      effectiveRevision >= REVISIONS.DBMS_MIN_REVISION_WITH_VERSION_PATCH
+        ? await this.reader.readVarInt()
+        : effectiveRevision;
 
     if (effectiveRevision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_CHUNKED_PACKETS) {
       // Server sends its chunked mode preferences - read and discard
@@ -331,27 +354,46 @@ export class TcpClient {
     this.log("Handshake: Complete!");
   }
 
-	  /** Insert a single RecordBatch. */
-	  insert(sql: string, data: RecordBatch, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
-	  /** Insert an iterable of RecordBatches. */
-	  insert(sql: string, data: Iterable<RecordBatch> | AsyncIterable<RecordBatch>, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
-	  /** Insert row objects with auto-coercion using server schema (must contain all columns, no extras). */
-	  insert(sql: string, data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>, options?: InsertOptions): CollectableAsyncGenerator<Packet>;
+  /** Insert a single RecordBatch. */
   insert(
     sql: string,
-    data: RecordBatch | Iterable<RecordBatch | Record<string, unknown>> | AsyncIterable<RecordBatch | Record<string, unknown>>,
-    options: InsertOptions = {}
+    data: RecordBatch,
+    options?: InsertOptions,
+  ): CollectableAsyncGenerator<Packet>;
+  /** Insert an iterable of RecordBatches. */
+  insert(
+    sql: string,
+    data: Iterable<RecordBatch> | AsyncIterable<RecordBatch>,
+    options?: InsertOptions,
+  ): CollectableAsyncGenerator<Packet>;
+  /** Insert row objects with auto-coercion using server schema (must contain all columns, no extras). */
+  insert(
+    sql: string,
+    data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>,
+    options?: InsertOptions,
+  ): CollectableAsyncGenerator<Packet>;
+  insert(
+    sql: string,
+    data:
+      | RecordBatch
+      | Iterable<RecordBatch | Record<string, unknown>>
+      | AsyncIterable<RecordBatch | Record<string, unknown>>,
+    options: InsertOptions = {},
   ): CollectableAsyncGenerator<Packet> {
     return collectable(this.insertImpl(sql, data, options));
   }
 
   private async *insertImpl(
     sql: string,
-    data: RecordBatch | Iterable<RecordBatch | Record<string, unknown>> | AsyncIterable<RecordBatch | Record<string, unknown>>,
-    options: InsertOptions = {}
+    data:
+      | RecordBatch
+      | Iterable<RecordBatch | Record<string, unknown>>
+      | AsyncIterable<RecordBatch | Record<string, unknown>>,
+    options: InsertOptions = {},
   ): AsyncGenerator<Packet> {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
-    if (this.busy) throw new Error("Connection busy - cannot run concurrent operations on the same TcpClient");
+    if (this.busy)
+      throw new Error("Connection busy - cannot run concurrent operations on the same TcpClient");
     this.busy = true;
 
     const signal = options.signal;
@@ -361,7 +403,7 @@ export class TcpClient {
     let cancelled = false;
     let reachedEndOfStream = false;
     let receivedException = false;
-    let sentDataDelimiter = false;  // Track if we've finished sending data
+    let sentDataDelimiter = false; // Track if we've finished sending data
 
     const abortHandler = () => {
       if (!cancelled && this.socket) {
@@ -372,13 +414,20 @@ export class TcpClient {
     signal?.addEventListener("abort", abortHandler);
 
     const useCompression = !!this.options.compression;
-    const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
+    const compressionMethod = this.options.compression === "zstd" ? Method.ZSTD : Method.LZ4;
 
     try {
       // Merge settings: client defaults < per-insert overrides
       const mergedSettings = { ...this.defaultSettings, ...options.settings };
 
-      const serverSchema = await this.sendInsertQueryAndGetSchema(sql, useCompression, compressionMethod, mergedSettings, () => cancelled, options.queryId);
+      const serverSchema = await this.sendInsertQueryAndGetSchema(
+        sql,
+        useCompression,
+        compressionMethod,
+        mergedSettings,
+        () => cancelled,
+        options.queryId,
+      );
 
       // Validate schema if provided
       if (options.schema) {
@@ -403,11 +452,18 @@ export class TcpClient {
           encodedColumns.push({
             name: colDef.name,
             type: colDef.type,
-            data: writer.finish()
+            data: writer.finish(),
           });
         }
 
-        const dataPacket = this.writer.encodeData("", batch.rowCount, encodedColumns, this.serverHello!.revision, useCompression, compressionMethod);
+        const dataPacket = this.writer.encodeData(
+          "",
+          batch.rowCount,
+          encodedColumns,
+          this.serverHello!.revision,
+          useCompression,
+          compressionMethod,
+        );
         await this.writeWithBackpressure(dataPacket);
         totalInserted += batch.rowCount;
       };
@@ -415,7 +471,7 @@ export class TcpClient {
       const sendRowBatch = async (rows: Record<string, unknown>[]) => {
         if (rows.length === 0) return;
         const numCols = serverSchema.length;
-        const codecs = serverSchema.map(c => getCodec(c.type));
+        const codecs = serverSchema.map((c) => getCodec(c.type));
 
         const columns = transposeRowObjectsToColumns(serverSchema, rows);
 
@@ -430,11 +486,18 @@ export class TcpClient {
           encodedColumns.push({
             name: serverSchema[i].name,
             type: serverSchema[i].type,
-            data: writer.finish()
+            data: writer.finish(),
           });
         }
 
-        const dataPacket = this.writer.encodeData("", rows.length, encodedColumns, this.serverHello!.revision, useCompression, compressionMethod);
+        const dataPacket = this.writer.encodeData(
+          "",
+          rows.length,
+          encodedColumns,
+          this.serverHello!.revision,
+          useCompression,
+          compressionMethod,
+        );
         await this.writeWithBackpressure(dataPacket);
         totalInserted += rows.length;
       };
@@ -482,11 +545,19 @@ export class TcpClient {
         }
       }
 
-      const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
+      const delimiter = this.writer.encodeData(
+        "",
+        0,
+        [],
+        this.serverHello.revision,
+        useCompression,
+        compressionMethod,
+      );
       this.socket!.write(delimiter);
       sentDataDelimiter = true;
 
-      const { progress: progressAccumulated, profileEvents: profileEventsAccumulated } = this.createAccumulators();
+      const { progress: progressAccumulated, profileEvents: profileEventsAccumulated } =
+        this.createAccumulators();
 
       // Read response packets until EndOfStream
       while (true) {
@@ -536,7 +607,9 @@ export class TcpClient {
           try {
             await this.drainInsertResponses(useCompression);
           } catch (err) {
-            this.log(`[insert] drain failed, closing connection: ${err instanceof Error ? err.message : err}`);
+            this.log(
+              `[insert] drain failed, closing connection: ${err instanceof Error ? err.message : err}`,
+            );
             this.close();
           }
         } else {
@@ -560,12 +633,26 @@ export class TcpClient {
     compressionMethod: MethodCode,
     settings: Record<string, unknown>,
     isCancelled: () => boolean,
-    queryId?: string
+    queryId?: string,
   ): Promise<ColumnSchema[]> {
-    const queryPacket = this.writer.encodeQuery(queryId ?? randomUUID(), sql, this.serverHello!.revision, settings, useCompression, {});
+    const queryPacket = this.writer.encodeQuery(
+      queryId ?? randomUUID(),
+      sql,
+      this.serverHello!.revision,
+      settings,
+      useCompression,
+      {},
+    );
     this.socket!.write(queryPacket);
 
-    const delimiter = this.writer.encodeData("", 0, [], this.serverHello!.revision, useCompression, compressionMethod);
+    const delimiter = this.writer.encodeData(
+      "",
+      0,
+      [],
+      this.serverHello!.revision,
+      useCompression,
+      compressionMethod,
+    );
     this.socket!.write(delimiter);
 
     while (true) {
@@ -575,11 +662,15 @@ export class TcpClient {
       switch (packetId) {
         case ServerPacketId.Data: {
           const block = await this.readBlock(useCompression);
-          this.currentSchema = block.columns.map(c => ({ name: c.name, type: c.type }));
+          this.currentSchema = block.columns.map((c) => ({ name: c.name, type: c.type }));
           return this.currentSchema;
         }
-        case ServerPacketId.Progress: await this.readProgress(); break;
-        case ServerPacketId.Log: await this.readBlock(false); break;
+        case ServerPacketId.Progress:
+          await this.readProgress();
+          break;
+        case ServerPacketId.Log:
+          await this.readBlock(false);
+          break;
         case ServerPacketId.TableColumns:
           await this.reader!.readString();
           await this.reader!.readString();
@@ -602,9 +693,15 @@ export class TcpClient {
       if (packetId === ServerPacketId.EndOfStream) break;
 
       switch (packetId) {
-        case ServerPacketId.Progress: await this.readProgress(); break;
-        case ServerPacketId.ProfileInfo: await this.readProfileInfo(); break;
-        case ServerPacketId.Data: await this.readBlock(useCompression); break;
+        case ServerPacketId.Progress:
+          await this.readProgress();
+          break;
+        case ServerPacketId.ProfileInfo:
+          await this.readProfileInfo();
+          break;
+        case ServerPacketId.Data:
+          await this.readBlock(useCompression);
+          break;
         case ServerPacketId.Log:
         case ServerPacketId.ProfileEvents:
           await this.readBlock(false);
@@ -620,7 +717,8 @@ export class TcpClient {
     const progress: Progress = {
       readRows: await this.reader!.readVarInt(),
       readBytes: await this.reader!.readVarInt(),
-      totalRowsToRead: rev >= REVISIONS.DBMS_MIN_REVISION_WITH_SERVER_LOGS ? await this.reader!.readVarInt() : 0n,
+      totalRowsToRead:
+        rev >= REVISIONS.DBMS_MIN_REVISION_WITH_SERVER_LOGS ? await this.reader!.readVarInt() : 0n,
     };
     if (rev >= REVISIONS.DBMS_MIN_REVISION_WITH_TOTAL_BYTES_TO_READ) {
       progress.totalBytesToRead = await this.reader!.readVarInt();
@@ -705,7 +803,7 @@ export class TcpClient {
   private processProfileEventsBlock(
     batch: RecordBatch,
     profileEventsAccumulated: Map<string, bigint>,
-    progressAccumulated: AccumulatedProgress
+    progressAccumulated: AccumulatedProgress,
   ): void {
     const nameCol = batch.getColumn("name");
     const valueCol = batch.getColumn("value");
@@ -717,7 +815,7 @@ export class TcpClient {
       const name = nameCol.get(i) as string;
       const value = valueCol.get(i) as bigint;
       const eventType = typeCol.get(i) as string;
-      const threadId = threadIdCol ? threadIdCol.get(i) as bigint : 0n;
+      const threadId = threadIdCol ? (threadIdCol.get(i) as bigint) : 0n;
 
       if (eventType === "increment") {
         profileEventsAccumulated.set(name, (profileEventsAccumulated.get(name) ?? 0n) + value);
@@ -749,9 +847,10 @@ export class TcpClient {
     // Recalculate CPU usage
     if (progressAccumulated.elapsedNs > 0n) {
       const elapsedMicros = progressAccumulated.elapsedNs / 1000n;
-      progressAccumulated.cpuUsage = elapsedMicros > 0n
-        ? Number(progressAccumulated.cpuTimeMicroseconds) / Number(elapsedMicros)
-        : 0;
+      progressAccumulated.cpuUsage =
+        elapsedMicros > 0n
+          ? Number(progressAccumulated.cpuTimeMicroseconds) / Number(elapsedMicros)
+          : 0;
     }
   }
 
@@ -794,19 +893,17 @@ export class TcpClient {
     return collectable(this.queryImpl(sql, options));
   }
 
-  private async *queryImpl(
-    sql: string,
-    options: QueryOptions = {},
-  ): AsyncGenerator<Packet> {
+  private async *queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerator<Packet> {
     if (!this.socket || !this.reader || !this.serverHello) throw new Error("Not connected");
-    if (this.busy) throw new Error("Connection busy - cannot run concurrent operations on the same TcpClient");
+    if (this.busy)
+      throw new Error("Connection busy - cannot run concurrent operations on the same TcpClient");
     this.busy = true;
 
     const { settings = {}, signal } = options;
     if (signal?.aborted) throw new Error("Query aborted before start");
 
     const useCompression = !!this.options.compression;
-    const compressionMethod = this.options.compression === 'zstd' ? Method.ZSTD : Method.LZ4;
+    const compressionMethod = this.options.compression === "zstd" ? Method.ZSTD : Method.LZ4;
     const queryTimeout = this.options.queryTimeout ?? 30000;
     const cancelGracePeriod = this.options.cancelGracePeriodMs ?? 2000;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -876,7 +973,9 @@ export class TcpClient {
           useCompression,
           options.params ?? {},
         );
-        this.log(`[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`);
+        this.log(
+          `[query] sending query packet (${queryPacket.length} bytes), compression=${useCompression}`,
+        );
         this.socket!.write(queryPacket);
 
         // Send external tables if provided
@@ -885,14 +984,24 @@ export class TcpClient {
         }
 
         // Send delimiter (compressed if compression is enabled)
-        const delimiter = this.writer.encodeData("", 0, [], this.serverHello.revision, useCompression, compressionMethod);
-        this.log(`[query] sending delimiter (${delimiter.length} bytes, compressed=${useCompression})`);
+        const delimiter = this.writer.encodeData(
+          "",
+          0,
+          [],
+          this.serverHello.revision,
+          useCompression,
+          compressionMethod,
+        );
+        this.log(
+          `[query] sending delimiter (${delimiter.length} bytes, compressed=${useCompression})`,
+        );
         this.socket!.write(delimiter);
 
         this.currentSchema = null;
         this.log(`[query] waiting for response...`);
 
-        const { progress: progressAccumulated, profileEvents: profileEventsAccumulated } = this.createAccumulators();
+        const { progress: progressAccumulated, profileEvents: profileEventsAccumulated } =
+          this.createAccumulators();
 
         while (true) {
           this.log(`[query] reading packet id...`);
@@ -907,7 +1016,7 @@ export class TcpClient {
               const batch = await this.readBlock(useCompression);
               this.log(`[query] got Data block with ${batch.rowCount} rows`);
               if (this.currentSchema === null) {
-                this.currentSchema = batch.columns.map(c => ({ name: c.name, type: c.type }));
+                this.currentSchema = batch.columns.map((c) => ({ name: c.name, type: c.type }));
               }
               if (batch.rowCount > 0) yield { type: "Data", batch };
               break;
@@ -916,12 +1025,14 @@ export class TcpClient {
               const progress = await this.readProgress();
               this.accumulateProgress(progress, progressAccumulated);
               // Calculate percent for queries (based on read progress)
-              const progressDenom = progressAccumulated.readRows > progressAccumulated.totalRowsToRead
-                ? progressAccumulated.readRows
-                : progressAccumulated.totalRowsToRead;
-              progressAccumulated.percent = progressDenom > 0n
-                ? Number(progressAccumulated.readRows * 100n / progressDenom)
-                : 0;
+              const progressDenom =
+                progressAccumulated.readRows > progressAccumulated.totalRowsToRead
+                  ? progressAccumulated.readRows
+                  : progressAccumulated.totalRowsToRead;
+              progressAccumulated.percent =
+                progressDenom > 0n
+                  ? Number((progressAccumulated.readRows * 100n) / progressDenom)
+                  : 0;
               yield { type: "Progress", progress, accumulated: progressAccumulated };
               break;
             }
@@ -964,7 +1075,10 @@ export class TcpClient {
           }
         }
       } catch (err: any) {
-        if (timedOut && (err.message === "Premature close" || err.code === "ERR_STREAM_PREMATURE_CLOSE")) {
+        if (
+          timedOut &&
+          (err.message === "Premature close" || err.code === "ERR_STREAM_PREMATURE_CLOSE")
+        ) {
           throw new Error(`Query timeout after ${queryTimeout}ms`);
         }
         throw err;
@@ -978,7 +1092,9 @@ export class TcpClient {
           await this.drainPackets(useCompression);
         } catch (err) {
           // Drain failed - connection is in unknown state, close it to prevent corruption
-          this.log(`[query] drain failed, closing connection: ${err instanceof Error ? err.message : err}`);
+          this.log(
+            `[query] drain failed, closing connection: ${err instanceof Error ? err.message : err}`,
+          );
           this.close();
         }
       }
@@ -993,7 +1109,7 @@ export class TcpClient {
     tableName: string,
     batch: RecordBatch,
     compress: boolean,
-    method: MethodCode
+    method: MethodCode,
   ): Uint8Array {
     const encodedColumns = [];
     for (let i = 0; i < batch.columns.length; i++) {
@@ -1005,15 +1121,21 @@ export class TcpClient {
       writer.write(codec.encode(colData));
       encodedColumns.push({ name: colDef.name, type: colDef.type, data: writer.finish() });
     }
-    return this.writer.encodeData(tableName, batch.rowCount, encodedColumns,
-      this.serverHello!.revision, compress, method);
+    return this.writer.encodeData(
+      tableName,
+      batch.rowCount,
+      encodedColumns,
+      this.serverHello!.revision,
+      compress,
+      method,
+    );
   }
 
   /** Send external tables as Data packets before the query delimiter. */
   private async sendExternalTables(
     tables: Record<string, ExternalTableData>,
     compress: boolean,
-    method: MethodCode
+    method: MethodCode,
   ): Promise<void> {
     for (const [name, data] of Object.entries(tables)) {
       if (isRecordBatch(data)) {
@@ -1115,7 +1237,11 @@ export class TcpClient {
    * Static factory that connects and returns a disposable client.
    * Usage: await using client = await TcpClient.connect(options);
    */
-  static async connect(options: TcpClientOptions, connectOptions: { signal?: AbortSignal } = {}): Promise<TcpClient> {
+  // biome-ignore lint/suspicious/useAdjacentOverloadSignatures: static factory, not an overload
+  static async connect(
+    options: TcpClientOptions,
+    connectOptions: { signal?: AbortSignal } = {},
+  ): Promise<TcpClient> {
     const client = new TcpClient(options);
     await client.connect(connectOptions);
     return client;

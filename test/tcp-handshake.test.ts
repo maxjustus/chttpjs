@@ -1,13 +1,16 @@
-import { describe, it } from "node:test";
 import assert from "node:assert";
+import { describe, it } from "node:test";
 import { TcpClient } from "../tcp_client/client.ts";
 import { DBMS_TCP_PROTOCOL_VERSION } from "../tcp_client/types.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 
 function parseVersions(): string[] {
   const raw = process.env.CLICKHOUSE_VERSIONS;
-  if (raw && raw.trim()) {
-    return raw.split(",").map((v) => v.trim()).filter(Boolean);
+  if (raw?.trim()) {
+    return raw
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean);
   }
   return ["25.8", "24.8", "23.8"];
 }

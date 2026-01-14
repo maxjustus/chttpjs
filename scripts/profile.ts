@@ -7,7 +7,13 @@
  */
 
 import { parseArgs } from "node:util";
-import { encodeNative, streamDecodeNative, batchFromRows, RecordBatch, type ColumnDef } from "../native/index.ts";
+import {
+  batchFromRows,
+  type ColumnDef,
+  encodeNative,
+  RecordBatch,
+  streamDecodeNative,
+} from "../native/index.ts";
 
 function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
   return encodeNative(batchFromRows(columns, rows));
@@ -17,7 +23,17 @@ async function* toAsync<T>(iter: Iterable<T>): AsyncIterable<T> {
   for (const item of iter) yield item;
 }
 
-const DATA_TYPES = ["mixed", "numeric", "strings", "complex", "full", "bench-complex", "variant", "dynamic", "json"] as const;
+const DATA_TYPES = [
+  "mixed",
+  "numeric",
+  "strings",
+  "complex",
+  "full",
+  "bench-complex",
+  "variant",
+  "dynamic",
+  "json",
+] as const;
 
 const { values } = parseArgs({
   options: {
@@ -65,31 +81,35 @@ Examples:
   process.exit(0);
 }
 
-const format = values.format!.toLowerCase();
-const operation = values.operation!.toLowerCase();
-const dataType = values.data! as typeof DATA_TYPES[number];
+const format = values.format?.toLowerCase();
+const operation = values.operation?.toLowerCase();
+const dataType = values.data! as (typeof DATA_TYPES)[number];
 const rowCount = parseInt(values.rows!, 10);
 const iterations = parseInt(values.iterations!, 10);
 const columnar = values.columnar!;
 
 if (!["native", "json"].includes(format)) {
-  console.error(`Unknown format: ${format}`); process.exit(1);
+  console.error(`Unknown format: ${format}`);
+  process.exit(1);
 }
 if (!["encode", "decode"].includes(operation)) {
-  console.error(`Unknown operation: ${operation}`); process.exit(1);
+  console.error(`Unknown operation: ${operation}`);
+  process.exit(1);
 }
 if (!DATA_TYPES.includes(dataType)) {
-  console.error(`Unknown data type: ${dataType}. Use: ${DATA_TYPES.join(", ")}`); process.exit(1);
+  console.error(`Unknown data type: ${dataType}. Use: ${DATA_TYPES.join(", ")}`);
+  process.exit(1);
 }
 if (columnar && (format !== "native" || operation !== "encode")) {
-  console.error("--columnar only applies to native encode"); process.exit(1);
+  console.error("--columnar only applies to native encode");
+  process.exit(1);
 }
 
 // --- Schema-driven data generation ---
 
 type Schema = { columns: ColumnDef[]; generate: (i: number) => unknown[] };
 
-const SCHEMAS: Record<typeof DATA_TYPES[number], Schema> = {
+const SCHEMAS: Record<(typeof DATA_TYPES)[number], Schema> = {
   mixed: {
     columns: [
       { name: "id", type: "UInt32" },
@@ -100,8 +120,12 @@ const SCHEMAS: Record<typeof DATA_TYPES[number], Schema> = {
       { name: "created", type: "DateTime" },
     ],
     generate: (i) => [
-      i, `user_${i}`, `user${i}@example.com`, i % 2 === 0,
-      Math.random() * 100, Math.floor(Date.now() / 1000) - i * 60,
+      i,
+      `user_${i}`,
+      `user${i}@example.com`,
+      i % 2 === 0,
+      Math.random() * 100,
+      Math.floor(Date.now() / 1000) - i * 60,
     ],
   },
 
@@ -125,7 +149,9 @@ const SCHEMAS: Record<typeof DATA_TYPES[number], Schema> = {
       { name: "long", type: "String" },
     ],
     generate: (i) => [
-      i, `s${i}`, `medium_string_value_${i}`,
+      i,
+      `s${i}`,
+      `medium_string_value_${i}`,
       `this_is_a_longer_string_with_more_content_${i}_end`,
     ],
   },
@@ -145,7 +171,10 @@ const SCHEMAS: Record<typeof DATA_TYPES[number], Schema> = {
       [Math.random() * 10, Math.random() * 10, Math.random() * 10],
       i % 3 === 0 ? null : `meta_${i}`,
       [Math.random() * 180 - 90, Math.random() * 360 - 180],
-      new Map([["a", i], ["b", i * 2]]),
+      new Map([
+        ["a", i],
+        ["b", i * 2],
+      ]),
     ],
   },
 
@@ -238,9 +267,13 @@ const SCHEMAS: Record<typeof DATA_TYPES[number], Schema> = {
     ],
     generate: (i) => [
       i,
-      i % 3 === 0 ? [0, `str_${i}`] :      // String
-      i % 3 === 1 ? [1, BigInt(i * 100)] : // Int64
-                   [2, Math.random()],     // Float64
+      i % 3 === 0
+        ? [0, `str_${i}`]
+        : // String
+          i % 3 === 1
+          ? [1, BigInt(i * 100)]
+          : // Int64
+            [2, Math.random()], // Float64
     ],
   },
 
@@ -251,10 +284,13 @@ const SCHEMAS: Record<typeof DATA_TYPES[number], Schema> = {
     ],
     generate: (i) => [
       i,
-      i % 4 === 0 ? `str_${i}` :
-      i % 4 === 1 ? BigInt(i) :
-      i % 4 === 2 ? Math.random() * 100 :
-                   i % 2 === 0,
+      i % 4 === 0
+        ? `str_${i}`
+        : i % 4 === 1
+          ? BigInt(i)
+          : i % 4 === 2
+            ? Math.random() * 100
+            : i % 2 === 0,
     ],
   },
 
@@ -279,9 +315,14 @@ function hex(len: number): string {
   return Array.from({ length: len }, () => Math.floor(Math.random() * 16).toString(16)).join("");
 }
 
-type DataSet = { columns: ColumnDef[]; rows: unknown[][]; columnarData: unknown[][]; objects: Record<string, unknown>[] };
+type DataSet = {
+  columns: ColumnDef[];
+  rows: unknown[][];
+  columnarData: unknown[][];
+  objects: Record<string, unknown>[];
+};
 
-function generateData(type: typeof DATA_TYPES[number], count: number): DataSet {
+function generateData(type: (typeof DATA_TYPES)[number], count: number): DataSet {
   const schema = SCHEMAS[type];
   const { columns, generate } = schema;
   const rows: unknown[][] = [];
@@ -301,7 +342,7 @@ function generateData(type: typeof DATA_TYPES[number], count: number): DataSet {
     objects.push(obj);
   }
 
-  const columnarData: unknown[][] = columns.map((_, ci) => rows.map(r => r[ci]));
+  const columnarData: unknown[][] = columns.map((_, ci) => rows.map((r) => r[ci]));
   return { columns, rows, columnarData, objects };
 }
 
@@ -309,14 +350,22 @@ function generateData(type: typeof DATA_TYPES[number], count: number): DataSet {
 
 const textEnc = new TextEncoder();
 const textDec = new TextDecoder();
-const encodeJson = (rows: Record<string, unknown>[]) => textEnc.encode(rows.map(r => JSON.stringify(r)).join("\n"));
-const decodeJson = (data: Uint8Array) => textDec.decode(data).trim().split("\n").map(l => JSON.parse(l));
+const encodeJson = (rows: Record<string, unknown>[]) =>
+  textEnc.encode(rows.map((r) => JSON.stringify(r)).join("\n"));
+const decodeJson = (data: Uint8Array) =>
+  textDec
+    .decode(data)
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
 
 // --- Main ---
 
 async function main() {
   const mode = columnar ? "columnar" : "row";
-  console.log(`Profiling: ${format} ${operation} [${dataType}, ${mode}] ${rowCount} rows, ${iterations} iters\n`);
+  console.log(
+    `Profiling: ${format} ${operation} [${dataType}, ${mode}] ${rowCount} rows, ${iterations} iters\n`,
+  );
 
   const { columns, rows, columnarData, objects } = generateData(dataType, rowCount);
 

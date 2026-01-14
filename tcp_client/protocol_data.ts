@@ -1,5 +1,4 @@
-
-import { StreamingReader } from "./reader.ts";
+import type { StreamingReader } from "./reader.ts";
 
 /**
  * Metadata about a block in the TCP protocol.

@@ -1,15 +1,14 @@
-import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-
-import { startClickHouse, stopClickHouse } from "./setup.ts";
+import { after, before, describe, it } from "node:test";
 import {
+  collectText,
   init,
   insert,
   query,
   streamEncodeJsonEachRow,
   streamText,
-  collectText,
 } from "../client.ts";
+import { startClickHouse, stopClickHouse } from "./setup.ts";
 import { consume, generateSessionId } from "./test_utils.ts";
 
 const encoder = new TextEncoder();
@@ -23,7 +22,7 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   before(async () => {
     await init();
     clickhouse = await startClickHouse();
-    baseUrl = clickhouse.url + "/";
+    baseUrl = `${clickhouse.url}/`;
     auth = { username: clickhouse.username, password: clickhouse.password };
   });
 
@@ -34,11 +33,13 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Basic operations", () => {
     it("should create and query a table", async () => {
       // Create table
-      await consume(query(
-        "CREATE TABLE IF NOT EXISTS test_basic (id UInt32, name String) ENGINE = Memory",
-        sessionId,
-        { baseUrl, auth, compression: false },
-      ));
+      await consume(
+        query(
+          "CREATE TABLE IF NOT EXISTS test_basic (id UInt32, name String) ENGINE = Memory",
+          sessionId,
+          { baseUrl, auth, compression: false },
+        ),
+      );
 
       // Insert data using streamEncodeJsonEachRow helper
       const data = [
@@ -68,29 +69,31 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[2].name, "Charlie");
 
       // Clean up
-      await consume(query("DROP TABLE test_basic", sessionId, {
-        baseUrl,
-        auth,
-        compression: false,
-      }));
+      await consume(
+        query("DROP TABLE test_basic", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
+      );
     });
   });
 
   describe("Compression methods", () => {
     for (const compression of [false, "lz4", "zstd"] as const) {
       it(`should insert with ${compression} compression`, async () => {
-        await consume(query(
-          "CREATE TABLE IF NOT EXISTS test_compression (value String) ENGINE = Memory",
-          sessionId,
-          { baseUrl, auth, compression },
-        ));
+        await consume(
+          query(
+            "CREATE TABLE IF NOT EXISTS test_compression (value String) ENGINE = Memory",
+            sessionId,
+            { baseUrl, auth, compression },
+          ),
+        );
 
         const rows = Array.from({ length: 1000 }, (_, i) => ({
           value: `test_${i}`,
         }));
-        const data = encoder.encode(
-          rows.map((r) => JSON.stringify(r)).join("\n") + "\n",
-        );
+        const data = encoder.encode(`${rows.map((r) => JSON.stringify(r)).join("\n")}\n`);
 
         await insert(`INSERT INTO test_compression FORMAT JSONEachRow`, data, sessionId, {
           baseUrl,
@@ -108,11 +111,13 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
         const parsed = JSON.parse(result);
         assert.strictEqual(Number(parsed.data[0].cnt), 1000);
 
-        await consume(query("DROP TABLE test_compression", sessionId, {
-          baseUrl,
-          auth,
-          compression,
-        }));
+        await consume(
+          query("DROP TABLE test_compression", sessionId, {
+            baseUrl,
+            auth,
+            compression,
+          }),
+        );
       });
     }
   });
@@ -120,16 +125,18 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Streaming inserts with generators", () => {
     it("should handle generator that yields batches", async () => {
       // Create table
-      await consume(query(
-        "CREATE TABLE IF NOT EXISTS test_generator (id UInt32, value String) ENGINE = Memory",
-        sessionId,
-        { baseUrl, auth, compression: false },
-      ));
+      await consume(
+        query(
+          "CREATE TABLE IF NOT EXISTS test_generator (id UInt32, value String) ENGINE = Memory",
+          sessionId,
+          { baseUrl, auth, compression: false },
+        ),
+      );
 
       // Generator that yields byte batches
       async function* generateBatches() {
         for (let batch = 0; batch < 10; batch++) {
-          const batchData: { id: number, value: string }[] = [];
+          const batchData: { id: number; value: string }[] = [];
           for (let i = 0; i < 100; i++) {
             batchData.push({
               id: batch * 100 + i,
@@ -137,57 +144,53 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
             });
           }
 
-          yield encoder.encode(
-            batchData.map((r) => JSON.stringify(r)).join("\n") + "\n",
-          );
+          yield encoder.encode(`${batchData.map((r) => JSON.stringify(r)).join("\n")}\n`);
         }
       }
 
       let progressUpdates = 0;
-      await insert(
-        "INSERT INTO test_generator FORMAT JSONEachRow",
-        generateBatches(),
-        sessionId,
-        {
-          baseUrl,
-          auth,
-          compression: "lz4",
-          onProgress: (progress) => {
-            progressUpdates++;
-            assert.ok(progress.bytesUncompressed > 0);
-          },
+      await insert("INSERT INTO test_generator FORMAT JSONEachRow", generateBatches(), sessionId, {
+        baseUrl,
+        auth,
+        compression: "lz4",
+        onProgress: (progress) => {
+          progressUpdates++;
+          assert.ok(progress.bytesUncompressed > 0);
         },
-      );
+      });
 
       assert.ok(progressUpdates > 0, "Should have progress updates");
 
       // Verify count
       const result = await collectText(
-        query(
-          "SELECT count(*) as cnt FROM test_generator FORMAT JSON",
-          sessionId,
-          { baseUrl, auth },
-        ),
+        query("SELECT count(*) as cnt FROM test_generator FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+        }),
       );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(Number(parsed.data[0].cnt), 1000);
 
       // Clean up
-      await consume(query("DROP TABLE test_generator", sessionId, {
-        baseUrl,
-        auth,
-        compression: false,
-      }));
+      await consume(
+        query("DROP TABLE test_generator", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
+      );
     });
 
     it("should handle generator that yields single rows", async () => {
       // Create table
-      await consume(query(
-        "CREATE TABLE IF NOT EXISTS test_single (id UInt32) ENGINE = Memory",
-        sessionId,
-        { baseUrl, auth, compression: false },
-      ));
+      await consume(
+        query("CREATE TABLE IF NOT EXISTS test_single (id UInt32) ENGINE = Memory", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
+      );
 
       // Use streamEncodeJsonEachRow with async generator
       async function* generateSingle() {
@@ -205,33 +208,33 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       // Verify
       const result = await collectText(
-        query(
-          "SELECT count(*) as cnt FROM test_single FORMAT JSON",
-          sessionId,
-          { baseUrl, auth },
-        ),
+        query("SELECT count(*) as cnt FROM test_single FORMAT JSON", sessionId, { baseUrl, auth }),
       );
 
       const parsed = JSON.parse(result);
       assert.strictEqual(Number(parsed.data[0].cnt), 500);
 
       // Clean up
-      await consume(query("DROP TABLE test_single", sessionId, {
-        baseUrl,
-        auth,
-        compression: false,
-      }));
+      await consume(
+        query("DROP TABLE test_single", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
+      );
     });
   });
 
   describe("Streaming queries with compression", () => {
     it("should stream compressed query results", async () => {
       // Setup: Create table with data
-      await consume(query(
-        "CREATE TABLE IF NOT EXISTS test_stream (id UInt32) ENGINE = Memory",
-        sessionId,
-        { baseUrl, auth, compression: false },
-      ));
+      await consume(
+        query("CREATE TABLE IF NOT EXISTS test_stream (id UInt32) ENGINE = Memory", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
+      );
 
       // Insert test data
       const rows = Array.from({ length: 10000 }, (_, i) => ({ id: i }));
@@ -261,11 +264,13 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(totalRows, 10000);
 
       // Clean up
-      await consume(query("DROP TABLE test_stream", sessionId, {
-        baseUrl,
-        auth,
-        compression: false,
-      }));
+      await consume(
+        query("DROP TABLE test_stream", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
+      );
     });
 
     it("should handle large compressed responses", async () => {
@@ -274,11 +279,10 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       let totalRows = 0;
 
       for await (const chunk of streamText(
-        query(
-          "SELECT number FROM system.numbers LIMIT 100000 FORMAT CSV",
-          sessionId,
-          { baseUrl, auth },
-        ),
+        query("SELECT number FROM system.numbers LIMIT 100000 FORMAT CSV", sessionId, {
+          baseUrl,
+          auth,
+        }),
       )) {
         chunks++;
         // Count actual data rows (CSV format, one number per line)
@@ -294,74 +298,74 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
   describe("Error handling", () => {
     it("should handle invalid queries", async () => {
       try {
-        await consume(query(
-          "SELECT * FROM non_existent_table",
-          sessionId,
-          { baseUrl, auth, compression: false },
-        ));
+        await consume(
+          query("SELECT * FROM non_existent_table", sessionId, {
+            baseUrl,
+            auth,
+            compression: false,
+          }),
+        );
         assert.fail("Should have thrown an error");
       } catch (err) {
         const error = err as Error;
         assert.ok(
-          error.message.includes("UNKNOWN_TABLE") ||
-          error.message.includes("doesn't exist"),
+          error.message.includes("UNKNOWN_TABLE") || error.message.includes("doesn't exist"),
         );
       }
     });
 
     it("should handle insert errors", async () => {
       // Create table with specific schema
-      await consume(query(
-        "CREATE TABLE IF NOT EXISTS test_error (id UInt32) ENGINE = Memory",
-        sessionId,
-        { baseUrl, auth, compression: false },
-      ));
-
-      // Try to insert wrong data type
-      const invalidData = encoder.encode(
-        JSON.stringify({ id: "not_a_number" }) + "\n",
+      await consume(
+        query("CREATE TABLE IF NOT EXISTS test_error (id UInt32) ENGINE = Memory", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
       );
 
+      // Try to insert wrong data type
+      const invalidData = encoder.encode(`${JSON.stringify({ id: "not_a_number" })}\n`);
+
       try {
-        await insert(
-          "INSERT INTO test_error FORMAT JSONEachRow",
-          invalidData,
-          sessionId,
-          { baseUrl, auth },
-        );
+        await insert("INSERT INTO test_error FORMAT JSONEachRow", invalidData, sessionId, {
+          baseUrl,
+          auth,
+        });
         assert.fail("Should have thrown an error");
       } catch (err) {
         const error = err as Error;
         assert.ok(
-          error.message.includes("TYPE_MISMATCH") ||
-          error.message.includes("Cannot parse"),
+          error.message.includes("TYPE_MISMATCH") || error.message.includes("Cannot parse"),
         );
       }
 
       // Clean up
-      await consume(query("DROP TABLE test_error", sessionId, {
-        baseUrl,
-        auth,
-        compression: false,
-      }));
+      await consume(
+        query("DROP TABLE test_error", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
+      );
     });
   });
 
   describe("Streaming error scenarios", () => {
     it("should handle generator that throws mid-stream", async () => {
       // Create table
-      await consume(query(
-        "CREATE TABLE IF NOT EXISTS test_stream_error (id UInt32, value String) ENGINE = Memory",
-        sessionId,
-        { baseUrl, auth, compression: false },
-      ));
+      await consume(
+        query(
+          "CREATE TABLE IF NOT EXISTS test_stream_error (id UInt32, value String) ENGINE = Memory",
+          sessionId,
+          { baseUrl, auth, compression: false },
+        ),
+      );
 
       // Generator that throws after some items
       async function* errorGenerator() {
         for (let i = 0; i < 100; i++) {
-          yield encoder.encode(
-            JSON.stringify({ id: i, value: `value_${i}` }) + "\n",
-          );
+          yield encoder.encode(`${JSON.stringify({ id: i, value: `value_${i}` })}\n`);
         }
         throw new Error("Generator error mid-stream");
       }
@@ -381,27 +385,27 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       }
 
       // Clean up
-      await consume(query(
-        "DROP TABLE test_stream_error",
-        sessionId,
-        { baseUrl, auth, compression: false },
-      ));
+      await consume(
+        query("DROP TABLE test_stream_error", sessionId, { baseUrl, auth, compression: false }),
+      );
     });
 
     it("should handle AbortSignal cancellation", async () => {
       // Create table
-      await consume(query(
-        "CREATE TABLE IF NOT EXISTS test_abort (id UInt32) ENGINE = Memory",
-        sessionId,
-        { baseUrl, auth, compression: false },
-      ));
+      await consume(
+        query("CREATE TABLE IF NOT EXISTS test_abort (id UInt32) ENGINE = Memory", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
+      );
 
       const controller = new AbortController();
 
       // Generator that yields many items
       async function* slowGenerator() {
         for (let i = 0; i < 100000; i++) {
-          yield encoder.encode(JSON.stringify({ id: i }) + "\n");
+          yield encoder.encode(`${JSON.stringify({ id: i })}\n`);
           // Abort after first few items
           if (i === 10) {
             controller.abort();
@@ -410,44 +414,47 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       }
 
       try {
-        await insert(
-          "INSERT INTO test_abort FORMAT JSONEachRow",
-          slowGenerator(),
-          sessionId,
-          { baseUrl, auth, signal: controller.signal },
-        );
+        await insert("INSERT INTO test_abort FORMAT JSONEachRow", slowGenerator(), sessionId, {
+          baseUrl,
+          auth,
+          signal: controller.signal,
+        });
         assert.fail("Should have aborted");
       } catch (err) {
         const error = err as Error;
         assert.ok(
           error.name === "AbortError" ||
-          error.message.includes("abort") ||
-          error.message.includes("cancelled"),
+            error.message.includes("abort") ||
+            error.message.includes("cancelled"),
         );
       }
 
       // Clean up
-      await consume(query("DROP TABLE test_abort", sessionId, {
-        baseUrl,
-        auth,
-        compression: false,
-      }));
+      await consume(
+        query("DROP TABLE test_abort", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
+      );
     });
 
     it("should fire progress callbacks during compression", async () => {
       // Create table
-      await consume(query(
-        "CREATE TABLE IF NOT EXISTS test_progress (id UInt32) ENGINE = Memory",
-        sessionId,
-        { baseUrl, auth, compression: false },
-      ));
+      await consume(
+        query("CREATE TABLE IF NOT EXISTS test_progress (id UInt32) ENGINE = Memory", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
+      );
 
       const progressEvents: any[] = [];
       let insertComplete = false;
 
       async function* dataGenerator() {
         for (let i = 0; i < 1000; i++) {
-          yield encoder.encode(JSON.stringify({ id: i }) + "\n");
+          yield encoder.encode(`${JSON.stringify({ id: i })}\n`);
         }
       }
 
@@ -474,17 +481,16 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
       // Verify all progress events fired before insert completed
       const allBeforeComplete = progressEvents.every((e) => !e.insertComplete);
-      assert.ok(
-        allBeforeComplete,
-        "Progress events should fire during compression, not after",
-      );
+      assert.ok(allBeforeComplete, "Progress events should fire during compression, not after");
 
       // Clean up
-      await consume(query("DROP TABLE test_progress", sessionId, {
-        baseUrl,
-        auth,
-        compression: false,
-      }));
+      await consume(
+        query("DROP TABLE test_progress", sessionId, {
+          baseUrl,
+          auth,
+          compression: false,
+        }),
+      );
     });
   });
 
@@ -501,11 +507,10 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       let lastChunkSize = 0;
 
       // Iterate over packets from query()
-      for await (const packet of query(
-        "SELECT * FROM system.numbers LIMIT 1000000",
-        sessionId,
-        { baseUrl, auth },
-      )) {
+      for await (const packet of query("SELECT * FROM system.numbers LIMIT 1000000", sessionId, {
+        baseUrl,
+        auth,
+      })) {
         // Each Data packet contains a decompressed block
         if (packet.type === "Data") {
           if (packet.chunk.length !== lastChunkSize) {
@@ -549,15 +554,11 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
 
     it("should use query parameters with multiple values", async () => {
       const result = await collectText(
-        query(
-          "SELECT {a:UInt32} + {b:UInt32} as sum, {msg:String} as msg FORMAT JSON",
-          sessionId,
-          {
-            baseUrl,
-            auth,
-            params: { a: 10, b: 32, msg: "test" },
-          },
-        ),
+        query("SELECT {a:UInt32} + {b:UInt32} as sum, {msg:String} as msg FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { a: 10, b: 32, msg: "test" },
+        }),
       );
 
       const parsed = JSON.parse(result);

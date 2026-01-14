@@ -2,12 +2,7 @@
  * Buffer I/O utilities for Native format encoding/decoding.
  */
 
-import {
-  TEXT_ENCODER,
-  TEXT_DECODER,
-  type DecodeOptions,
-  type TypedArray,
-} from "./types.ts";
+import { type DecodeOptions, TEXT_DECODER, TEXT_ENCODER, type TypedArray } from "./types.ts";
 
 /**
  * VarInt (LEB128) encoding constants.
@@ -144,11 +139,7 @@ export function varIntSize(value: number | bigint): number {
   return size;
 }
 
-export function writeVarInt(
-  buffer: Uint8Array,
-  offset: number,
-  value: number | bigint,
-): number {
+export function writeVarInt(buffer: Uint8Array, offset: number, value: number | bigint): number {
   let v = BigInt(value);
   let pos = offset;
   while (v >= VarInt.CONTINUATION_THRESHOLD) {
@@ -159,10 +150,7 @@ export function writeVarInt(
   return pos - offset;
 }
 
-export function readVarInt(
-  buffer: Uint8Array,
-  cursor: { offset: number },
-): number {
+export function readVarInt(buffer: Uint8Array, cursor: { offset: number }): number {
   let result = 0,
     shift = 0;
   while (true) {
@@ -176,10 +164,7 @@ export function readVarInt(
   return result;
 }
 
-export function readVarInt64(
-  buffer: Uint8Array,
-  cursor: { offset: number },
-): bigint {
+export function readVarInt64(buffer: Uint8Array, cursor: { offset: number }): bigint {
   let result = 0n,
     shift = 0n;
   while (true) {
@@ -206,7 +191,7 @@ export class BufferWriter {
   private ensure(bytes: number) {
     const needed = this.offset + bytes;
     if (needed <= this.buffer.length) return;
-    let newSize = Math.max(this.buffer.length * 2, needed);
+    const newSize = Math.max(this.buffer.length * 2, needed);
     const newBuffer = new Uint8Array(newSize);
     newBuffer.set(this.buffer.subarray(0, this.offset));
     this.buffer = newBuffer;
@@ -264,11 +249,7 @@ export class BufferWriter {
     } else {
       // Multi-byte varint: shift the encoded string
       const vSize = varIntSize(written);
-      this.buffer.copyWithin(
-        this.offset + vSize,
-        this.offset + 1,
-        this.offset + 1 + written,
-      );
+      this.buffer.copyWithin(this.offset + vSize, this.offset + 1, this.offset + 1 + written);
       writeVarInt(this.buffer, this.offset, written);
       this.offset += vSize + written;
     }
@@ -292,11 +273,7 @@ export class BufferReader {
   constructor(buffer: Uint8Array, offset = 0, options?: DecodeOptions) {
     this.buffer = buffer;
     this.offset = offset;
-    this.view = new DataView(
-      buffer.buffer,
-      buffer.byteOffset,
-      buffer.byteLength,
-    );
+    this.view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
     this.options = options;
   }
 
@@ -311,18 +288,13 @@ export class BufferReader {
   readString(): string {
     const len = this.readVarint();
     this.ensureAvailable(len);
-    const str = TEXT_DECODER.decode(
-      this.buffer.subarray(this.offset, this.offset + len),
-    );
+    const str = TEXT_DECODER.decode(this.buffer.subarray(this.offset, this.offset + len));
     this.offset += len;
     return str;
   }
 
   // Zero-copy if aligned, copy otherwise
-  readTypedArray<T extends TypedArray>(
-    Ctor: TypedArrayConstructor<T>,
-    count: number,
-  ): T {
+  readTypedArray<T extends TypedArray>(Ctor: TypedArrayConstructor<T>, count: number): T {
     const elementSize = Ctor.BYTES_PER_ELEMENT;
     const byteLength = count * elementSize;
     this.ensureAvailable(byteLength);
@@ -332,9 +304,7 @@ export class BufferReader {
     if (currentOffset % elementSize === 0) {
       res = new Ctor(this.buffer.buffer as ArrayBuffer, currentOffset, count);
     } else {
-      const copy = new Uint8Array(
-        this.buffer.subarray(this.offset, this.offset + byteLength),
-      );
+      const copy = new Uint8Array(this.buffer.subarray(this.offset, this.offset + byteLength));
       res = new Ctor(copy.buffer as ArrayBuffer, 0, count);
     }
     this.offset += byteLength;

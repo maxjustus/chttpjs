@@ -8,54 +8,59 @@
  * `output_format_native_use_flattened_dynamic_and_json_serialization` setting.
  */
 
-import {
-  type ColumnDef,
-  type DecodeOptions,
-  parseTypeList,
-  parseTupleElements,
-} from "./types.ts";
-
-import { StreamBuffer, BufferWriter, BufferReader } from "./io.ts";
 import { getCodec } from "./codecs.ts";
 import { type Column, DataColumn, EnumColumn } from "./columns.ts";
 import { BlockInfoField } from "./constants.ts";
+import { BufferReader, BufferWriter, StreamBuffer } from "./io.ts";
+import { collectRows, rows } from "./rows.ts";
 import {
+  DEFAULT_DENSE_NODE,
   type DeserializerState,
   type SerializationNode,
-  DEFAULT_DENSE_NODE,
 } from "./serialization.ts";
 import {
+  batchBuilder,
+  batchFromArrays,
+  batchFromCols,
+  batchFromRows,
+  type MaterializeOptions,
   RecordBatch,
   RecordBatchBuilder,
   type Row,
-  type MaterializeOptions,
-  batchFromArrays,
-  batchFromRows,
-  batchFromCols,
-  batchBuilder,
 } from "./table.ts";
-import { rows, collectRows } from "./rows.ts";
+import { type ColumnDef, type DecodeOptions, parseTupleElements, parseTypeList } from "./types.ts";
 
 // Re-export types for public API
 export {
-  type ColumnDef,
-  type DecodeResult,
-  type DecodeOptions,
   ClickHouseDateTime64,
+  type ColumnDef,
+  type DecodeOptions,
+  type DecodeResult,
   TEXT_DECODER,
 } from "./types.ts";
 
 // Re-export table helpers / types
-export { type Column, RecordBatch, RecordBatchBuilder, type Row, type MaterializeOptions, EnumColumn };
+export {
+  type Column,
+  RecordBatch,
+  RecordBatchBuilder,
+  type Row,
+  type MaterializeOptions,
+  EnumColumn,
+};
 export { batchFromArrays, batchFromRows, batchFromCols, batchBuilder };
 export { rows, collectRows };
-export { makeBuilder, getCodec, type ColumnBuilder } from "./codecs.ts";
-
-// Re-export IO utilities needed by tcp_client
-export { StreamBuffer, BufferWriter, BufferReader, BufferUnderflowError, readVarInt64 } from "./io.ts";
-
+export { type ColumnBuilder, getCodec, makeBuilder } from "./codecs.ts";
 // Re-export constants needed by tcp_client
 export { BlockInfoField, Compression } from "./constants.ts";
+// Re-export IO utilities needed by tcp_client
+export {
+  BufferReader,
+  BufferUnderflowError,
+  BufferWriter,
+  readVarInt64,
+  StreamBuffer,
+} from "./io.ts";
 
 export interface Block {
   columns: ColumnDef[];
@@ -94,8 +99,7 @@ function estimateBlockSize(
         if (fieldId === BlockInfoField.End) break;
         if (fieldId === BlockInfoField.IsOverflows)
           reader.offset += 1; // is_overflows
-        else if (fieldId === BlockInfoField.BucketNum)
-          reader.offset += 4; // bucket_num
+        else if (fieldId === BlockInfoField.BucketNum) reader.offset += 4; // bucket_num
       }
     }
 
@@ -143,10 +147,7 @@ function estimateBlockSize(
  * Skip serialization tree bytes without building the tree.
  * Used when we only need to advance past the kind metadata.
  */
-function skipSerializationTree(
-  reader: BufferReader,
-  typeStr: string,
-): void {
+function skipSerializationTree(reader: BufferReader, typeStr: string): void {
   reader.readU8(); // kind byte
 
   if (typeStr.startsWith("Tuple")) {
@@ -157,10 +158,7 @@ function skipSerializationTree(
       skipSerializationTree(reader, el.type);
     }
   } else if (typeStr.startsWith("Array")) {
-    const innerType = typeStr.substring(
-      typeStr.indexOf("(") + 1,
-      typeStr.lastIndexOf(")"),
-    );
+    const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
     skipSerializationTree(reader, innerType);
   } else if (typeStr.startsWith("Map")) {
     const args = parseTypeList(
@@ -169,10 +167,7 @@ function skipSerializationTree(
     skipSerializationTree(reader, args[0]);
     skipSerializationTree(reader, args[1]);
   } else if (typeStr.startsWith("Nullable")) {
-    const innerType = typeStr.substring(
-      typeStr.indexOf("(") + 1,
-      typeStr.lastIndexOf(")"),
-    );
+    const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
     skipSerializationTree(reader, innerType);
   }
 }
@@ -197,8 +192,7 @@ export function decodeNativeBlock(
       if (fieldId === BlockInfoField.End) break;
       if (fieldId === BlockInfoField.IsOverflows)
         reader.offset += 1; // is_overflows
-      else if (fieldId === BlockInfoField.BucketNum)
-        reader.offset += 4; // bucket_num
+      else if (fieldId === BlockInfoField.BucketNum) reader.offset += 4; // bucket_num
     }
   }
 
@@ -302,10 +296,7 @@ export async function* streamEncodeNative(
 /**
  * Helper to decode a block from a StreamBuffer with a stable slice.
  */
-function decodeFromStream(
-  streamBuffer: StreamBuffer,
-  options?: DecodeOptions,
-): BlockResult | null {
+function decodeFromStream(streamBuffer: StreamBuffer, options?: DecodeOptions): BlockResult | null {
   const buffer = streamBuffer.view;
   if (buffer.length === 0) return null;
 
@@ -384,9 +375,7 @@ export async function* streamDecodeNative(
   }
 
   if (options?.debug) {
-    console.log(
-      `[streamDecodeNative] ${blocksDecoded} blocks, ${totalBytesReceived} bytes`,
-    );
+    console.log(`[streamDecodeNative] ${blocksDecoded} blocks, ${totalBytesReceived} bytes`);
   }
 }
 

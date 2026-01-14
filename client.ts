@@ -1,33 +1,33 @@
 import {
-  init,
-  encodeBlock,
   decodeBlock,
   decodeBlocks,
+  encodeBlock,
+  init,
+  lz4CompressFrame,
   Method,
   type MethodCode,
   zstdCompressRaw,
-  lz4CompressFrame,
 } from "./compression.ts";
 import type { ClickHouseSettings } from "./settings.ts";
 
 export {
-  encodeNative,
-  streamEncodeNative,
-  streamDecodeNative,
-  rows,
-  collectRows,
-  RecordBatch,
-  type ColumnDef,
-  type DecodeResult,
   ClickHouseDateTime64,
+  type ColumnDef,
+  collectRows,
+  type DecodeResult,
+  encodeNative,
+  RecordBatch,
+  rows,
+  streamDecodeNative,
+  streamEncodeNative,
 } from "@maxjustus/chttp/native";
 
 import { StreamBuffer } from "@maxjustus/chttp/native";
-import { collectable, type CollectableAsyncGenerator } from "./util.ts";
+import { type CollectableAsyncGenerator, collectable } from "./util.ts";
 
 export type { CollectableAsyncGenerator } from "./util.ts";
 
-export type Compression = 'lz4' | 'zstd' | false;
+export type Compression = "lz4" | "zstd" | false;
 
 /** Query parameters for parameterized queries like SELECT {x:UInt64} */
 export type QueryParams = Record<string, string | number | boolean | bigint>;
@@ -37,10 +37,7 @@ const AbortSignalAny = AbortSignal as typeof AbortSignal & {
   any(signals: AbortSignal[]): AbortSignal;
 };
 
-function createSignal(
-  signal?: AbortSignal,
-  timeout?: number,
-): AbortSignal | undefined {
+function createSignal(signal?: AbortSignal, timeout?: number): AbortSignal | undefined {
   if (!signal && !timeout) return undefined;
   if (signal && !timeout) return signal;
   if (!signal && timeout) return AbortSignal.timeout(timeout);
@@ -58,10 +55,7 @@ function compressionToMethod(compression: Compression): MethodCode {
   }
 }
 
-function* chunkUint8Array(
-  data: Uint8Array,
-  chunkSize: number,
-): Generator<Uint8Array> {
+function* chunkUint8Array(data: Uint8Array, chunkSize: number): Generator<Uint8Array> {
   let offset = 0;
   while (offset < data.length) {
     const end = Math.min(offset + chunkSize, data.length);
@@ -86,17 +80,11 @@ function concatBytes(arrays: Uint8Array[]): Uint8Array {
 
 function readUInt32LE(arr: Uint8Array, offset: number): number {
   return (
-    arr[offset] |
-    (arr[offset + 1] << 8) |
-    (arr[offset + 2] << 16) |
-    ((arr[offset + 3] << 24) >>> 0)
+    arr[offset] | (arr[offset + 1] << 8) | (arr[offset + 2] << 16) | ((arr[offset + 3] << 24) >>> 0)
   );
 }
 
-function mergeParams(
-  target: Record<string, string>,
-  source?: Record<string, unknown>
-): void {
+function mergeParams(target: Record<string, string>, source?: Record<string, unknown>): void {
   if (!source) return;
   for (const [key, value] of Object.entries(source)) {
     target[key] = String(value);
@@ -104,10 +92,7 @@ function mergeParams(
 }
 
 /** Merge query parameters with param_ prefix for ClickHouse parameterized queries */
-function mergeQueryParams(
-  target: Record<string, string>,
-  source?: QueryParams
-): void {
+function mergeQueryParams(target: Record<string, string>, source?: QueryParams): void {
   if (!source) return;
   for (const [key, value] of Object.entries(source)) {
     target[`param_${key}`] = String(value);
@@ -124,17 +109,13 @@ interface AuthConfig {
  * @param params - Query params including ClickHouse settings (max_execution_time, etc.)
  *   See: https://clickhouse.com/docs/en/operations/settings/settings
  */
-function buildReqUrl(
-  baseUrl: string,
-  params: Record<string, string>,
-  auth?: AuthConfig,
-): URL {
+function buildReqUrl(baseUrl: string, params: Record<string, string>, auth?: AuthConfig): URL {
   const url = new URL(baseUrl);
   Object.entries(params).forEach(([key, value]) => {
     url.searchParams.append(key, value);
   });
 
-  if (auth && auth.username) {
+  if (auth?.username) {
     url.searchParams.append("user", auth.username);
     if (auth.password) {
       url.searchParams.append("password", auth.password);
@@ -240,11 +221,7 @@ export interface InsertOptions {
   queryId?: string;
 }
 
-type InsertData =
-  | Uint8Array
-  | Uint8Array[]
-  | AsyncIterable<Uint8Array>
-  | Iterable<Uint8Array>;
+type InsertData = Uint8Array | Uint8Array[] | AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
 
 async function insert(
   query: string,
@@ -283,7 +260,7 @@ async function insert(
   } else if (Array.isArray(data)) {
     // Array of Uint8Arrays - yield chunks from each
     const chunks = data as Uint8Array[];
-    inputData = (function*() {
+    inputData = (function* () {
       for (const chunk of chunks) {
         yield* chunkUint8Array(chunk, threshold);
       }
@@ -303,8 +280,8 @@ async function insert(
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        let bufferA = new Uint8Array(bufferSize);
-        let bufferB = new Uint8Array(bufferSize);
+        const bufferA = new Uint8Array(bufferSize);
+        const bufferB = new Uint8Array(bufferSize);
         let fillBuffer = bufferA;
         let fillLen = 0;
         let flushPromise: Promise<void> | null = null;
@@ -330,15 +307,9 @@ async function insert(
 
           while (chunkOffset < chunk.length) {
             const spaceAvailable = fillBuffer.length - fillLen;
-            const bytesToCopy = Math.min(
-              spaceAvailable,
-              chunk.length - chunkOffset,
-            );
+            const bytesToCopy = Math.min(spaceAvailable, chunk.length - chunkOffset);
 
-            fillBuffer.set(
-              chunk.subarray(chunkOffset, chunkOffset + bytesToCopy),
-              fillLen,
-            );
+            fillBuffer.set(chunk.subarray(chunkOffset, chunkOffset + bytesToCopy), fillLen);
             fillLen += bytesToCopy;
             chunkOffset += bytesToCopy;
 
@@ -403,25 +374,21 @@ async function insert(
  * Convert objects to JSONEachRow format as Uint8Array chunks.
  * Use with insert() for JSON data.
  */
-function streamEncodeJsonEachRow(
-  data: Iterable<unknown>,
-): Generator<Uint8Array>;
-function streamEncodeJsonEachRow(
-  data: AsyncIterable<unknown>,
-): AsyncGenerator<Uint8Array>;
+function streamEncodeJsonEachRow(data: Iterable<unknown>): Generator<Uint8Array>;
+function streamEncodeJsonEachRow(data: AsyncIterable<unknown>): AsyncGenerator<Uint8Array>;
 function streamEncodeJsonEachRow(
   data: Iterable<unknown> | AsyncIterable<unknown>,
 ): Generator<Uint8Array> | AsyncGenerator<Uint8Array> {
   if (Symbol.asyncIterator in data) {
-    return (async function*() {
+    return (async function* () {
       for await (const row of data) {
-        yield encoder.encode(JSON.stringify(row) + "\n");
+        yield encoder.encode(`${JSON.stringify(row)}\n`);
       }
     })();
   }
-  return (function*() {
+  return (function* () {
     for (const row of data as Iterable<unknown>) {
-      yield encoder.encode(JSON.stringify(row) + "\n");
+      yield encoder.encode(`${JSON.stringify(row)}\n`);
     }
   })();
 }
@@ -471,14 +438,15 @@ export interface QueryOptions {
  * Build a multipart/form-data body for external tables.
  * Returns sync Uint8Array for string/Uint8Array data, or ReadableStream for async data.
  */
-function buildMultipartBody(
-  tables: Record<string, HttpExternalTable>
-): { body: Uint8Array | ReadableStream<Uint8Array>; boundary: string } {
-  const boundary = `----chttpBoundary${crypto.randomUUID().replace(/-/g, '')}`;
+function buildMultipartBody(tables: Record<string, HttpExternalTable>): {
+  body: Uint8Array | ReadableStream<Uint8Array>;
+  boundary: string;
+} {
+  const boundary = `----chttpBoundary${crypto.randomUUID().replace(/-/g, "")}`;
 
   // Check if any table has async data
-  const hasAsync = Object.values(tables).some(t =>
-    typeof t.data === 'object' && t.data !== null && Symbol.asyncIterator in t.data
+  const hasAsync = Object.values(tables).some(
+    (t) => typeof t.data === "object" && t.data !== null && Symbol.asyncIterator in t.data,
   );
 
   if (!hasAsync) {
@@ -487,12 +455,12 @@ function buildMultipartBody(
     for (const [name, table] of Object.entries(tables)) {
       const header = `--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="data"\r\n\r\n`;
       parts.push(encoder.encode(header));
-      if (typeof table.data === 'string') {
+      if (typeof table.data === "string") {
         parts.push(encoder.encode(table.data));
       } else {
         parts.push(table.data as Uint8Array);
       }
-      parts.push(encoder.encode('\r\n'));
+      parts.push(encoder.encode("\r\n"));
     }
     parts.push(encoder.encode(`--${boundary}--\r\n`));
     return { body: concatBytes(parts), boundary };
@@ -518,15 +486,15 @@ function buildMultipartBody(
             sentHeader = true;
 
             // For sync data, enqueue it all at once
-            if (typeof table.data === 'string') {
+            if (typeof table.data === "string") {
               controller.enqueue(encoder.encode(table.data));
-              controller.enqueue(encoder.encode('\r\n'));
+              controller.enqueue(encoder.encode("\r\n"));
               sentHeader = false;
               entryIndex++;
               continue;
             } else if (table.data instanceof Uint8Array) {
               controller.enqueue(table.data);
-              controller.enqueue(encoder.encode('\r\n'));
+              controller.enqueue(encoder.encode("\r\n"));
               sentHeader = false;
               entryIndex++;
               continue;
@@ -544,11 +512,10 @@ function buildMultipartBody(
               return;
             }
             // Done with this async iterable
-            controller.enqueue(encoder.encode('\r\n'));
+            controller.enqueue(encoder.encode("\r\n"));
             currentIterator = null;
             sentHeader = false;
             entryIndex++;
-            continue;
           }
         }
 
@@ -558,9 +525,9 @@ function buildMultipartBody(
           sentFooter = true;
         }
         controller.close();
-      }
+      },
     }),
-    boundary
+    boundary,
   };
 }
 
@@ -625,7 +592,8 @@ async function* queryImpl(
   }
 
   // Handle external tables: query goes in URL, body is multipart
-  const hasExternalTables = options.externalTables && Object.keys(options.externalTables).length > 0;
+  const hasExternalTables =
+    options.externalTables && Object.keys(options.externalTables).length > 0;
   if (hasExternalTables) {
     params.query = sql;
     for (const [name, table] of Object.entries(options.externalTables!)) {
@@ -786,10 +754,7 @@ async function* dataChunks(input: QueryInput): AsyncGenerator<Uint8Array> {
  *   console.log(line);
  * }
  */
-async function* streamLines(
-  input: QueryInput,
-  delimiter: string = "\n",
-): AsyncGenerator<string> {
+async function* streamLines(input: QueryInput, delimiter: string = "\n"): AsyncGenerator<string> {
   let buffer = "";
   for await (const text of decodeText(dataChunks(input))) {
     buffer += text;
@@ -811,18 +776,14 @@ async function* streamLines(
  *   console.log(row.id, row.name);
  * }
  */
-async function* streamDecodeJsonEachRow<T = unknown>(
-  input: QueryInput,
-): AsyncGenerator<T> {
+async function* streamDecodeJsonEachRow<T = unknown>(input: QueryInput): AsyncGenerator<T> {
   for await (const line of streamLines(input)) {
     yield JSON.parse(line) as T;
   }
 }
 
 /** Internal text decoder for raw streams */
-async function* decodeText(
-  chunks: AsyncIterable<Uint8Array>,
-): AsyncGenerator<string> {
+async function* decodeText(chunks: AsyncIterable<Uint8Array>): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   for await (const chunk of chunks) {
     yield decoder.decode(chunk, { stream: true });
@@ -839,9 +800,7 @@ async function* decodeText(
  *   console.log(text);
  * }
  */
-async function* streamText(
-  input: QueryInput,
-): AsyncGenerator<string> {
+async function* streamText(input: QueryInput): AsyncGenerator<string> {
   yield* decodeText(dataChunks(input));
 }
 
@@ -852,9 +811,7 @@ async function* streamText(
  * const data = await collectBytes(query("SELECT ...", session, config));
  * const result = await decodeNative(data);
  */
-async function collectBytes(
-  input: QueryInput,
-): Promise<Uint8Array> {
+async function collectBytes(input: QueryInput): Promise<Uint8Array> {
   const parts: Uint8Array[] = [];
   let totalLen = 0;
   for await (const chunk of dataChunks(input)) {
@@ -891,9 +848,7 @@ async function collectText(input: QueryInput): Promise<string> {
  * @example
  * const rows = await collectJsonEachRow<{ id: number }>(query("SELECT ...", session, config));
  */
-async function collectJsonEachRow<T = unknown>(
-  input: QueryInput,
-): Promise<T[]> {
+async function collectJsonEachRow<T = unknown>(input: QueryInput): Promise<T[]> {
   const result: T[] = [];
   for await (const row of streamDecodeJsonEachRow<T>(input)) {
     result.push(row);

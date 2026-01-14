@@ -1,16 +1,15 @@
-
-import {
-  ClientPacketId,
-  DBMS_TCP_PROTOCOL_VERSION,
-  QueryProcessingStage,
-  REVISIONS,
-  QueryKind,
-  Interface,
-  CLIENT_VERSION,
-  DBMS_PARALLEL_REPLICAS_PROTOCOL_VERSION,
-} from "./types.ts";
 import { BlockInfoField, BufferWriter } from "@maxjustus/chttp/native";
 import { encodeBlock, Method, type MethodCode } from "../compression.ts";
+import {
+  CLIENT_VERSION,
+  ClientPacketId,
+  DBMS_PARALLEL_REPLICAS_PROTOCOL_VERSION,
+  DBMS_TCP_PROTOCOL_VERSION,
+  Interface,
+  QueryKind,
+  QueryProcessingStage,
+  REVISIONS,
+} from "./types.ts";
 
 /**
  * Handles encoding and writing ClickHouse protocol packets.
@@ -86,7 +85,14 @@ export class StreamingWriter {
     return this.flush();
   }
 
-  encodeQuery(qid: string, query: string, revision: bigint, settings: Record<string, unknown> = {}, compression: boolean = false, params: Record<string, unknown> = {}): Uint8Array {
+  encodeQuery(
+    qid: string,
+    query: string,
+    revision: bigint,
+    settings: Record<string, unknown> = {},
+    compression: boolean = false,
+    params: Record<string, unknown> = {},
+  ): Uint8Array {
     this.writeVarInt(ClientPacketId.Query);
     this.writeString(qid);
 
@@ -102,8 +108,8 @@ export class StreamingWriter {
 
     this.writeU8(Interface.TCP);
     this.writeString("chttp-client"); // os_user
-    this.writeString("localhost");    // client_hostname
-    this.writeString("ClickHouse");   // client_name
+    this.writeString("localhost"); // client_hostname
+    this.writeString("ClickHouse"); // client_name
     this.writeVarInt(CLIENT_VERSION.MAJOR);
     this.writeVarInt(CLIENT_VERSION.MINOR);
     this.writeVarInt(DBMS_TCP_PROTOCOL_VERSION);
@@ -152,7 +158,7 @@ export class StreamingWriter {
     }
 
     this.writeVarInt(QueryProcessingStage.Complete);
-    
+
     // Compression: 0 = disabled, 1 = enabled
     this.writeVarInt(compression ? 1 : 0);
     this.writeString(query);
@@ -172,7 +178,14 @@ export class StreamingWriter {
     return this.flush();
   }
 
-  encodeData(tableName: string, rowsCount: number, columns: { name: string, type: string, data: Uint8Array }[], revision: bigint, compress: boolean = false, method: MethodCode = Method.LZ4): Uint8Array {
+  encodeData(
+    tableName: string,
+    rowsCount: number,
+    columns: { name: string; type: string; data: Uint8Array }[],
+    revision: bigint,
+    compress: boolean = false,
+    method: MethodCode = Method.LZ4,
+  ): Uint8Array {
     if (compress) {
       this.writeVarInt(ClientPacketId.Data);
       this.writeString(tableName);
@@ -193,7 +206,11 @@ export class StreamingWriter {
     return this.flush();
   }
 
-  private encodeDataBlockContent(rowsCount: number, columns: { name: string, type: string, data: Uint8Array }[], revision: bigint): Uint8Array {
+  private encodeDataBlockContent(
+    rowsCount: number,
+    columns: { name: string; type: string; data: Uint8Array }[],
+    revision: bigint,
+  ): Uint8Array {
     const contentWriter = new BufferWriter();
 
     if (revision > 0n) {
@@ -213,7 +230,7 @@ export class StreamingWriter {
     for (const col of columns) {
       contentWriter.writeString(col.name);
       contentWriter.writeString(col.type);
-      
+
       if (revision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_CUSTOM_SERIALIZATION) {
         // has_custom_serialization (bool) - always 0 (dense) for now
         contentWriter.writeU8(0);

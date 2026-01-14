@@ -57,7 +57,9 @@
     "test:tcp-fuzz": "tsx --test tcp_client/test/fuzz.test.ts",
     "bench": "tsx bench/compression.ts",
     "bench:insert": "tsx bench/insert.ts",
-    "vendor:lz4": "npx jsr add @nick/lz4 && cp node_modules/@nick/lz4/lib/lz4.js node_modules/@nick/lz4/lib/lz4.internal.js vendor/lz4/ && rm -rf node_modules/@nick"
+    "vendor:lz4": "npx jsr add @nick/lz4 && cp node_modules/@nick/lz4/lib/lz4.js node_modules/@nick/lz4/lib/lz4.internal.js vendor/lz4/ && rm -rf node_modules/@nick",
+    "format": "biome format --write .",
+    "format:check": "biome check ."
   },
   "author": "maxjustus",
   "license": "MIT",
@@ -70,6 +72,7 @@
     "zstd-napi": "^0.0.12"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.3.11",
     "@testcontainers/clickhouse": "^11.5.1",
     "esbuild": "^0.27.0",
     "testcontainers": "^11.5.1",

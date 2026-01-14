@@ -48,8 +48,8 @@ function isControlASCII(code: number): boolean {
 }
 
 function hexNibble(code: number): number {
-  if (code >= 48 && code <= 57) return code - 48;       // '0'-'9'
-  if (code >= 65 && code <= 70) return code - 65 + 10;  // 'A'-'F'
+  if (code >= 48 && code <= 57) return code - 48; // '0'-'9'
+  if (code >= 65 && code <= 70) return code - 65 + 10; // 'A'-'F'
   if (code >= 97 && code <= 102) return code - 97 + 10; // 'a'-'f'
   return -1;
 }
@@ -64,25 +64,51 @@ function parseQuotedString(s: string, start: number): [string, number] | null {
   while (i < len) {
     const ch = s[i];
     if (ch === "'") return [result, i + 1];
-    if (ch !== "\\") { result += s[i++]; continue; }
+    if (ch !== "\\") {
+      result += s[i++];
+      continue;
+    }
 
     i++;
     if (i >= len) return null;
     const esc = s[i++];
     switch (esc) {
-      case "'": result += "'"; break;
-      case "\\": result += "\\"; break;
-      case "n": result += "\n"; break;
-      case "r": result += "\r"; break;
-      case "t": result += "\t"; break;
-      case "b": result += "\b"; break;
-      case "f": result += "\f"; break;
-      case "0": result += "\0"; break;
-      case "v": result += "\v"; break;
-      case "a": result += "\x07"; break;
-      case "e": result += "\x1B"; break;
-      case "N": break; // \N = empty string
-      case "x":
+      case "'":
+        result += "'";
+        break;
+      case "\\":
+        result += "\\";
+        break;
+      case "n":
+        result += "\n";
+        break;
+      case "r":
+        result += "\r";
+        break;
+      case "t":
+        result += "\t";
+        break;
+      case "b":
+        result += "\b";
+        break;
+      case "f":
+        result += "\f";
+        break;
+      case "0":
+        result += "\0";
+        break;
+      case "v":
+        result += "\v";
+        break;
+      case "a":
+        result += "\x07";
+        break;
+      case "e":
+        result += "\x1B";
+        break;
+      case "N":
+        break; // \N = empty string
+      case "x": {
         if (i + 2 > len) return null;
         const hi = hexNibble(s.charCodeAt(i));
         const lo = hexNibble(s.charCodeAt(i + 1));
@@ -90,14 +116,23 @@ function parseQuotedString(s: string, start: number): [string, number] | null {
         result += String.fromCharCode((hi << 4) | lo);
         i += 2;
         break;
-      default:
+      }
+      default: {
         // Preserve backslash for unknown escapes (e.g. \%), drop for special chars
         const code = esc.charCodeAt(0);
-        if (esc !== "\\" && esc !== "'" && esc !== '"' && esc !== "`" &&
-            esc !== "/" && esc !== "=" && !isControlASCII(code)) {
+        if (
+          esc !== "\\" &&
+          esc !== "'" &&
+          esc !== '"' &&
+          esc !== "`" &&
+          esc !== "/" &&
+          esc !== "=" &&
+          !isControlASCII(code)
+        ) {
           result += "\\";
         }
         result += esc;
+      }
     }
   }
   return null; // unclosed quote
@@ -141,8 +176,12 @@ export function parseEnumDefinition(type: string): EnumMapping | null {
 
     // Read numeric value (possibly negative)
     let sign = 1;
-    if (content[i] === "-") { sign = -1; i++; }
-    else if (content[i] === "+") { i++; }
+    if (content[i] === "-") {
+      sign = -1;
+      i++;
+    } else if (content[i] === "+") {
+      i++;
+    }
     let value = 0;
     let digits = 0;
     while (i < len) {
@@ -197,11 +236,7 @@ for (let i = 0; i < 6; i++) {
 export const TYPED_ARRAYS: Record<
   string,
   {
-    new (
-      buffer: ArrayBuffer,
-      byteOffset: number,
-      length: number,
-    ): ArrayBufferView;
+    new (buffer: ArrayBuffer, byteOffset: number, length: number): ArrayBufferView;
     BYTES_PER_ELEMENT: number;
   }
 > = {
@@ -286,8 +321,7 @@ export class ClickHouseDateTime64 {
    * Throws if value overflows JS Date range or precision is lost (sub-millisecond components).
    */
   toDate(): Date {
-    const ms =
-      this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow;
+    const ms = this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow;
     // Check for overflow (JS Date range: ±8.64e15 ms)
     if (ms > 8640000000000000n || ms < -8640000000000000n) {
       throw new RangeError(
@@ -307,8 +341,7 @@ export class ClickHouseDateTime64 {
    * Convert to native Date object, truncating sub-millisecond precision and clamping to JS Date range.
    */
   toClosestDate(): Date {
-    let ms =
-      this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow;
+    let ms = this.precision >= 3 ? this.ticks / this.pow : this.ticks * this.pow;
     // Clamp to JS Date range
     if (ms > 8640000000000000n) ms = 8640000000000000n;
     if (ms < -8640000000000000n) ms = -8640000000000000n;
@@ -324,22 +357,17 @@ export class ClickHouseDateTime64 {
   }
 }
 
-export function readVarint(
-  data: Uint8Array,
-  cursor: { offset: number },
-): number {
+export function readVarint(data: Uint8Array, cursor: { offset: number }): number {
   let value = 0;
   let mul = 1;
   while (true) {
     if (cursor.offset >= data.length) throw new RangeError("Buffer underflow");
     const byte = data[cursor.offset++];
     value += (byte & 0x7f) * mul;
-    if (!Number.isSafeInteger(value))
-      throw new RangeError("Varint exceeds JS safe integer range");
+    if (!Number.isSafeInteger(value)) throw new RangeError("Varint exceeds JS safe integer range");
     if ((byte & 0x80) === 0) break;
     mul *= 0x80;
-    if (!Number.isSafeInteger(mul))
-      throw new RangeError("Varint exceeds JS safe integer range");
+    if (!Number.isSafeInteger(mul)) throw new RangeError("Varint exceeds JS safe integer range");
   }
   return value;
 }
@@ -351,7 +379,7 @@ export function writeVarint(value: number): Uint8Array {
   const arr: number[] = [];
   let v = value;
   while (v >= 0x80) {
-    arr.push(v % 0x80 | 0x80);
+    arr.push((v % 0x80) | 0x80);
     v = Math.floor(v / 0x80);
   }
   arr.push(v);
@@ -371,11 +399,7 @@ export function leb128Size(value: number): number {
   return size;
 }
 
-export function utf8DecodeSmall(
-  data: Uint8Array,
-  start: number,
-  end: number,
-): string {
+export function utf8DecodeSmall(data: Uint8Array, start: number, end: number): string {
   let result = "";
   let i = start;
   while (i < end) {
@@ -403,10 +427,7 @@ export function utf8DecodeSmall(
   return result;
 }
 
-export function readString(
-  data: Uint8Array,
-  cursor: { offset: number },
-): string {
+export function readString(data: Uint8Array, cursor: { offset: number }): string {
   const len = readVarint(data, cursor);
   checkBounds(data, cursor, len);
   const end = cursor.offset + len;
@@ -418,20 +439,11 @@ export function readString(
   return str;
 }
 
-export function checkBounds(
-  data: Uint8Array,
-  cursor: { offset: number },
-  n: number,
-): void {
+export function checkBounds(data: Uint8Array, cursor: { offset: number }, n: number): void {
   if (cursor.offset + n > data.length) throw new RangeError("Buffer underflow");
 }
 
-export function writeBigInt128(
-  v: DataView,
-  o: number,
-  val: bigint,
-  signed: boolean,
-): void {
+export function writeBigInt128(v: DataView, o: number, val: bigint, signed: boolean): void {
   const low = val & 0xffffffffffffffffn;
   const high = val >> 64n;
   v.setBigUint64(o, low, true);
@@ -441,18 +453,11 @@ export function writeBigInt128(
 
 export function readBigInt128(v: DataView, o: number, signed: boolean): bigint {
   const low = v.getBigUint64(o, true);
-  const high = signed
-    ? v.getBigInt64(o + 8, true)
-    : v.getBigUint64(o + 8, true);
+  const high = signed ? v.getBigInt64(o + 8, true) : v.getBigUint64(o + 8, true);
   return (high << 64n) | low;
 }
 
-export function writeBigInt256(
-  v: DataView,
-  o: number,
-  val: bigint,
-  signed: boolean,
-): void {
+export function writeBigInt256(v: DataView, o: number, val: bigint, signed: boolean): void {
   for (let i = 0; i < 3; i++) {
     v.setBigUint64(o + i * 8, val & 0xffffffffffffffffn, true);
     val >>= 64n;
@@ -487,9 +492,7 @@ export function parseTypeList(inner: string): string[] {
   return types;
 }
 
-export function parseTupleElements(
-  inner: string,
-): { name: string | null; type: string }[] {
+export function parseTupleElements(inner: string): { name: string | null; type: string }[] {
   const parts = parseTypeList(inner);
   return parts.map((part) => {
     const match = part.match(/^([a-z_][a-z0-9_]*)\s+(.+)$/i);
@@ -578,12 +581,12 @@ export function formatScaledBigInt(val: bigint, scale: number): string {
   const neg = val < 0n;
   if (neg) val = -val;
   let str = val.toString();
-  if (scale === 0) return neg ? "-" + str : str;
-  while (str.length <= scale) str = "0" + str;
+  if (scale === 0) return neg ? `-${str}` : str;
+  while (str.length <= scale) str = `0${str}`;
   const intP = str.slice(0, -scale);
   const fracP = str.slice(-scale);
-  const r = intP + "." + fracP;
-  return neg ? "-" + r : r;
+  const r = `${intP}.${fracP}`;
+  return neg ? `-${r}` : r;
 }
 
 export function expandIPv6(str: string): string[] {
@@ -674,8 +677,7 @@ export function inferType(value: unknown): string {
     return "Float64";
   }
   if (value instanceof Date) return "DateTime64(3)";
-  if (value instanceof ClickHouseDateTime64)
-    return `DateTime64(${value.precision})`;
+  if (value instanceof ClickHouseDateTime64) return `DateTime64(${value.precision})`;
   if (Array.isArray(value)) {
     if (value.length === 0) return "Array(Nothing)";
     return `Array(${inferType(value[0])})`;

@@ -26,7 +26,7 @@ export interface ClickHouseSettings {
    * Format for AggregateFunction input during INSERT operations. Possible values: - `state` — Binary string with the serialized state (the default). This is the default behavior where AggregateFunction values are expected as binary data. - `value` — The format expects a single value of the argument of the aggregate function, or in the case of multiple arguments, a tuple of them. They will be deserialized using the corresponding IDataType or DataTypeTuple and then aggregated to form the state. - `array` — The format expects an Array of values, as described in the `value` option above. All elements of the array will be aggregated to form the state. **Examples** For a table with structure: ```sql CREATE TABLE example ( user_id UInt64, avg_session_length AggregateFunction(avg, UInt32) ); ``` With `aggregate_function_input_format = 'value'`: ```sql INSERT INTO example FORMAT CSV 123,456 ``` With `aggregate_function_input_format = 'array'`: ```sql INSERT INTO example FORMAT CSV 123,"[456,789,101]" ``` Note: The `value` and `array` formats are slower than the default `state` format as they require creating and aggregating values during insertion.
    * @since 26.1
    */
-  aggregate_function_input_format?: 'state' | 'value' | 'array';
+  aggregate_function_input_format?: "state" | "value" | "array";
 
   /**
    * Enables or disables rewriting all aggregate functions in a query, adding [-OrNull](/sql-reference/aggregate-functions/combinators#-ornull) suffix to them. Enable it for SQL standard compatibility. It is implemented via query rewrite (similar to [count_distinct_implementation](#count_distinct_implementation) setting) to get consistent results for distributed queries. Possible values: - 0 — Disabled. - 1 — Enabled. **Example** Consider the following query with aggregate functions: ```sql SELECT SUM(-1), MAX(0) FROM system.one WHERE 0; ``` With `aggregate_functions_null_for_empty = 0` it would produce: ```text ┌─SUM(-1)─┬─MAX(0)─┐ │ 0 │ 0 │ └─────────┴────────┘ ``` With `aggregate_functions_null_for_empty = 1` the result would be: ```text ┌─SUMOrNull(-1)─┬─MAXOrNull(0)─┐ │ NULL │ NULL │ └───────────────┴──────────────┘ ```
@@ -460,7 +460,7 @@ export interface ClickHouseSettings {
    * A mode for `ALTER` queries that have the `UPDATE` commands. Possible values: - `heavy` - run regular mutation. - `lightweight` - run lightweight update if possible, run regular mutation otherwise. - `lightweight_force` - run lightweight update if possible, throw otherwise.
    * @since 25.6
    */
-  alter_update_mode?: 'heavy' | 'lightweight' | 'lightweight_force';
+  alter_update_mode?: "heavy" | "lightweight" | "lightweight_force";
 
   /**
    * If a table has a space-filling curve in its index, e.g. `ORDER BY mortonEncode(x, y)` or `ORDER BY hilbertEncode(x, y)`, and the query has conditions on its arguments, e.g. `x >= 10 AND x <= 20 AND y >= 20 AND y <= 30`, use the space-filling curve for index analysis.
@@ -527,7 +527,7 @@ export interface ClickHouseSettings {
    * Type of descriptor to use for Arrow Flight requests. 'path' sends the dataset name as a path descriptor. 'command' sends a SQL query as a command descriptor (required for Dremio). Possible values: - 'path' — Use FlightDescriptor::Path (default, works with most Arrow Flight servers) - 'command' — Use FlightDescriptor::Command with a SELECT query (required for Dremio)
    * @since 25.12
    */
-  arrow_flight_request_descriptor_type?: 'path' | 'command';
+  arrow_flight_request_descriptor_type?: "path" | "command";
 
   /**
    * Include [ALIAS](../../sql-reference/statements/create/table.md/#alias) columns for wildcard query (`SELECT *`). Possible values: - 0 - disabled - 1 - enabled
@@ -892,7 +892,7 @@ export interface ClickHouseSettings {
    * Allows choosing a parser of the text representation of date and time during cast from String. Possible values: - `'best_effort'` — Enables extended parsing. ClickHouse can parse the basic `YYYY-MM-DD HH:MM:SS` format and all [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) date and time formats. For example, `'2018-06-08T01:02:03.000Z'`. - `'best_effort_us'` — Similar to `best_effort` (see the difference in [parseDateTimeBestEffortUS](../../sql-reference/functions/type-conversion-functions#parseDateTimeBestEffortUS) - `'basic'` — Use basic parser. ClickHouse can parse only the basic `YYYY-MM-DD HH:MM:SS` or `YYYY-MM-DD` format. For example, `2019-08-20 10:18:56` or `2019-08-20`. See also: - [DateTime data type.](../../sql-reference/data-types/datetime.md) - [Functions for working with dates and times.](../../sql-reference/functions/date-time-functions.md)
    * @since 25.7
    */
-  cast_string_to_date_time_mode?: 'basic' | 'best_effort' | 'best_effort_us';
+  cast_string_to_date_time_mode?: "basic" | "best_effort" | "best_effort_us";
 
   /**
    * Use types inference during String to Dynamic conversion
@@ -961,7 +961,7 @@ export interface ClickHouseSettings {
    * Controls how data is split into tasks when executing a CLUSTER TABLE FUNCTION. This setting defines the granularity of work distribution across the cluster: - `file` — each task processes an entire file. - `bucket` — tasks are created per internal data block within a file (for example, Parquet row groups). Choosing finer granularity (like `bucket`) can improve parallelism when working with a small number of large files. For instance, if a Parquet file contains multiple row groups, enabling `bucket` granularity allows each group to be processed independently by different workers.
    * @since 25.12
    */
-  cluster_table_function_split_granularity?: 'file' | 'bucket';
+  cluster_table_function_split_granularity?: "file" | "bucket";
 
   /**
    * Enable collecting hash table statistics to optimize memory allocation
@@ -1043,7 +1043,7 @@ export interface ClickHouseSettings {
    * Controls the kind of joins in the decorrelated query plan. The default value is `right`, which means that decorrelated plan will contain RIGHT JOINs with subquery input on the right side. Possible values: - `left` - Decorrelation process will produce LEFT JOINs and input table will appear on the left side. - `right` - Decorrelation process will produce RIGHT JOINs and input table will appear on the right side.
    * @since 25.12
    */
-  correlated_subqueries_default_join_kind?: 'left' | 'right';
+  correlated_subqueries_default_join_kind?: "left" | "right";
 
   /**
    * Use filter expressions to inference equivalent expressions and substitute them instead of creating a CROSS JOIN.
@@ -1161,7 +1161,7 @@ export interface ClickHouseSettings {
   /**
    * Allows to set a default value for SQL SECURITY option when creating a materialized view. [More about SQL security](../../sql-reference/statements/create/view.md/#sql_security). The default value is `DEFINER`.
    */
-  default_materialized_view_sql_security?: 'DEFINER' | 'INVOKER' | 'NONE';
+  default_materialized_view_sql_security?: "DEFINER" | "INVOKER" | "NONE";
 
   /**
    * Maximum size of right-side table if limit is required but `max_bytes_in_join` is not set.
@@ -1171,7 +1171,7 @@ export interface ClickHouseSettings {
   /**
    * Allows to set default `SQL SECURITY` option while creating a normal view. [More about SQL security](../../sql-reference/statements/create/view.md/#sql_security). The default value is `INVOKER`.
    */
-  default_normal_view_sql_security?: 'DEFINER' | 'INVOKER' | 'NONE';
+  default_normal_view_sql_security?: "DEFINER" | "INVOKER" | "NONE";
 
   /**
    * Default table engine to use when `ENGINE` is not set in a `CREATE` statement. Possible values: - a string representing any valid table engine name Cloud default value: `SharedMergeTree`. **Example** Query: ```sql SET default_table_engine = 'Log'; SELECT name, value, changed FROM system.settings WHERE name = 'default_table_engine'; ``` Result: ```response ┌─name─────────────────┬─value─┬─changed─┐ │ default_table_engine │ Log │ 1 │ └──────────────────────┴───────┴─────────┘ ``` In this example, any new table that does not specify an `Engine` will use the `Log` table engine: Query: ```sql CREATE TABLE my_table ( x UInt32, y UInt32 ); SHOW CREATE TABLE my_table; ``` Result: ```response ┌─statement────────────────────────────────────────────────────────────────┐ │ CREATE TABLE default.my_table ( `x` UInt32, `y` UInt32 ) ENGINE = Log └──────────────────────────────────────────────────────────────────────────┘ ```
@@ -1260,7 +1260,7 @@ export interface ClickHouseSettings {
   /**
    * Which dialect will be used to parse query
    */
-  dialect?: 'clickhouse' | 'kusto' | 'prql' | 'promql';
+  dialect?: "clickhouse" | "kusto" | "prql" | "promql";
 
   /**
    * Validate primary key type for dictionaries. By default id type for simple layouts will be implicitly converted to UInt64.
@@ -1270,7 +1270,7 @@ export interface ClickHouseSettings {
   /**
    * Sets what happens when the amount of data exceeds one of the limits. Possible values: - `throw`: throw an exception (default). - `break`: stop executing the query and return the partial result, as if the source data ran out.
    */
-  distinct_overflow_mode?: 'throw' | 'break';
+  distinct_overflow_mode?: "throw" | "break";
 
   /**
    * Is the memory-saving mode of distributed aggregation enabled.
@@ -1361,7 +1361,7 @@ export interface ClickHouseSettings {
   /**
    * Only has an effect in ClickHouse Cloud. Mode for writing to system.distributed_cache_log
    */
-  distributed_cache_log_mode?: 'nothing' | 'on_error' | 'all';
+  distributed_cache_log_mode?: "nothing" | "on_error" | "all";
 
   /**
    * Only has an effect in ClickHouse Cloud. A maximum number of unacknowledged in-flight packets in a single distributed cache read request
@@ -1377,7 +1377,7 @@ export interface ClickHouseSettings {
   /**
    * Only has an effect in ClickHouse Cloud. Identifies behaviour of distributed cache connection on pool limit reached
    */
-  distributed_cache_pool_behaviour_on_limit?: 'wait' | 'allocate_bypassing_pool';
+  distributed_cache_pool_behaviour_on_limit?: "wait" | "allocate_bypassing_pool";
 
   /**
    * Only has an effect in ClickHouse Cloud. Same as filesystem_cache_prefer_bigger_buffer_size, but for distributed cache.
@@ -1460,7 +1460,14 @@ export interface ClickHouseSettings {
   /**
    * Sets format of distributed DDL query result. Possible values: - `throw` — Returns result set with query execution status for all hosts where query is finished. If query has failed on some hosts, then it will rethrow the first exception. If query is not finished yet on some hosts and [distributed_ddl_task_timeout](#distributed_ddl_task_timeout) exceeded, then it throws `TIMEOUT_EXCEEDED` exception. - `none` — Is similar to throw, but distributed DDL query returns no result set. - `null_status_on_timeout` — Returns `NULL` as execution status in some rows of result set instead of throwing `TIMEOUT_EXCEEDED` if query is not finished on the corresponding hosts. - `never_throw` — Do not throw `TIMEOUT_EXCEEDED` and do not rethrow exceptions if query has failed on some hosts. - `none_only_active` - similar to `none`, but doesn't wait for inactive replicas of the `Replicated` database. Note: with this mode it's impossible to figure out that the query was not executed on some replica and will be executed in background. - `null_status_on_timeout_only_active` — similar to `null_status_on_timeout`, but doesn't wait for inactive replicas of the `Replicated` database - `throw_only_active` — similar to `throw`, but doesn't wait for inactive replicas of the `Replicated` database Cloud default value: `throw`.
    */
-  distributed_ddl_output_mode?: 'none' | 'throw' | 'null_status_on_timeout' | 'throw_only_active' | 'null_status_on_timeout_only_active' | 'none_only_active' | 'never_throw';
+  distributed_ddl_output_mode?:
+    | "none"
+    | "throw"
+    | "null_status_on_timeout"
+    | "throw_only_active"
+    | "null_status_on_timeout_only_active"
+    | "none_only_active"
+    | "never_throw";
 
   /**
    * Sets timeout for DDL query responses from all hosts in cluster. If a DDL request has not been performed on all hosts, a response will contain a timeout error and a request will be executed in an async mode. Negative value means infinite. Possible values: - Positive integer. - 0 — Async mode. - Negative integer — infinite timeout.
@@ -1527,7 +1534,7 @@ export interface ClickHouseSettings {
   /**
    * Changes the behaviour of [distributed subqueries](../../sql-reference/operators/in.md). ClickHouse applies this setting when the query contains the product of distributed tables, i.e. when the query for a distributed table contains a non-GLOBAL subquery for the distributed table. Restrictions: - Only applied for IN and JOIN subqueries. - Only if the FROM section uses a distributed table containing more than one shard. - If the subquery concerns a distributed table containing more than one shard. - Not used for a table-valued [remote](../../sql-reference/table-functions/remote.md) function. Possible values: - `deny` — Default value. Prohibits using these types of subqueries (returns the "Double-distributed in/JOIN subqueries is denied" exception). - `local` — Replaces the database and table in the subquery with local ones for the destination server (shard), leaving the normal `IN`/`JOIN.` - `global` — Replaces the `IN`/`JOIN` query with `GLOBAL IN`/`GLOBAL JOIN.` - `allow` — Allows the use of these types of subqueries.
    */
-  distributed_product_mode?: 'deny' | 'local' | 'global' | 'allow';
+  distributed_product_mode?: "deny" | "local" | "global" | "allow";
 
   /**
    * Enables or disables [LIMIT](#limit) applying on each shard separately. This will allow to avoid: - Sending extra rows over network; - Processing rows behind the limit on the initiator. Starting from 21.9 version you cannot get inaccurate results anymore, since `distributed_push_down_limit` changes query execution only if at least one of the conditions met: - [distributed_group_by_no_merge](#distributed_group_by_no_merge) > 0. - Query **does not have** `GROUP BY`/`DISTINCT`/`LIMIT BY`, but it has `ORDER BY`/`LIMIT`. - Query **has** `GROUP BY`/`DISTINCT`/`LIMIT BY` with `ORDER BY`/`LIMIT` and: - [optimize_skip_unused_shards](#optimize_skip_unused_shards) is enabled. - [optimize_distributed_group_by_sharding_key](#optimize_distributed_group_by_sharding_key) is enabled. Possible values: - 0 — Disabled. - 1 — Enabled. See also: - [distributed_group_by_no_merge](#distributed_group_by_no_merge) - [optimize_skip_unused_shards](#optimize_skip_unused_shards) - [optimize_distributed_group_by_sharding_key](#optimize_distributed_group_by_sharding_key)
@@ -1820,7 +1827,7 @@ export interface ClickHouseSettings {
   /**
    * Set default mode in EXCEPT query. Possible values: empty string, 'ALL', 'DISTINCT'. If empty, query without mode will throw exception.
    */
-  except_default_mode?: 'ALL' | 'DISTINCT';
+  except_default_mode?: "ALL" | "DISTINCT";
 
   /**
    * Excludes specified skip indexes from being built and stored during INSERTs. The excluded skip indexes will still be built and stored [during merges](merge-tree-settings.md/#materialize_skip_indexes_on_merge) or by an explicit [MATERIALIZE INDEX](/sql-reference/statements/alter/skipping-index.md/#materialize-index) query. Has no effect if [materialize_skip_indexes_on_insert](#materialize_skip_indexes_on_insert) is false. Example: ```sql CREATE TABLE tab ( a UInt64, b UInt64, INDEX idx_a a TYPE minmax, INDEX idx_b b TYPE set(3) ) ENGINE = MergeTree ORDER BY tuple(); SET exclude_materialize_skip_indexes_on_insert='idx_a'; -- idx_a will be not be updated upon insert --SET exclude_materialize_skip_indexes_on_insert='idx_a, idx_b'; -- neither index would be updated on insert INSERT INTO tab SELECT number, number / 50 FROM numbers(100); -- only idx_b is updated -- since it is a session setting it can be set on a per-query level INSERT INTO tab SELECT number, number / 50 FROM numbers(100, 100) SETTINGS exclude_materialize_skip_indexes_on_insert='idx_b'; ALTER TABLE tab MATERIALIZE INDEX idx_a; -- this query can be used to explicitly materialize the index SET exclude_materialize_skip_indexes_on_insert = DEFAULT; -- reset setting to default ```
@@ -2102,7 +2109,7 @@ export interface ClickHouseSettings {
    * Function 'geoToH3' accepts (lon, lat) if set to 'lon_lat' and (lat, lon) if set to 'lat_lon'.
    * @since 25.7
    */
-  geotoh3_argument_order?: 'lat_lon' | 'lon_lat';
+  geotoh3_argument_order?: "lat_lon" | "lon_lat";
 
   /**
    * Maximum number of allowed addresses (For external storages, table functions, etc).
@@ -2122,7 +2129,7 @@ export interface ClickHouseSettings {
   /**
    * Sets what happens when the number of unique keys for aggregation exceeds the limit: - `throw`: throw an exception - `break`: stop executing the query and return the partial result - `any`: continue aggregation for the keys that got into the set, but do not add new keys to the set. Using the 'any' value lets you run an approximation of GROUP BY. The quality of this approximation depends on the statistical nature of the data.
    */
-  group_by_overflow_mode?: 'throw' | 'break' | 'any';
+  group_by_overflow_mode?: "throw" | "break" | "any";
 
   /**
    * From what number of keys, a two-level aggregation starts. 0 - the threshold is not set.
@@ -2335,7 +2342,13 @@ export interface ClickHouseSettings {
    * Controls the level of metadata logging for Iceberg tables to system.iceberg_metadata_log. Usually this setting can be modified for debugging purposes. Possible values: - none - No metadata log. - metadata - Root metadata.json file. - manifest_list_metadata - Everything above + metadata from avro manifest list which corresponds to a snapshot. - manifest_list_entry - Everything above + avro manifest list entries. - manifest_file_metadata - Everything above + metadata from traversed avro manifest files. - manifest_file_entry - Everything above + traversed avro manifest files entries.
    * @since 25.10
    */
-  iceberg_metadata_log_level?: 'none' | 'metadata' | 'manifest_list_metadata' | 'manifest_list_entry' | 'manifest_file_metadata' | 'manifest_file_entry';
+  iceberg_metadata_log_level?:
+    | "none"
+    | "metadata"
+    | "manifest_list_metadata"
+    | "manifest_list_entry"
+    | "manifest_file_metadata"
+    | "manifest_file_entry";
 
   /**
    * Query Iceberg table using the specific snapshot id.
@@ -2495,7 +2508,7 @@ export interface ClickHouseSettings {
   /**
    * Set default mode in INTERSECT query. Possible values: empty string, 'ALL', 'DISTINCT'. If empty, query without mode will throw exception.
    */
-  intersect_default_mode?: 'ALL' | 'DISTINCT';
+  intersect_default_mode?: "ALL" | "DISTINCT";
 
   /**
    * Collect jemalloc allocation and deallocation samples in trace log.
@@ -2517,7 +2530,7 @@ export interface ClickHouseSettings {
   /**
    * Sets default strictness for [JOIN clauses](/sql-reference/statements/select/join). Possible values: - `ALL` — If the right table has several matching rows, ClickHouse creates a [Cartesian product](https://en.wikipedia.org/wiki/Cartesian_product) from matching rows. This is the normal `JOIN` behaviour from standard SQL. - `ANY` — If the right table has several matching rows, only the first one found is joined. If the right table has only one matching row, the results of `ANY` and `ALL` are the same. - `ASOF` — For joining sequences with an uncertain match. - `Empty string` — If `ALL` or `ANY` is not specified in the query, ClickHouse throws an exception.
    */
-  join_default_strictness?: 'ALL' | 'ANY';
+  join_default_strictness?: "ALL" | "ANY";
 
   /**
    * Limits the number of files allowed for parallel sorting in MergeJoin operations when they are executed on disk. The bigger the value of the setting, the more RAM is used and the less disk I/O is needed. Possible values: - Any positive integer, starting from 2.
@@ -2532,7 +2545,7 @@ export interface ClickHouseSettings {
   /**
    * Defines what action ClickHouse performs when any of the following join limits is reached: - [max_bytes_in_join](/operations/settings/settings#max_bytes_in_join) - [max_rows_in_join](/operations/settings/settings#max_rows_in_join) Possible values: - `THROW` — ClickHouse throws an exception and breaks operation. - `BREAK` — ClickHouse breaks operation and does not throw an exception. Default value: `THROW`. **See Also** - [JOIN clause](/sql-reference/statements/select/join) - [Join table engine](/engines/table-engines/special/join)
    */
-  join_overflow_mode?: 'throw' | 'break';
+  join_overflow_mode?: "throw" | "break";
 
   /**
    * Size in bytes of a bloom filter used as JOIN runtime filter (see enable_join_runtime_filters setting).
@@ -2623,7 +2636,7 @@ export interface ClickHouseSettings {
    * A mode of internal update query that is executed as a part of lightweight delete. Possible values: - `alter_update` - run `ALTER UPDATE` query that creates a heavyweight mutation. - `lightweight_update` - run lightweight update if possible, run `ALTER UPDATE` otherwise. - `lightweight_update_force` - run lightweight update if possible, throw otherwise.
    * @since 25.6
    */
-  lightweight_delete_mode?: 'alter_update' | 'lightweight_update' | 'lightweight_update_force';
+  lightweight_delete_mode?: "alter_update" | "lightweight_update" | "lightweight_update_force";
 
   /**
    * The same as [`mutations_sync`](#mutations_sync), but controls only execution of lightweight deletes. Possible values: | Value | Description | |-------|-------------------------------------------------------------------------------------------------------------------------------------------------------| | `0` | Mutations execute asynchronously. | | `1` | The query waits for the lightweight deletes to complete on the current server. | | `2` | The query waits for the lightweight deletes to complete on all replicas (if they exist). | | `3` | The query waits only for active replicas. Supported only for `SharedMergeTree`. For `ReplicatedMergeTree` it behaves the same as `mutations_sync = 2`.| **See Also** - [Synchronicity of ALTER Queries](../../sql-reference/statements/alter/index.md/#synchronicity-of-alter-queries) - [Mutations](../../sql-reference/statements/alter/index.md/#mutations)
@@ -2638,7 +2651,13 @@ export interface ClickHouseSettings {
   /**
    * Specifies the algorithm of replicas selection that is used for distributed query processing. ClickHouse supports the following algorithms of choosing replicas: - [Random](#load_balancing-random) (by default) - [Nearest hostname](#load_balancing-nearest_hostname) - [Hostname levenshtein distance](#load_balancing-hostname_levenshtein_distance) - [In order](#load_balancing-in_order) - [First or random](#load_balancing-first_or_random) - [Round robin](#load_balancing-round_robin) See also: - [distributed_replica_max_ignored_errors](#distributed_replica_max_ignored_errors) ### Random (by Default) {#load_balancing-random} ```sql load_balancing = random ``` The number of errors is counted for each replica. The query is sent to the replica with the fewest errors, and if there are several of these, to anyone of them. Disadvantages: Server proximity is not accounted for; if the replicas have different data, you will also get different data. ### Nearest Hostname {#load_balancing-nearest_hostname} ```sql load_balancing = nearest_hostname ``` The number of errors is counted for each replica. Every 5 minutes, the number of errors is integrally divided by 2. Thus, the number of errors is calculated for a recent time with exponential smoothing. If there is one replica with a minimal number of errors (i.e. errors occurred recently on the other replicas), the query is sent to it. If there are multiple replicas with the same minimal number of errors, the query is sent to the replica with a hostname that is most similar to the server's hostname in the config file (for the number of different characters in identical positions, up to the minimum length of both hostnames). For instance, example01-01-1 and example01-01-2 are different in one position, while example01-01-1 and example01-02-2 differ in two places. This method might seem primitive, but it does not require external data about network topology, and it does not compare IP addresses, which would be complicated for our IPv6 addresses. Thus, if there are equivalent replicas, the closest one by name is preferred. We can also assume that when sending a query to the same server, in the absence of failures, a distributed query will also go to the same servers. So even if different data is placed on the replicas, the query will return mostly the same results. ### Hostname levenshtein distance {#load_balancing-hostname_levenshtein_distance} ```sql load_balancing = hostname_levenshtein_distance ``` Just like `nearest_hostname`, but it compares hostname in a [levenshtein distance](https://en.wikipedia.org/wiki/Levenshtein_distance) manner. For example: ```text example-clickhouse-0-0 ample-clickhouse-0-0 1 example-clickhouse-0-0 example-clickhouse-1-10 2 example-clickhouse-0-0 example-clickhouse-12-0 3 ``` ### In Order {#load_balancing-in_order} ```sql load_balancing = in_order ``` Replicas with the same number of errors are accessed in the same order as they are specified in the configuration. This method is appropriate when you know exactly which replica is preferable. ### First or Random {#load_balancing-first_or_random} ```sql load_balancing = first_or_random ``` This algorithm chooses the first replica in the set or a random replica if the first is unavailable. It's effective in cross-replication topology setups, but useless in other configurations. The `first_or_random` algorithm solves the problem of the `in_order` algorithm. With `in_order`, if one replica goes down, the next one gets a double load while the remaining replicas handle the usual amount of traffic. When using the `first_or_random` algorithm, the load is evenly distributed among replicas that are still available. It's possible to explicitly define what the first replica is by using the setting `load_balancing_first_offset`. This gives more control to rebalance query workloads among replicas. ### Round Robin {#load_balancing-round_robin} ```sql load_balancing = round_robin ``` This algorithm uses a round-robin policy across replicas with the same number of errors (only the queries with `round_robin` policy is accounted).
    */
-  load_balancing?: 'random' | 'nearest_hostname' | 'hostname_levenshtein_distance' | 'in_order' | 'first_or_random' | 'round_robin';
+  load_balancing?:
+    | "random"
+    | "nearest_hostname"
+    | "hostname_levenshtein_distance"
+    | "in_order"
+    | "first_or_random"
+    | "round_robin";
 
   /**
    * Which replica to preferably send a query when FIRST_OR_RANDOM load balancing strategy is used.
@@ -3583,7 +3602,7 @@ export interface ClickHouseSettings {
   /**
    * Defines how MySQL types are converted to corresponding ClickHouse types. A comma separated list in any combination of `decimal`, `datetime64`, `date2Date32` or `date2String`. - `decimal`: convert `NUMERIC` and `DECIMAL` types to `Decimal` when precision allows it. - `datetime64`: convert `DATETIME` and `TIMESTAMP` types to `DateTime64` instead of `DateTime` when precision is not `0`. - `date2Date32`: convert `DATE` to `Date32` instead of `Date`. Takes precedence over `date2String`. - `date2String`: convert `DATE` to `String` instead of `Date`. Overridden by `datetime64`.
    */
-  mysql_datatypes_support_level?: 'decimal' | 'datetime64' | 'date2Date32' | 'date2String';
+  mysql_datatypes_support_level?: "decimal" | "datetime64" | "date2Date32" | "date2String";
 
   /**
    * When enabled, [FixedString](../../sql-reference/data-types/fixedstring.md) ClickHouse data type will be displayed as `TEXT` in [SHOW COLUMNS](../../sql-reference/statements/show.md/#show_columns). Has an effect only when the connection is made through the MySQL wire protocol. - 0 - Use `BLOB`. - 1 - Use `TEXT`.
@@ -4078,7 +4097,12 @@ export interface ClickHouseSettings {
   /**
    * Type of filter to use with custom key for parallel replicas. default - use modulo operation on the custom key, range - use range filter on custom key using all possible values for the value type of custom key.
    */
-  parallel_replicas_mode?: 'auto' | 'read_tasks' | 'custom_key_sampling' | 'custom_key_range' | 'sampling_key';
+  parallel_replicas_mode?:
+    | "auto"
+    | "read_tasks"
+    | "custom_key_sampling"
+    | "custom_key_range"
+    | "sampling_key";
 
   /**
    * The analyzer should be enabled to use parallel replicas. With disabled analyzer query execution fallbacks to local execution, even if parallel reading from replicas is enabled. Using parallel replicas without the analyzer enabled is not supported
@@ -4292,7 +4316,7 @@ export interface ClickHouseSettings {
   /**
    * Controls how the [query cache](../query-cache.md) handles `SELECT` queries with non-deterministic functions like `rand()` or `now()`. Possible values: - `'throw'` - Throw an exception and don't cache the query result. - `'save'` - Cache the query result. - `'ignore'` - Don't cache the query result and don't throw an exception.
    */
-  query_cache_nondeterministic_function_handling?: 'throw' | 'save' | 'ignore';
+  query_cache_nondeterministic_function_handling?: "throw" | "save" | "ignore";
 
   /**
    * If turned on, the result of `SELECT` queries cached in the [query cache](../query-cache.md) can be read by other users. It is not recommended to enable this setting due to security reasons. Possible values: - 0 - Disabled - 1 - Enabled
@@ -4307,7 +4331,7 @@ export interface ClickHouseSettings {
   /**
    * Controls how the [query cache](../query-cache.md) handles `SELECT` queries against system tables, i.e. tables in databases `system.*` and `information_schema.*`. Possible values: - `'throw'` - Throw an exception and don't cache the query result. - `'save'` - Cache the query result. - `'ignore'` - Don't cache the query result and don't throw an exception.
    */
-  query_cache_system_table_handling?: 'throw' | 'save' | 'ignore';
+  query_cache_system_table_handling?: "throw" | "save" | "ignore";
 
   /**
    * A string which acts as a label for [query cache](../query-cache.md) entries. The same queries with different tags are considered different by the query cache. Possible values: - Any string
@@ -4449,7 +4473,7 @@ export interface ClickHouseSettings {
    * Specifies which JOIN order algorithms to attempt during query plan optimization. The following algorithms are available: - 'greedy' - basic greedy algorithm - works fast but might not produce the best join order - 'dpsize' - implements DPsize algorithm currently only for Inner joins - considers all possible join orders and finds the most optimal one but might be slow for queries with many tables and join predicates. Multiple algorithms can be specified, e.g. 'dpsize,greedy'.
    * @since 26.1
    */
-  query_plan_optimize_join_order_algorithm?: 'greedy' | 'dpsize';
+  query_plan_optimize_join_order_algorithm?: "greedy" | "dpsize";
 
   /**
    * Optimize the order of joins within the same subquery. Currently only supported for very limited cases. Value is the maximum number of tables to optimize.
@@ -4602,12 +4626,12 @@ export interface ClickHouseSettings {
   /**
    * What to do when the limit is exceeded.
    */
-  read_overflow_mode?: 'throw' | 'break';
+  read_overflow_mode?: "throw" | "break";
 
   /**
    * Sets what happens when the volume of data read exceeds one of the leaf limits. Possible options: - `throw`: throw an exception (default). - `break`: stop executing the query and return the partial result.
    */
-  read_overflow_mode_leaf?: 'throw' | 'break';
+  read_overflow_mode_leaf?: "throw" | "break";
 
   /**
    * Priority to read data from local filesystem or remote filesystem. Only supported for 'pread_threadpool' method for local filesystem and for `threadpool` method for remote filesystem.
@@ -4718,7 +4742,7 @@ export interface ClickHouseSettings {
   /**
    * Cloud default value: `throw` Sets what to do if the volume of the result exceeds one of the limits. Possible values: - `throw`: throw an exception (default). - `break`: stop executing the query and return the partial result, as if the source data ran out. Using 'break' is similar to using LIMIT. `Break` interrupts execution only at the block level. This means that amount of returned rows is greater than [`max_result_rows`](/operations/settings/settings#max_result_rows), multiple of [`max_block_size`](/operations/settings/settings#max_block_size) and depends on [`max_threads`](/operations/settings/settings#max_threads). **Example** ```sql title="Query" SET max_threads = 3, max_block_size = 3333; SET max_result_rows = 3334, result_overflow_mode = 'break'; SELECT * FROM numbers_mt(100000) FORMAT Null; ``` ```text title="Result" 6666 rows in set. ... ```
    */
-  result_overflow_mode?: 'throw' | 'break';
+  result_overflow_mode?: "throw" | "break";
 
   /**
    * Allows you to rewrite `countDistcintIf` with [count_distinct_implementation](#count_distinct_implementation) setting. Possible values: - true — Allow. - false — Disallow.
@@ -5003,7 +5027,7 @@ export interface ClickHouseSettings {
   /**
    * Sets what happens when the amount of data exceeds one of the limits. Possible values: - `throw`: throw an exception (default). - `break`: stop executing the query and return the partial result, as if the source data ran out.
    */
-  set_overflow_mode?: 'throw' | 'break';
+  set_overflow_mode?: "throw" | "break";
 
   /**
    * Automatically synchronize set of data parts after MOVE|REPLACE|ATTACH partition operations in SMT tables. Cloud only
@@ -5014,7 +5038,7 @@ export interface ClickHouseSettings {
   /**
    * Allows calculating the [if](../../sql-reference/functions/conditional-functions.md/#if), [multiIf](../../sql-reference/functions/conditional-functions.md/#multiIf), [and](/sql-reference/functions/logical-functions#and), and [or](/sql-reference/functions/logical-functions#or) functions according to a [short scheme](https://en.wikipedia.org/wiki/Short-circuit_evaluation). This helps optimize the execution of complex expressions in these functions and prevent possible exceptions (such as division by zero when it is not expected). Possible values: - `enable` — Enables short-circuit function evaluation for functions that are suitable for it (can throw an exception or computationally heavy). - `force_enable` — Enables short-circuit function evaluation for all functions. - `disable` — Disables short-circuit function evaluation.
    */
-  short_circuit_function_evaluation?: 'enable' | 'force_enable' | 'disable';
+  short_circuit_function_evaluation?: "enable" | "force_enable" | "disable";
 
   /**
    * Optimizes evaluation of functions that return NULL when any argument is NULL. When the percentage of NULL values in the function's arguments exceeds the short_circuit_function_evaluation_for_nulls_threshold, the system skips evaluating the function row-by-row. Instead, it immediately returns NULL for all rows, avoiding unnecessary computation.
@@ -5079,7 +5103,7 @@ export interface ClickHouseSettings {
   /**
    * Sets what happens if the number of rows received before sorting exceeds one of the limits. Possible values: - `throw`: throw an exception. - `break`: stop executing the query and return the partial result.
    */
-  sort_overflow_mode?: 'throw' | 'break';
+  sort_overflow_mode?: "throw" | "break";
 
   /**
    * Split intersecting parts ranges into layers during FINAL optimization
@@ -5207,12 +5231,12 @@ export interface ClickHouseSettings {
   /**
    * Sets what to do if the query is run longer than the `max_execution_time` or the estimated running time is longer than `max_estimated_execution_time`. Possible values: - `throw`: throw an exception (default). - `break`: stop executing the query and return the partial result, as if the source data ran out.
    */
-  timeout_overflow_mode?: 'throw' | 'break';
+  timeout_overflow_mode?: "throw" | "break";
 
   /**
    * Sets what happens when the query in leaf node run longer than `max_execution_time_leaf`. Possible values: - `throw`: throw an exception (default). - `break`: stop executing the query and return the partial result, as if the source data ran out.
    */
-  timeout_overflow_mode_leaf?: 'throw' | 'break';
+  timeout_overflow_mode_leaf?: "throw" | "break";
 
   /**
    * The threshold for `totals_mode = 'auto'`. See the section "WITH TOTALS modifier".
@@ -5222,7 +5246,11 @@ export interface ClickHouseSettings {
   /**
    * How to calculate TOTALS when HAVING is present, as well as when max_rows_to_group_by and group_by_overflow_mode = 'any' are present. See the section "WITH TOTALS modifier".
    */
-  totals_mode?: 'before_having' | 'after_having_exclusive' | 'after_having_inclusive' | 'after_having_auto';
+  totals_mode?:
+    | "before_having"
+    | "after_having_exclusive"
+    | "after_having_inclusive"
+    | "after_having_auto";
 
   /**
    * Enables or disables collecting stacktraces on each update of profile events along with the name of profile event and the value of increment and sending them into [trace_log](/operations/system-tables/trace_log). Possible values: - 1 — Tracing of profile events enabled. - 0 — Tracing of profile events disabled.
@@ -5232,7 +5260,7 @@ export interface ClickHouseSettings {
   /**
    * Sets what happens when the amount of data exceeds one of the limits. Possible values: - `throw`: throw an exception (default). - `break`: stop executing the query and return the partial result, as if the source data ran out.
    */
-  transfer_overflow_mode?: 'throw' | 'break';
+  transfer_overflow_mode?: "throw" | "break";
 
   /**
    * Enables equality of [NULL](/sql-reference/syntax#null) values for [IN](../../sql-reference/operators/in.md) operator. By default, `NULL` values can't be compared because `NULL` means undefined value. Thus, comparison `expr = NULL` must always return `false`. With this setting `NULL = NULL` returns `true` for `IN` operator. Possible values: - 0 — Comparison of `NULL` values in `IN` operator returns `false`. - 1 — Comparison of `NULL` values in `IN` operator returns `true`. **Example** Consider the `null_in` table: ```text ┌──idx─┬─────i─┐ │ 1 │ 1 │ │ 2 │ NULL │ │ 3 │ 3 │ └──────┴───────┘ ``` Query: ```sql SELECT idx, i FROM null_in WHERE i IN (1, NULL) SETTINGS transform_null_in = 0; ``` Result: ```text ┌──idx─┬────i─┐ │ 1 │ 1 │ └──────┴──────┘ ``` Query: ```sql SELECT idx, i FROM null_in WHERE i IN (1, NULL) SETTINGS transform_null_in = 1; ``` Result: ```text ┌──idx─┬─────i─┐ │ 1 │ 1 │ │ 2 │ NULL │ └──────┴───────┘ ``` **See Also** - [NULL Processing in IN Operators](/sql-reference/operators/in#null-processing)
@@ -5247,7 +5275,7 @@ export interface ClickHouseSettings {
   /**
    * Sets a mode for combining `SELECT` query results. The setting is only used when shared with [UNION](../../sql-reference/statements/select/union.md) without explicitly specifying the `UNION ALL` or `UNION DISTINCT`. Possible values: - `'DISTINCT'` — ClickHouse outputs rows as a result of combining queries removing duplicate rows. - `'ALL'` — ClickHouse outputs all rows as a result of combining queries including duplicate rows. - `''` — ClickHouse generates an exception when used with `UNION`. See examples in [UNION](../../sql-reference/statements/select/union.md).
    */
-  union_default_mode?: 'ALL' | 'DISTINCT';
+  union_default_mode?: "ALL" | "DISTINCT";
 
   /**
    * Send unknown packet instead of data Nth data packet
@@ -5258,7 +5286,7 @@ export interface ClickHouseSettings {
    * Determines the behavior of concurrent update queries. Possible values: - `sync` - run sequentially all `UPDATE` queries. - `auto` - run sequentially only `UPDATE` queries with dependencies between columns updated in one query and columns used in expressions of another query. - `async` - do not synchronize update queries.
    * @since 25.6
    */
-  update_parallel_mode?: 'sync' | 'async' | 'auto';
+  update_parallel_mode?: "sync" | "async" | "auto";
 
   /**
    * If true set of parts is updated to the latest version before execution of update.
@@ -5475,7 +5503,7 @@ export interface ClickHouseSettings {
    * If a vector search query has a WHERE clause, this setting determines if it is evaluated first (pre-filtering) OR if the vector similarity index is checked first (post-filtering). Possible values: - 'auto' - Postfiltering (the exact semantics may change in future). - 'postfilter' - Use vector similarity index to identify the nearest neighbours, then apply other filters - 'prefilter' - Evaluate other filters first, then perform brute-force search to identify neighbours.
    * @since 25.6
    */
-  vector_search_filter_strategy?: 'auto' | 'prefilter' | 'postfilter';
+  vector_search_filter_strategy?: "auto" | "prefilter" | "postfilter";
 
   /**
    * Multiply the number of fetched nearest neighbors from the vector similarity index by this number. Only applied for post-filtering with other predicates or if setting 'vector_search_with_rescoring = 1'.
@@ -5492,7 +5520,7 @@ export interface ClickHouseSettings {
   /**
    * Wait for committed changes to become actually visible in the latest snapshot
    */
-  wait_changes_become_visible_after_commit_mode?: 'async' | 'wait' | 'wait_unknown';
+  wait_changes_become_visible_after_commit_mode?: "async" | "wait" | "wait_unknown";
 
   /**
    * If true wait for processing of asynchronous insertion

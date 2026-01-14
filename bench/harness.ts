@@ -39,11 +39,7 @@ export function reportEnvironment(): void {
   console.log(`CPU:  ${cpuName} (${cpus.length} cores)`);
 }
 
-export function benchSync(
-  name: string,
-  fn: () => void,
-  options: BenchOptions = {},
-): BenchStats {
+export function benchSync(name: string, fn: () => void, options: BenchOptions = {}): BenchStats {
   const warmup = options.warmup ?? 20;
   const iterations = options.iterations ?? 50;
   const batchSize = options.batchSize ?? 1;

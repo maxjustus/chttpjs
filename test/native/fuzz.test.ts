@@ -5,9 +5,16 @@
  * 1. Unit fuzz: Generate random data locally and round-trip through encode/decode
  * 2. Integration fuzz: Use ClickHouse's generateRandom() for comprehensive testing
  */
-import { describe, it } from "node:test";
+
 import assert from "node:assert";
-import { encodeNative, streamDecodeNative, RecordBatchBuilder, RecordBatch, type ColumnDef } from "../../native/index.ts";
+import { describe, it } from "node:test";
+import {
+  type ColumnDef,
+  encodeNative,
+  type RecordBatch,
+  RecordBatchBuilder,
+  streamDecodeNative,
+} from "../../native/index.ts";
 import { decodeBatch, toArrayRows } from "../test_utils.ts";
 
 // Helper to encode rows via RecordBatchBuilder
@@ -39,11 +46,11 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
   const randomUnicode = (maxLen = 50) => {
     const len = randomInt(0, maxLen);
     const codePoints = [
-      () => randomInt(0x20, 0x7E),      // ASCII
-      () => randomInt(0x00C0, 0x00FF),  // Latin Extended
-      () => randomInt(0x0400, 0x04FF),  // Cyrillic
-      () => randomInt(0x4E00, 0x9FFF),  // CJK
-      () => randomInt(0x1F600, 0x1F64F), // Emoji
+      () => randomInt(0x20, 0x7e), // ASCII
+      () => randomInt(0x00c0, 0x00ff), // Latin Extended
+      () => randomInt(0x0400, 0x04ff), // Cyrillic
+      () => randomInt(0x4e00, 0x9fff), // CJK
+      () => randomInt(0x1f600, 0x1f64f), // Emoji
     ];
     return Array.from({ length: len }, () => {
       const gen = codePoints[randomInt(0, codePoints.length - 1)];
@@ -56,7 +63,11 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
   };
 
   // Type definitions with generators
-  type TypeGen = { type: string; gen: () => unknown; compare?: (a: unknown, b: unknown) => boolean };
+  type TypeGen = {
+    type: string;
+    gen: () => unknown;
+    compare?: (a: unknown, b: unknown) => boolean;
+  };
 
   const scalarTypes: TypeGen[] = [
     { type: "Int8", gen: () => randomInt(-128, 127) },
@@ -68,18 +79,26 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
     { type: "UInt32", gen: () => randomInt(0, 4294967295) },
     { type: "UInt64", gen: () => BigInt(randomInt(0, Number.MAX_SAFE_INTEGER)) },
     {
-      type: "Float32", gen: () => randomFloat() * 1e-5, compare: (a, b) => {
+      type: "Float32",
+      gen: () => randomFloat() * 1e-5,
+      compare: (a, b) => {
         if (Number.isNaN(a) && Number.isNaN(b)) return true;
-        const relDiff = Math.abs((a as number) - (b as number)) / Math.max(Math.abs(a as number), Math.abs(b as number), 1);
+        const relDiff =
+          Math.abs((a as number) - (b as number)) /
+          Math.max(Math.abs(a as number), Math.abs(b as number), 1);
         return relDiff < 1e-5;
-      }
+      },
     },
     {
-      type: "Float64", gen: randomFloat, compare: (a, b) => {
+      type: "Float64",
+      gen: randomFloat,
+      compare: (a, b) => {
         if (Number.isNaN(a) && Number.isNaN(b)) return true;
-        const relDiff = Math.abs((a as number) - (b as number)) / Math.max(Math.abs(a as number), Math.abs(b as number), 1);
+        const relDiff =
+          Math.abs((a as number) - (b as number)) /
+          Math.max(Math.abs(a as number), Math.abs(b as number), 1);
         return relDiff < 1e-10;
-      }
+      },
     },
     { type: "String", gen: () => randomString() },
     { type: "String", gen: () => randomUnicode() }, // Unicode variant
@@ -90,19 +109,20 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
     {
       type: "Date",
       gen: () => new Date(randomInt(0, 65535) * 86400000),
-      compare: (a, b) => (a as Date).getTime() === (b as Date).getTime()
+      compare: (a, b) => (a as Date).getTime() === (b as Date).getTime(),
     },
     {
       type: "DateTime",
       gen: () => new Date(randomInt(0, 4294967295) * 1000),
-      compare: (a, b) => (a as Date).getTime() === (b as Date).getTime()
+      compare: (a, b) => (a as Date).getTime() === (b as Date).getTime(),
     },
   ];
 
   const ipTypes: TypeGen[] = [
     {
       type: "IPv4",
-      gen: () => `${randomInt(0, 255)}.${randomInt(0, 255)}.${randomInt(0, 255)}.${randomInt(0, 255)}`,
+      gen: () =>
+        `${randomInt(0, 255)}.${randomInt(0, 255)}.${randomInt(0, 255)}.${randomInt(0, 255)}`,
     },
     {
       type: "IPv6",
@@ -113,11 +133,14 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
     },
   ];
 
-  function generateRows(types: TypeGen[], rowCount: number): { columns: ColumnDef[]; rows: unknown[][]; types: TypeGen[] } {
+  function generateRows(
+    types: TypeGen[],
+    rowCount: number,
+  ): { columns: ColumnDef[]; rows: unknown[][]; types: TypeGen[] } {
     const columns: ColumnDef[] = types.map((t, i) => ({ name: `col_${i}`, type: t.type }));
     const rows: unknown[][] = [];
     for (let i = 0; i < rowCount; i++) {
-      rows.push(types.map(t => t.gen()));
+      rows.push(types.map((t) => t.gen()));
     }
     return { columns, rows, types };
   }
@@ -125,8 +148,10 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
   const stringify = (v: unknown): string => {
     if (typeof v === "bigint") return `${v}n`;
     if (v instanceof Date) return v.toISOString();
-    if (v instanceof Map) return `Map(${[...v.entries()].map(([k, val]) => `${stringify(k)}=>${stringify(val)}`).join(", ")})`;
-    if (ArrayBuffer.isView(v) && !(v instanceof DataView)) return `[${[...v as any].map(stringify).join(", ")}]`;
+    if (v instanceof Map)
+      return `Map(${[...v.entries()].map(([k, val]) => `${stringify(k)}=>${stringify(val)}`).join(", ")})`;
+    if (ArrayBuffer.isView(v) && !(v instanceof DataView))
+      return `[${[...(v as any)].map(stringify).join(", ")}]`;
     if (Array.isArray(v)) return `[${v.map(stringify).join(", ")}]`;
     return JSON.stringify(v);
   };
@@ -140,7 +165,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
         const decVal = decoded[i][j];
         assert.ok(
           compare(origVal, decVal),
-          `Mismatch at row ${i}, col ${j} (${types[j].type}): ${stringify(origVal)} vs ${stringify(decVal)}`
+          `Mismatch at row ${i}, col ${j} (${types[j].type}): ${stringify(origVal)} vs ${stringify(decVal)}`,
         );
       }
     }
@@ -151,7 +176,10 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
     for (let iter = 0; iter < iterations; iter++) {
       // Pick random subset of scalar types
       const typeCount = randomInt(1, scalarTypes.length);
-      const selectedTypes = Array.from({ length: typeCount }, () => scalarTypes[randomInt(0, scalarTypes.length - 1)]);
+      const selectedTypes = Array.from(
+        { length: typeCount },
+        () => scalarTypes[randomInt(0, scalarTypes.length - 1)],
+      );
       const rowCount = randomInt(1, 100);
 
       const { columns, rows, types } = generateRows(selectedTypes, rowCount);
@@ -196,7 +224,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const baseType = scalarTypes[randomInt(0, scalarTypes.length - 1)];
       const nullableType: TypeGen = {
         type: `Nullable(${baseType.type})`,
-        gen: () => Math.random() < 0.3 ? null : baseType.gen(),
+        gen: () => (Math.random() < 0.3 ? null : baseType.gen()),
         compare: (a, b) => {
           if (a === null && b === null) return true;
           if (a === null || b === null) return false;
@@ -254,8 +282,8 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       const elementTypes = Array.from({ length: elementCount }, () => scalarTypes[randomInt(0, 5)]);
 
       const tupleType: TypeGen = {
-        type: `Tuple(${elementTypes.map(t => t.type).join(", ")})`,
-        gen: () => elementTypes.map(t => t.gen()),
+        type: `Tuple(${elementTypes.map((t) => t.type).join(", ")})`,
+        gen: () => elementTypes.map((t) => t.gen()),
         compare: (a, b) => {
           const arrA = a as unknown[];
           const arrB = b as unknown[];
@@ -292,7 +320,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
           const seen = new Set<string>();
           const entries: [unknown, unknown][] = [];
           for (let i = 0; i < size; i++) {
-            let key = keyType.gen();
+            const key = keyType.gen();
             const keyStr = JSON.stringify(key);
             // Ensure unique keys to match Map behavior
             if (seen.has(keyStr)) continue;
@@ -340,7 +368,10 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       // Mix different type categories
       const allTypes = [...scalarTypes.slice(0, 6), ...dateTypes, ...ipTypes];
       const colCount = randomInt(3, 8);
-      const selectedTypes = Array.from({ length: colCount }, () => allTypes[randomInt(0, allTypes.length - 1)]);
+      const selectedTypes = Array.from(
+        { length: colCount },
+        () => allTypes[randomInt(0, allTypes.length - 1)],
+      );
       const rowCount = randomInt(10, 200);
 
       const { columns, rows, types } = generateRows(selectedTypes, rowCount);
@@ -410,7 +441,10 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
     const iterations = parseInt(process.env.FUZZ_ITERATIONS ?? "50", 10);
     for (let iter = 0; iter < iterations; iter++) {
       const typeCount = randomInt(1, 5);
-      const selectedTypes = Array.from({ length: typeCount }, () => scalarTypes[randomInt(0, scalarTypes.length - 1)]);
+      const selectedTypes = Array.from(
+        { length: typeCount },
+        () => scalarTypes[randomInt(0, scalarTypes.length - 1)],
+      );
 
       // Test empty
       {
@@ -441,10 +475,26 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       { type: "Int64", gen: () => randomBigInt(64), nullable: false },
       { type: "Int32", gen: () => randomInt(-2147483648, 2147483647), nullable: false },
       { type: "Float64", gen: randomFloat, nullable: false },
-      { type: "LowCardinality(String)", gen: () => ["active", "inactive", "pending"][randomInt(0, 2)], nullable: false },
-      { type: "Array(String)", gen: () => Array.from({ length: randomInt(0, 5) }, () => randomString(10)), nullable: false },
-      { type: "Nullable(String)", gen: () => Math.random() < 0.3 ? null : randomString(15), nullable: true },
-      { type: "Nullable(Int64)", gen: () => Math.random() < 0.3 ? null : randomBigInt(64), nullable: true },
+      {
+        type: "LowCardinality(String)",
+        gen: () => ["active", "inactive", "pending"][randomInt(0, 2)],
+        nullable: false,
+      },
+      {
+        type: "Array(String)",
+        gen: () => Array.from({ length: randomInt(0, 5) }, () => randomString(10)),
+        nullable: false,
+      },
+      {
+        type: "Nullable(String)",
+        gen: () => (Math.random() < 0.3 ? null : randomString(15)),
+        nullable: true,
+      },
+      {
+        type: "Nullable(Int64)",
+        gen: () => (Math.random() < 0.3 ? null : randomBigInt(64)),
+        nullable: true,
+      },
     ];
 
     for (let iter = 0; iter < iterations; iter++) {
@@ -456,7 +506,7 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
       });
 
       // Build JSON type string
-      const typeArgs = selectedTypedPaths.map(p => `${p.name} ${p.type}`).join(", ");
+      const typeArgs = selectedTypedPaths.map((p) => `${p.name} ${p.type}`).join(", ");
       const jsonType = `JSON(${typeArgs})`;
 
       // Generate rows with typed paths + random dynamic paths
@@ -497,14 +547,18 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
           const decVal = dec[key];
           // Null values are omitted from decoded object
           if (origVal === null) {
-            assert.strictEqual(decVal, undefined, `Row ${r}, key ${key}: null should become undefined`);
+            assert.strictEqual(
+              decVal,
+              undefined,
+              `Row ${r}, key ${key}: null should become undefined`,
+            );
           } else if (Array.isArray(origVal)) {
             assert.deepStrictEqual(decVal, origVal, `Row ${r}, key ${key}: array mismatch`);
           } else if (typeof origVal === "number") {
             // Int64 becomes bigint, floats stay as numbers
             assert.ok(
               decVal === origVal || decVal === BigInt(Math.floor(origVal as number)),
-              `Row ${r}, key ${key}: numeric mismatch ${origVal} vs ${decVal}`
+              `Row ${r}, key ${key}: numeric mismatch ${origVal} vs ${decVal}`,
             );
           } else {
             assert.strictEqual(decVal, origVal, `Row ${r}, key ${key}: value mismatch`);
@@ -519,22 +573,25 @@ describe("Native Unit Fuzz Tests", { timeout: 60000 }, () => {
 // Integration Fuzz Tests (requires ClickHouse)
 // ============================================================================
 
+import { collectText, dataChunks, init, insert, type QueryPacket, query } from "../../client.ts";
 import { startClickHouse, stopClickHouse } from "../setup.ts";
-import { init, insert, query, collectText, dataChunks, type QueryPacket } from "../../client.ts";
 
 describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
   it("round-trips random data N times", async () => {
     // Setup
     await init();
     const clickhouse = await startClickHouse();
-    const baseUrl = clickhouse.url + "/";
+    const baseUrl = `${clickhouse.url}/`;
     const auth = { username: clickhouse.username, password: clickhouse.password };
-    const sessionId = "native_fuzz_" + Date.now().toString();
+    const sessionId = `native_fuzz_${Date.now().toString()}`;
     // Separate session for inserts to avoid lock contention during streaming
-    const insertSessionId = sessionId + "_insert";
+    const insertSessionId = `${sessionId}_insert`;
 
     try {
-      const N = parseInt(process.env.INTEGRATION_FUZZ_ITERATIONS ?? process.env.FUZZ_ITERATIONS ?? "25", 10);
+      const N = parseInt(
+        process.env.INTEGRATION_FUZZ_ITERATIONS ?? process.env.FUZZ_ITERATIONS ?? "25",
+        10,
+      );
 
       for (let i = 0; i < N; i++) {
         const srcTable = `native_fuzz_src_${i}`;
@@ -558,7 +615,10 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
           // behavior for most schemas while keeping disk/memory usage reasonable for CI.
           const unescaped = structure.replace(/\\'/g, "'");
           const escapedStructure = unescaped.replace(/'/g, "''");
-          const rowCount = parseInt(process.env.INTEGRATION_FUZZ_ROWS ?? process.env.FUZZ_ROWS ?? "20000", 10);
+          const rowCount = parseInt(
+            process.env.INTEGRATION_FUZZ_ROWS ?? process.env.FUZZ_ROWS ?? "20000",
+            10,
+          );
           await consume(
             query(
               `CREATE TABLE ${srcTable} ENGINE = MergeTree ORDER BY tuple() AS SELECT * FROM generateRandom('${escapedStructure}') LIMIT ${rowCount}`,
@@ -590,7 +650,10 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
           const startTime = Date.now();
           let lastProgressTime = startTime;
 
-          for await (const block of streamDecodeNative(dataChunks(queryResult), { mapAsArray: true, debug: true })) {
+          for await (const block of streamDecodeNative(dataChunks(queryResult), {
+            mapAsArray: true,
+            debug: true,
+          })) {
             columns = block.columns;
             blocksProcessed++;
             rowsProcessed += block.rowCount;
@@ -599,23 +662,25 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
             const now = Date.now();
             if (now - lastProgressTime >= 3000) {
               const elapsed = ((now - startTime) / 1000).toFixed(1);
-              console.log(`  [${i + 1}/${N}] ${rowsProcessed.toLocaleString()} rows, ${blocksProcessed} blocks (${elapsed}s)`);
+              console.log(
+                `  [${i + 1}/${N}] ${rowsProcessed.toLocaleString()} rows, ${blocksProcessed} blocks (${elapsed}s)`,
+              );
               lastProgressTime = now;
             }
 
             // Encode the Table directly
             const encoded = encodeNative(block);
-            await insert(
-              `INSERT INTO ${dstTable} FORMAT Native`,
-              encoded,
-              insertSessionId,
-              { baseUrl, auth },
-            );
+            await insert(`INSERT INTO ${dstTable} FORMAT Native`, encoded, insertSessionId, {
+              baseUrl,
+              auth,
+            });
           }
 
           // Final progress
           const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-          console.log(`  [${i + 1}/${N}] done: ${rowsProcessed.toLocaleString()} rows, ${blocksProcessed} blocks (${elapsed}s)`);
+          console.log(
+            `  [${i + 1}/${N}] done: ${rowsProcessed.toLocaleString()} rows, ${blocksProcessed} blocks (${elapsed}s)`,
+          );
 
           // 5. Verify exact row equality using cityHash64(*)
           // NaN bit patterns are preserved through round-trip since we return TypedArray from decode
@@ -642,7 +707,8 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
               const colDiff = await collectText(
                 query(
                   `SELECT count() FROM (SELECT cityHash64(\`${col.name}\`) AS h FROM ${srcTable} EXCEPT SELECT cityHash64(\`${col.name}\`) AS h FROM ${dstTable}) FORMAT TabSeparated`,
-                  sessionId, { baseUrl, auth },
+                  sessionId,
+                  { baseUrl, auth },
                 ),
               );
               if (colDiff.trim() !== "0") {
@@ -657,13 +723,15 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
               const srcSample = await collectText(
                 query(
                   `SELECT \`${firstDiffColName}\` FROM ${srcTable} LIMIT 10 FORMAT TabSeparated`,
-                  sessionId, { baseUrl, auth },
+                  sessionId,
+                  { baseUrl, auth },
                 ),
               );
               const dstSample = await collectText(
                 query(
                   `SELECT \`${firstDiffColName}\` FROM ${dstTable} LIMIT 10 FORMAT TabSeparated`,
-                  sessionId, { baseUrl, auth },
+                  sessionId,
+                  { baseUrl, auth },
                 ),
               );
               console.log(`Source ${firstDiffCol} sample:\n${srcSample}`);
@@ -673,23 +741,28 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
               const srcDistinct = await collectText(
                 query(
                   `SELECT count(DISTINCT \`${firstDiffColName}\`) FROM ${srcTable} FORMAT TabSeparated`,
-                  sessionId, { baseUrl, auth },
+                  sessionId,
+                  { baseUrl, auth },
                 ),
               );
               const dstDistinct = await collectText(
                 query(
                   `SELECT count(DISTINCT \`${firstDiffColName}\`) FROM ${dstTable} FORMAT TabSeparated`,
-                  sessionId, { baseUrl, auth },
+                  sessionId,
+                  { baseUrl, auth },
                 ),
               );
-              console.log(`Distinct values - src: ${srcDistinct.trim()}, dst: ${dstDistinct.trim()}`);
+              console.log(
+                `Distinct values - src: ${srcDistinct.trim()}, dst: ${dstDistinct.trim()}`,
+              );
             }
 
             // Get specific differing rows
             const diffRows = await collectText(
               query(
                 `SELECT * FROM (SELECT cityHash64(*) AS h, * FROM ${srcTable} EXCEPT SELECT cityHash64(*) AS h, * FROM ${dstTable}) LIMIT 5 FORMAT TabSeparated`,
-                sessionId, { baseUrl, auth },
+                sessionId,
+                { baseUrl, auth },
               ),
             );
             throw new Error(
@@ -697,9 +770,7 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
             );
           }
         } catch (err) {
-          console.error(
-            `[native fuzz ${i + 1}/${N}] FAILED with structure: ${structure}`,
-          );
+          console.error(`[native fuzz ${i + 1}/${N}] FAILED with structure: ${structure}`);
           throw err;
         } finally {
           // Use insertSessionId for cleanup to avoid session lock from streaming query
@@ -727,7 +798,8 @@ describe("Native Integration Fuzz Tests", { timeout: 600000 }, () => {
 });
 
 async function consume(input: AsyncIterable<QueryPacket>) {
-  for await (const _ of input) {}
+  for await (const _ of input) {
+  }
 }
 
 // ============================================================================
@@ -745,7 +817,10 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
    * Full round-trip: read from ClickHouse → decode → encode → insert back → verify with cityHash64
    */
   it("round-trips JSON with random typed paths through ClickHouse", async () => {
-    const iterations = parseInt(process.env.TCP_FUZZ_ITERATIONS ?? process.env.FUZZ_ITERATIONS ?? "10", 10);
+    const iterations = parseInt(
+      process.env.TCP_FUZZ_ITERATIONS ?? process.env.FUZZ_ITERATIONS ?? "10",
+      10,
+    );
     const rowCount = parseInt(process.env.TCP_FUZZ_ROWS ?? process.env.FUZZ_ROWS ?? "500", 10);
 
     // Helper to get scalar result from query
@@ -761,7 +836,12 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
 
     // Start ClickHouse container
     const ch = await startClickHouse();
-    const client = new TcpClient({ host: ch.host, port: ch.tcpPort, user: ch.username, password: ch.password });
+    const client = new TcpClient({
+      host: ch.host,
+      port: ch.tcpPort,
+      user: ch.username,
+      password: ch.password,
+    });
     await client.connect();
 
     try {
@@ -795,21 +875,24 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
           const pathSelect = pathTypes.map((_, i) => `'tp_${i}', tp_${i}`).join(", ");
 
           // Create source table and insert random data
-          await client.query(`CREATE TABLE ${srcTable} (id UInt64, data ${jsonType}) ENGINE = Memory`);
+          await client.query(
+            `CREATE TABLE ${srcTable} (id UInt64, data ${jsonType}) ENGINE = Memory`,
+          );
           await client.query(
             `INSERT INTO ${srcTable} SELECT rowNumberInAllBlocks() as id, map(${pathSelect})::${jsonType} as data ` +
-            `FROM generateRandom('${helperCols.replace(/'/g, "''")}') LIMIT ${rowCount}`
+              `FROM generateRandom('${helperCols.replace(/'/g, "''")}') LIMIT ${rowCount}`,
           );
 
           // Create empty destination table
-          await client.query(`CREATE TABLE ${dstTable} (id UInt64, data ${jsonType}) ENGINE = Memory`);
+          await client.query(
+            `CREATE TABLE ${dstTable} (id UInt64, data ${jsonType}) ENGINE = Memory`,
+          );
 
           // Read from source via TCP (tests decoder) - collect all batches first
           const batches: RecordBatch[] = [];
-          const stream = client.query(
-            `SELECT * FROM ${srcTable} ORDER BY id`,
-            { settings: { output_format_native_use_flattened_dynamic_and_json_serialization: 1 } }
-          );
+          const stream = client.query(`SELECT * FROM ${srcTable} ORDER BY id`, {
+            settings: { output_format_native_use_flattened_dynamic_and_json_serialization: 1 },
+          });
           for await (const packet of stream) {
             if (packet.type === "Data" && packet.batch.rowCount > 0) {
               batches.push(packet.batch);
@@ -817,15 +900,22 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
           }
 
           // Insert batches to dest (tests encoder)
-          let insertedRows = 0;
+          let _insertedRows = 0;
           for (const batch of batches) {
-            for await (const _ of client.insert(`INSERT INTO ${dstTable} VALUES`, batch)) {}
-            insertedRows += batch.rowCount;
+            for await (const _ of client.insert(`INSERT INTO ${dstTable} VALUES`, batch)) {
+            }
+            _insertedRows += batch.rowCount;
           }
 
           // Verify row counts first
-          const srcCount = parseInt(await queryScalar(client, `SELECT count() FROM ${srcTable}`) || "0", 10);
-          const dstCount = parseInt(await queryScalar(client, `SELECT count() FROM ${dstTable}`) || "0", 10);
+          const srcCount = parseInt(
+            (await queryScalar(client, `SELECT count() FROM ${srcTable}`)) || "0",
+            10,
+          );
+          const dstCount = parseInt(
+            (await queryScalar(client, `SELECT count() FROM ${dstTable}`)) || "0",
+            10,
+          );
 
           if (srcCount !== dstCount) {
             throw new Error(`Row count mismatch: src=${srcCount}, dst=${dstCount} for ${jsonType}`);
@@ -834,12 +924,20 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
           // Verify by extracting typed paths and comparing with cityHash64
           // JSON columns don't support cityHash64 directly, so we extract paths
           const pathList = typedPathDefs.map((_, i) => `data.tp_${i}`).join(", ");
-          const d1 = parseInt(await queryScalar(client,
-            `SELECT count() FROM (SELECT id, cityHash64(${pathList}) AS h FROM ${srcTable} EXCEPT SELECT id, cityHash64(${pathList}) AS h FROM ${dstTable})`
-          ) || "0", 10);
-          const d2 = parseInt(await queryScalar(client,
-            `SELECT count() FROM (SELECT id, cityHash64(${pathList}) AS h FROM ${dstTable} EXCEPT SELECT id, cityHash64(${pathList}) AS h FROM ${srcTable})`
-          ) || "0", 10);
+          const d1 = parseInt(
+            (await queryScalar(
+              client,
+              `SELECT count() FROM (SELECT id, cityHash64(${pathList}) AS h FROM ${srcTable} EXCEPT SELECT id, cityHash64(${pathList}) AS h FROM ${dstTable})`,
+            )) || "0",
+            10,
+          );
+          const d2 = parseInt(
+            (await queryScalar(
+              client,
+              `SELECT count() FROM (SELECT id, cityHash64(${pathList}) AS h FROM ${dstTable} EXCEPT SELECT id, cityHash64(${pathList}) AS h FROM ${srcTable})`,
+            )) || "0",
+            10,
+          );
 
           if (d1 !== 0 || d2 !== 0) {
             throw new Error(`Hash mismatch: ${d1}/${d2} rows differ for ${jsonType}`);
@@ -851,7 +949,9 @@ describe("TCP Native Integration Fuzz Tests", { timeout: 300000 }, () => {
           try {
             await client.query(`DROP TABLE IF EXISTS ${srcTable} SYNC`);
             await client.query(`DROP TABLE IF EXISTS ${dstTable} SYNC`);
-          } catch (_) { /* ignore cleanup errors */ }
+          } catch (_) {
+            /* ignore cleanup errors */
+          }
         }
       }
     } finally {

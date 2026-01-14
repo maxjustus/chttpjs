@@ -12,9 +12,7 @@ try {
 
   // Test compression by encoding some data
   console.log("Testing compression via encodeBlock...");
-  const testData = new TextEncoder().encode(
-    "Hello, World! This is a test string for compression.",
-  );
+  const testData = new TextEncoder().encode("Hello, World! This is a test string for compression.");
 
   // LZ4 compression
   const lz4Compressed = full.encodeBlock(testData, 0x82); // Method.LZ4
@@ -22,9 +20,7 @@ try {
 
   // ZSTD compression
   const zstdCompressed = full.encodeBlock(testData, 0x90); // Method.ZSTD
-  console.log(
-    `ZSTD: ${testData.length} bytes -> ${zstdCompressed.length} bytes`,
-  );
+  console.log(`ZSTD: ${testData.length} bytes -> ${zstdCompressed.length} bytes`);
 
   console.log("\nFull build PASSED!\n");
 } catch (err) {
@@ -43,9 +39,7 @@ try {
   console.log("init() succeeded!\n");
 
   console.log("Testing LZ4 compression...");
-  const testData = new TextEncoder().encode(
-    "Hello, World! This is a test string for compression.",
-  );
+  const testData = new TextEncoder().encode("Hello, World! This is a test string for compression.");
   const compressed = lz4Only.encodeBlock(testData, 0x82);
   console.log(`LZ4: ${testData.length} bytes -> ${compressed.length} bytes`);
 

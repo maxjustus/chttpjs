@@ -36,9 +36,7 @@ const _lz4Module = (() => {
 
   function getStringFromWasm0(ptr, len) {
     ptr = ptr >>> 0;
-    return cachedTextDecoder.decode(
-      getUint8ArrayMemory0().subarray(ptr, ptr + len),
-    );
+    return cachedTextDecoder.decode(getUint8ArrayMemory0().subarray(ptr, ptr + len));
   }
 
   function passArray8ToWasm0(arg, malloc) {

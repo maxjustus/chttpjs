@@ -1,14 +1,14 @@
-import { test, describe } from "node:test";
 import assert from "node:assert";
-import { TcpClient } from "../client.ts";
+import { describe, test } from "node:test";
 import { RecordBatch } from "../../native/table.ts";
+import { TcpClient } from "../client.ts";
 
 describe("TCP Client Protocol Features", () => {
   const options = {
     host: "localhost",
     port: 9000,
     user: "default",
-    password: ""
+    password: "",
   };
 
   test("should handle WITH TOTALS", async () => {
@@ -18,7 +18,7 @@ describe("TCP Client Protocol Features", () => {
       let gotTotals = false;
       let dataRows = 0;
       for await (const packet of client.query(
-        "SELECT count() as cnt FROM numbers(100) GROUP BY number % 10 WITH TOTALS"
+        "SELECT count() as cnt FROM numbers(100) GROUP BY number % 10 WITH TOTALS",
       )) {
         if (packet.type === "Data") dataRows += packet.batch.rowCount;
         if (packet.type === "Totals") gotTotals = true;
@@ -35,10 +35,9 @@ describe("TCP Client Protocol Features", () => {
     await client.connect();
     try {
       let gotExtremes = false;
-      for await (const packet of client.query(
-        "SELECT number FROM numbers(100)",
-        { settings: { extremes: true } }
-      )) {
+      for await (const packet of client.query("SELECT number FROM numbers(100)", {
+        settings: { extremes: true },
+      })) {
         if (packet.type === "Extremes") gotExtremes = true;
       }
       assert.ok(gotExtremes, "Should receive Extremes packet");
@@ -48,7 +47,7 @@ describe("TCP Client Protocol Features", () => {
   });
 
   test("should use ZSTD compression", async () => {
-    const client = new TcpClient({ ...options, compression: 'zstd' });
+    const client = new TcpClient({ ...options, compression: "zstd" });
     await client.connect();
     try {
       let rows = 0;
@@ -62,7 +61,7 @@ describe("TCP Client Protocol Features", () => {
   });
 
   test("should use LZ4 compression by default when enabled", async () => {
-    const client = new TcpClient({ ...options, compression: 'lz4' });
+    const client = new TcpClient({ ...options, compression: "lz4" });
     await client.connect();
     try {
       let rows = 0;
@@ -76,17 +75,21 @@ describe("TCP Client Protocol Features", () => {
   });
 
   test("should insert with LZ4 compression", async () => {
-    const client = new TcpClient({ ...options, compression: 'lz4' });
+    const client = new TcpClient({ ...options, compression: "lz4" });
     await client.connect();
     try {
       const tableName = `test_insert_lz4_${Date.now()}`;
       await client.query(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
 
       const table = RecordBatch.fromColumnar(
-        [{ name: "id", type: "UInt32" }, { name: "val", type: "String" }],
-        [new Uint32Array([1, 2, 3]), ["a", "b", "c"]]
+        [
+          { name: "id", type: "UInt32" },
+          { name: "val", type: "String" },
+        ],
+        [new Uint32Array([1, 2, 3]), ["a", "b", "c"]],
       );
-      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, table)) {}
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, table)) {
+      }
 
       let rows = 0;
       for await (const packet of client.query(`SELECT * FROM ${tableName} ORDER BY id`)) {
@@ -101,17 +104,21 @@ describe("TCP Client Protocol Features", () => {
   });
 
   test("should insert with ZSTD compression", async () => {
-    const client = new TcpClient({ ...options, compression: 'zstd' });
+    const client = new TcpClient({ ...options, compression: "zstd" });
     await client.connect();
     try {
       const tableName = `test_insert_zstd_${Date.now()}`;
       await client.query(`CREATE TABLE ${tableName} (id UInt32, val String) ENGINE = Memory`);
 
       const table = RecordBatch.fromColumnar(
-        [{ name: "id", type: "UInt32" }, { name: "val", type: "String" }],
-        [new Uint32Array([1, 2, 3]), ["a", "b", "c"]]
+        [
+          { name: "id", type: "UInt32" },
+          { name: "val", type: "String" },
+        ],
+        [new Uint32Array([1, 2, 3]), ["a", "b", "c"]],
       );
-      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, table)) {}
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, table)) {
+      }
 
       let rows = 0;
       for await (const packet of client.query(`SELECT * FROM ${tableName} ORDER BY id`)) {
@@ -131,10 +138,9 @@ describe("TCP Client Protocol Features", () => {
     try {
       let rows = 0;
       // Using typed settings values
-      for await (const packet of client.query(
-        "SELECT * FROM numbers(10)",
-        { settings: { max_threads: 2, log_queries: false } }
-      )) {
+      for await (const packet of client.query("SELECT * FROM numbers(10)", {
+        settings: { max_threads: 2, log_queries: false },
+      })) {
         if (packet.type === "Data") rows += packet.batch.rowCount;
       }
       assert.strictEqual(rows, 10, "Should work with typed settings");
@@ -150,10 +156,9 @@ describe("TCP Client Protocol Features", () => {
       // Use a bigint value larger than Number.MAX_SAFE_INTEGER
       const largeValue = 9007199254740993n; // 2^53 + 1
       let rows = 0;
-      for await (const packet of client.query(
-        "SELECT * FROM numbers(5)",
-        { settings: { max_memory_usage: largeValue } }
-      )) {
+      for await (const packet of client.query("SELECT * FROM numbers(5)", {
+        settings: { max_memory_usage: largeValue },
+      })) {
         if (packet.type === "Data") rows += packet.batch.rowCount;
       }
       assert.strictEqual(rows, 5, "Should work with bigint settings");
@@ -167,10 +172,9 @@ describe("TCP Client Protocol Features", () => {
     await client.connect();
     try {
       let gotLog = false;
-      for await (const packet of client.query(
-        "SELECT 1",
-        { settings: { send_logs_level: "trace" } }
-      )) {
+      for await (const packet of client.query("SELECT 1", {
+        settings: { send_logs_level: "trace" },
+      })) {
         if (packet.type === "Log") {
           gotLog = true;
           assert.ok(packet.entries.length > 0, "Log should have entries");
@@ -193,10 +197,9 @@ describe("TCP Client Protocol Features", () => {
       let lastAccumulated: Map<string, bigint> | null = null;
 
       // Use frequent profile events to get multiple packets
-      for await (const packet of client.query(
-        "SELECT sleep(0.05), number FROM numbers(10)",
-        { settings: { send_profile_events: true, profile_events_delay_ms: 25 } }
-      )) {
+      for await (const packet of client.query("SELECT sleep(0.05), number FROM numbers(10)", {
+        settings: { send_profile_events: true, profile_events_delay_ms: 25 },
+      })) {
         if (packet.type === "ProfileEvents") {
           packetCount++;
           lastAccumulated = packet.accumulated;
@@ -209,7 +212,9 @@ describe("TCP Client Protocol Features", () => {
       assert.ok(lastAccumulated!.size > 0, "Should have accumulated events");
       // SelectedRows should be present and match our query
       assert.strictEqual(lastAccumulated!.get("SelectedRows"), 10n, "SelectedRows should match");
-      console.log(`  (ProfileEvents packets: ${packetCount}, accumulated entries: ${lastAccumulated!.size})`);
+      console.log(
+        `  (ProfileEvents packets: ${packetCount}, accumulated entries: ${lastAccumulated!.size})`,
+      );
     } finally {
       client.close();
     }
@@ -220,7 +225,8 @@ describe("TCP Client Protocol Features", () => {
     await client.connect();
     try {
       // Run a query - timezone may or may not be sent depending on server
-      for await (const _ of client.query("SELECT now()")) {}
+      for await (const _ of client.query("SELECT now()")) {
+      }
       // Just verify the getter works without error
       const tz = client.timezone;
       console.log(`  (Session timezone: ${tz ?? "not set"})`);
@@ -248,7 +254,7 @@ describe("TCP Client Protocol Features", () => {
     const client = new TcpClient({
       host: "localhost",
       port: 9440,
-      tls: { rejectUnauthorized: false }
+      tls: { rejectUnauthorized: false },
     });
     try {
       await client.connect();
@@ -259,7 +265,7 @@ describe("TCP Client Protocol Features", () => {
       assert.strictEqual(rows, 1);
     } catch (err: any) {
       // TLS port may not be configured - skip gracefully
-      if (err.code === 'ECONNREFUSED') {
+      if (err.code === "ECONNREFUSED") {
         console.log("  (TLS port 9440 not available, skipping)");
         return;
       }
@@ -274,10 +280,9 @@ describe("TCP Client Protocol Features", () => {
     await client.connect();
     try {
       let result: bigint | null = null;
-      for await (const packet of client.query(
-        "SELECT {value:UInt64} as v",
-        { params: { value: 42 } }
-      )) {
+      for await (const packet of client.query("SELECT {value:UInt64} as v", {
+        params: { value: 42 },
+      })) {
         if (packet.type === "Data" && packet.batch.rowCount > 0) {
           result = packet.batch.getColumn("v")?.get(0) as bigint;
         }
@@ -293,10 +298,9 @@ describe("TCP Client Protocol Features", () => {
     await client.connect();
     try {
       let result: string | null = null;
-      for await (const packet of client.query(
-        "SELECT {name:String} as s",
-        { params: { name: "hello world" } }
-      )) {
+      for await (const packet of client.query("SELECT {name:String} as s", {
+        params: { name: "hello world" },
+      })) {
         if (packet.type === "Data" && packet.batch.rowCount > 0) {
           result = packet.batch.getColumn("s")?.get(0) as string;
         }

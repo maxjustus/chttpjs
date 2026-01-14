@@ -1,22 +1,23 @@
 /**
  * Integration tests: Native format against real ClickHouse
  */
-import { describe, it, before, after } from "node:test";
+
 import assert from "node:assert";
-import { init, insert, query, collectBytes } from "../../client.ts";
-import { type ColumnDef } from "../../native/index.ts";
+import { after, before, describe, it } from "node:test";
+import { collectBytes, init, insert, query } from "../../client.ts";
+import type { ColumnDef } from "../../native/index.ts";
 import { startClickHouse, stopClickHouse } from "../setup.ts";
-import { consume, encodeNativeRows, decodeBatch, toArrayRows } from "../test_utils.ts";
+import { consume, decodeBatch, encodeNativeRows, toArrayRows } from "../test_utils.ts";
 
 describe("Native format integration", { timeout: 120000 }, () => {
   let baseUrl: string;
   let auth: { username: string; password: string };
-  const sessionId = "native_int_" + Date.now();
+  const sessionId = `native_int_${Date.now()}`;
 
   before(async () => {
     await init();
     const ch = await startClickHouse();
-    baseUrl = ch.url + "/";
+    baseUrl = `${ch.url}/`;
     auth = { username: ch.username, password: ch.password };
   });
 
@@ -42,7 +43,10 @@ describe("Native format integration", { timeout: 120000 }, () => {
       const orderClause = orderBy ? ` ORDER BY ${orderBy}` : "";
       const settingsClause = settings ? ` SETTINGS ${settings}` : "";
       const data = await collectBytes(
-        query(`SELECT * FROM ${table}${orderClause} FORMAT Native${settingsClause}`, sessionId, { baseUrl, auth }),
+        query(`SELECT * FROM ${table}${orderClause} FORMAT Native${settingsClause}`, sessionId, {
+          baseUrl,
+          auth,
+        }),
       );
       const decoded = await decodeBatch(data);
       return { decoded, decodedRows: toArrayRows(decoded) };

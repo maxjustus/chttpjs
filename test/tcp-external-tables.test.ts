@@ -1,11 +1,12 @@
 /**
  * Integration tests for external tables support in the TCP client.
  */
-import { describe, it, before, after } from "node:test";
+
 import assert from "node:assert";
-import { batchFromArrays, RecordBatch, type ColumnDef } from "../native/index.ts";
+import { after, before, describe, it } from "node:test";
+import { batchFromArrays, type ColumnDef, type RecordBatch } from "../native/index.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { connectTcpClient, collectQueryResults, type TcpConfig } from "./test_utils.ts";
+import { collectQueryResults, connectTcpClient, type TcpConfig } from "./test_utils.ts";
 
 describe("TCP external tables", { timeout: 120000 }, () => {
   let chConfig: TcpConfig;
@@ -13,7 +14,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   before(async () => {
     const ch = await startClickHouse();
     chConfig = { host: ch.host, tcpPort: ch.tcpPort, username: ch.username, password: ch.password };
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 500));
   });
 
   after(async () => {
@@ -32,11 +33,9 @@ describe("TCP external tables", { timeout: 120000 }, () => {
         name: ["Alice", "Bob", "Charlie"],
       });
 
-      const rows = await collectQueryResults(
-        client,
-        "SELECT * FROM mydata ORDER BY id",
-        { externalTables: { mydata: batch } }
-      );
+      const rows = await collectQueryResults(client, "SELECT * FROM mydata ORDER BY id", {
+        externalTables: { mydata: batch },
+      });
 
       assert.strictEqual(rows.length, 3);
       assert.strictEqual(rows[0][0], 1);
@@ -51,18 +50,14 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("aggregates external table data", async () => {
     const client = await connectTcpClient(chConfig);
     try {
-      const schema: ColumnDef[] = [
-        { name: "value", type: "Int64" },
-      ];
+      const schema: ColumnDef[] = [{ name: "value", type: "Int64" }];
       const batch = batchFromArrays(schema, {
         value: new BigInt64Array([100n, 200n, 300n]),
       });
 
-      const rows = await collectQueryResults(
-        client,
-        "SELECT sum(value) as total FROM ext_table",
-        { externalTables: { ext_table: batch } }
-      );
+      const rows = await collectQueryResults(client, "SELECT sum(value) as total FROM ext_table", {
+        externalTables: { ext_table: batch },
+      });
 
       assert.strictEqual(rows.length, 1);
       assert.strictEqual(rows[0][0], 600n);
@@ -101,7 +96,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
          JOIN orders o ON u.user_id = o.user_id
          GROUP BY u.user_name
          ORDER BY u.user_name`,
-        { externalTables: { users, orders } }
+        { externalTables: { users, orders } },
       );
 
       assert.strictEqual(rows.length, 2);
@@ -126,7 +121,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
       const rows = await collectQueryResults(
         client,
         "SELECT sum(n) as total, count() as cnt FROM numbers_table",
-        { externalTables: { numbers_table: [batch1, batch2, batch3] } }
+        { externalTables: { numbers_table: [batch1, batch2, batch3] } },
       );
 
       assert.strictEqual(rows.length, 1);
@@ -144,17 +139,15 @@ describe("TCP external tables", { timeout: 120000 }, () => {
 
       async function* generateBatches(): AsyncIterable<RecordBatch> {
         yield batchFromArrays(schema, { x: new Uint32Array([1, 2]) });
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 10));
         yield batchFromArrays(schema, { x: new Uint32Array([3, 4]) });
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise((resolve) => setTimeout(resolve, 10));
         yield batchFromArrays(schema, { x: new Uint32Array([5]) });
       }
 
-      const rows = await collectQueryResults(
-        client,
-        "SELECT sum(x) as total FROM async_data",
-        { externalTables: { async_data: generateBatches() } }
-      );
+      const rows = await collectQueryResults(client, "SELECT sum(x) as total FROM async_data", {
+        externalTables: { async_data: generateBatches() },
+      });
 
       assert.strictEqual(rows.length, 1);
       assert.strictEqual(rows[0][0], 15n); // 1+2+3+4+5 = 15
@@ -184,7 +177,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
       const rows = await collectQueryResults(
         client,
         "SELECT count() as cnt, max(id) as max_id FROM compressed_table",
-        { externalTables: { compressed_table: batch } }
+        { externalTables: { compressed_table: batch } },
       );
 
       assert.strictEqual(rows.length, 1);
@@ -198,16 +191,12 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("handles empty external table", async () => {
     const client = await connectTcpClient(chConfig);
     try {
-      const schema: ColumnDef[] = [
-        { name: "id", type: "UInt32" },
-      ];
+      const schema: ColumnDef[] = [{ name: "id", type: "UInt32" }];
       const emptyBatch = batchFromArrays(schema, { id: new Uint32Array(0) });
 
-      const rows = await collectQueryResults(
-        client,
-        "SELECT count() as cnt FROM empty_table",
-        { externalTables: { empty_table: emptyBatch } }
-      );
+      const rows = await collectQueryResults(client, "SELECT count() as cnt FROM empty_table", {
+        externalTables: { empty_table: emptyBatch },
+      });
 
       assert.strictEqual(rows.length, 1);
       assert.strictEqual(rows[0][0], 0n);
@@ -231,7 +220,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
       const rows = await collectQueryResults(
         client,
         "SELECT id FROM filter_test WHERE active = 1 ORDER BY id",
-        { externalTables: { filter_test: batch } }
+        { externalTables: { filter_test: batch } },
       );
 
       assert.strictEqual(rows.length, 3);
@@ -254,7 +243,7 @@ describe("TCP external tables", { timeout: 120000 }, () => {
       const rows = await collectQueryResults(
         client,
         "SELECT (SELECT max(val) FROM vals) as max_val",
-        { externalTables: { vals: batch } }
+        { externalTables: { vals: batch } },
       );
 
       assert.strictEqual(rows.length, 1);

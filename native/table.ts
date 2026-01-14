@@ -1,7 +1,7 @@
-import { type ColumnDef, type TypedArray } from "./types.ts";
+import { type ColumnBuilder, getCodec, makeBuilder } from "./codecs.ts";
 import { type Column, DataColumn } from "./columns.ts";
-import { type Block } from "./index.ts";
-import { getCodec, makeBuilder, type ColumnBuilder } from "./codecs.ts";
+import type { Block } from "./index.ts";
+import type { ColumnDef, TypedArray } from "./types.ts";
 
 /** Options for materializing row data. */
 export interface MaterializeOptions {
@@ -65,8 +65,7 @@ export class RecordBatch implements Iterable<Row> {
     const rowCount = columnData[0]?.length ?? 0;
     const cols: Column[] = columnData.map((data, i) => {
       // Already a Column - use as-is
-      if (data && typeof (data as any).get === "function")
-        return data as Column;
+      if (data && typeof (data as any).get === "function") return data as Column;
       // TypedArray - wrap in DataColumn with type from schema
       if (ArrayBuffer.isView(data) && !(data instanceof DataView))
         return new DataColumn(columns[i].type, data as TypedArray);
@@ -145,11 +144,7 @@ export class RecordBatch implements Iterable<Row> {
 /**
  * internal helper to create a lazy row proxy.
  */
-function createRowProxy(
-  batch: RecordBatch,
-  rowIndex: number,
-  options?: MaterializeOptions,
-): Row {
+function createRowProxy(batch: RecordBatch, rowIndex: number, options?: MaterializeOptions): Row {
   const names = batch.columnNames;
   const materialize = (opts?: MaterializeOptions) => {
     const o = opts ?? options;
@@ -221,8 +216,7 @@ export class RecordBatchBuilder {
 
   /** Append a row (values in column order). */
   appendRow(values: unknown[]): this {
-    if (values.length !== this.schema.length)
-      throw new Error("Row length mismatch");
+    if (values.length !== this.schema.length) throw new Error("Row length mismatch");
     for (let i = 0; i < values.length; i++) {
       this.builders[i].append(values[i]);
     }
@@ -285,9 +279,7 @@ export function batchFromRows(schema: ColumnDef[], rows: unknown[][]): RecordBat
     }
   }
   // Use codec.fromValues for each column
-  const columnData = columns.map((arr, i) =>
-    getCodec(schema[i].type).fromValues(arr),
-  );
+  const columnData = columns.map((arr, i) => getCodec(schema[i].type).fromValues(arr));
   return new RecordBatch({ columns: schema, columnData, rowCount: rows.length });
 }
 

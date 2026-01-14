@@ -1,18 +1,9 @@
-import { gzip, gunzip, zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { promisify } from "node:util";
-import { compressFrame, decompressFrame } from "lz4-napi";
-import {
-  compress as zstdNativeCompress,
-  decompress as zstdNativeDecompress,
-} from "zstd-napi";
+import { gunzip, gzip, zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import * as bokuweb from "@bokuweb/zstd-wasm";
-import {
-  init,
-  encodeBlock,
-  decodeBlock,
-  Method,
-  usingNativeZstd,
-} from "../compression.ts";
+import { compressFrame, decompressFrame } from "lz4-napi";
+import { compress as zstdNativeCompress, decompress as zstdNativeDecompress } from "zstd-napi";
+import { decodeBlock, encodeBlock, init, Method, usingNativeZstd } from "../compression.ts";
 import { benchAsync, readBenchOptions, reportEnvironment } from "./harness.ts";
 
 const gzipAsync = promisify(gzip);
@@ -33,10 +24,7 @@ function generateTestDataSets(): TestDataSet[] {
   const randomBytes = new Uint8Array(5_000_000);
   // getRandomValues has 64KB limit, fill in chunks
   for (let i = 0; i < randomBytes.length; i += 65536) {
-    const chunk = randomBytes.subarray(
-      i,
-      Math.min(i + 65536, randomBytes.length),
-    );
+    const chunk = randomBytes.subarray(i, Math.min(i + 65536, randomBytes.length));
     crypto.getRandomValues(chunk);
   }
   datasets.push({
@@ -181,10 +169,8 @@ function getMethods(): CompressionMethod[] {
     },
     {
       name: "LZ4 native",
-      compress: async (d) =>
-        new Uint8Array(await compressFrame(Buffer.from(d))),
-      decompress: async (d) =>
-        new Uint8Array(await decompressFrame(Buffer.from(d))),
+      compress: async (d) => new Uint8Array(await compressFrame(Buffer.from(d))),
+      decompress: async (d) => new Uint8Array(await decompressFrame(Buffer.from(d))),
     },
     {
       name: "ZSTD chttp",

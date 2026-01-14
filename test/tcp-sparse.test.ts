@@ -1,8 +1,9 @@
 /**
  * Integration tests for Sparse serialization and Compression in Native format via TCP.
  */
-import { describe, it, before, after } from "node:test";
+
 import assert from "node:assert";
+import { after, before, describe, it } from "node:test";
 import { TcpClient } from "../tcp_client/client.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 import { toArrayRows } from "./test_utils.ts";
@@ -14,7 +15,7 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
     const ch = await startClickHouse();
     chConfig = { host: ch.host, tcpPort: ch.tcpPort, username: ch.username, password: ch.password };
     // Wait for container to be fully ready
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Create test table
     const setupClient = new TcpClient({
@@ -53,7 +54,7 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
     await stopClickHouse();
   });
 
-  for (const compression of [false, 'lz4'] as const) {
+  for (const compression of [false, "lz4"] as const) {
     it(`reads sparse data ${compression ? "with" : "without"} compression`, async () => {
       const client = new TcpClient({
         host: chConfig.host,
@@ -66,9 +67,7 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
       await client.connect();
 
       try {
-        const packets = client.query(
-          `SELECT * FROM test_tcp_sparse ORDER BY id`,
-        );
+        const packets = client.query(`SELECT * FROM test_tcp_sparse ORDER BY id`);
 
         let totalRows = 0;
         for await (const packet of packets) {
@@ -79,10 +78,18 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
 
             // Check specific values if we have enough rows
             if (decodedRows.length > 10) {
-              assert.strictEqual(decodedRows[10][1], 123456789n, "Row 10 should have value 123456789");
+              assert.strictEqual(
+                decodedRows[10][1],
+                123456789n,
+                "Row 10 should have value 123456789",
+              );
             }
             if (decodedRows.length > 5000) {
-              assert.strictEqual(decodedRows[5000][1], 987654321n, "Row 5000 should have value 987654321");
+              assert.strictEqual(
+                decodedRows[5000][1],
+                987654321n,
+                "Row 5000 should have value 987654321",
+              );
             }
           }
         }

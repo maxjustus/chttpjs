@@ -1,16 +1,25 @@
-export { TcpClient, type TcpClientOptions, type ColumnSchema, type QueryOptions, type InsertOptions, type ExternalTableData, type CollectableAsyncGenerator } from "./client.ts";
 export type { ClickHouseSettings } from "../settings.ts";
 export {
-  type Packet,
-  type Progress,
+  type CollectableAsyncGenerator,
+  type ColumnSchema,
+  type ExternalTableData,
+  type InsertOptions,
+  type QueryOptions,
+  TcpClient,
+  type TcpClientOptions,
+} from "./client.ts";
+export {
   type AccumulatedProgress,
-  type ProfileInfo,
-  type LogEntry,
-  type ServerHello,
   ClickHouseException,
+  type LogEntry,
+  type Packet,
+  type ProfileInfo,
+  type Progress,
+  type ServerHello,
 } from "./types.ts";
-import { type Packet } from "./types.ts";
-import { type RecordBatch } from "@maxjustus/chttp/native";
+
+import type { RecordBatch } from "@maxjustus/chttp/native";
+import type { Packet } from "./types.ts";
 
 /**
  * Extract RecordBatches from Data packets.
@@ -20,9 +29,7 @@ import { type RecordBatch } from "@maxjustus/chttp/native";
  *   console.log(batch.rowCount);
  * }
  */
-export async function* recordBatches(
-  packets: AsyncIterable<Packet>,
-): AsyncGenerator<RecordBatch> {
+export async function* recordBatches(packets: AsyncIterable<Packet>): AsyncGenerator<RecordBatch> {
   for await (const p of packets) {
     if (p.type === "Data") yield p.batch;
   }

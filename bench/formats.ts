@@ -2,17 +2,23 @@
 //
 // Tests encoding/decoding performance for both formats with various data types.
 
-import { init, encodeBlock, Method } from "../compression.ts";
 import { collectBytes } from "../client.ts";
+import { encodeBlock, init, Method } from "../compression.ts";
 import {
-  encodeNative,
-  streamEncodeNative,
-  streamDecodeNative,
   batchFromRows,
-  RecordBatch,
   type ColumnDef,
+  encodeNative,
+  RecordBatch,
+  streamDecodeNative,
+  streamEncodeNative,
 } from "../native/index.ts";
-import { benchSync, benchAsync, readBenchOptions, reportEnvironment, type BenchOptions } from "./harness.ts";
+import {
+  type BenchOptions,
+  benchAsync,
+  benchSync,
+  readBenchOptions,
+  reportEnvironment,
+} from "./harness.ts";
 
 function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
   return encodeNative(batchFromRows(columns, rows));
@@ -47,7 +53,7 @@ const decoder = new TextDecoder();
 
 function encodeJsonEachRow(rows: Record<string, unknown>[]): Uint8Array {
   let json = "";
-  for (const row of rows) json += JSON.stringify(row) + "\n";
+  for (const row of rows) json += `${JSON.stringify(row)}\n`;
   return encoder.encode(json);
 }
 
@@ -61,18 +67,13 @@ function decodeJsonEachRow<T>(data: Uint8Array): T[] {
 
 // --- Streaming helpers ---
 
-async function* chunkedStream(
-  data: Uint8Array,
-  chunkSize: number,
-): AsyncIterable<Uint8Array> {
+async function* chunkedStream(data: Uint8Array, chunkSize: number): AsyncIterable<Uint8Array> {
   for (let i = 0; i < data.length; i += chunkSize) {
     yield data.subarray(i, Math.min(i + chunkSize, data.length));
   }
 }
 
-async function collectNative(
-  chunks: AsyncIterable<Uint8Array>,
-): Promise<RecordBatch> {
+async function collectNative(chunks: AsyncIterable<Uint8Array>): Promise<RecordBatch> {
   const blocks: RecordBatch[] = [];
   for await (const block of streamDecodeNative(chunks)) {
     blocks.push(block);
@@ -124,11 +125,10 @@ async function runScenario(
 
   // Encoding
   console.log("Encoding:");
-  const jsonEnc = benchSync(
-    "JSONEachRow encode",
-    () => encodeJsonEachRow(scenario.jsonData),
-    { ...benchOptions, iterations },
-  );
+  const jsonEnc = benchSync("JSONEachRow encode", () => encodeJsonEachRow(scenario.jsonData), {
+    ...benchOptions,
+    iterations,
+  });
   console.log(formatResult(jsonEnc, rows));
   const nativeEnc = benchSync(
     "Native encode",
@@ -139,15 +139,18 @@ async function runScenario(
 
   // Decoding
   console.log("\nDecoding:");
-  const jsonDec = benchSync(
-    "JSONEachRow decode",
-    () => decodeJsonEachRow(jsonEncoded),
+  const jsonDec = benchSync("JSONEachRow decode", () => decodeJsonEachRow(jsonEncoded), {
+    ...benchOptions,
+    iterations,
+  });
+  console.log(formatResult(jsonDec, rows));
+  const nativeDec = await benchAsync(
+    "Native decode",
+    async () => {
+      await decodeBatch(nativeEncoded);
+    },
     { ...benchOptions, iterations },
   );
-  console.log(formatResult(jsonDec, rows));
-  const nativeDec = await benchAsync("Native decode", async () => {
-    await decodeBatch(nativeEncoded);
-  }, { ...benchOptions, iterations });
   console.log(formatResult(nativeDec, rows));
 
   // Compression
@@ -248,12 +251,7 @@ function generateEscapeData(count: number): {
       desc: `Line1\nLine2\tTabbed`,
       path: `C:\\Users\\test\\file${i}.txt`,
     });
-    rows.push([
-      i,
-      `user "test" ${i}`,
-      `Line1\nLine2\tTabbed`,
-      `C:\\Users\\test\\file${i}.txt`,
-    ]);
+    rows.push([i, `user "test" ${i}`, `Line1\nLine2\tTabbed`, `C:\\Users\\test\\file${i}.txt`]);
   }
   return { json, rows, columns };
 }
@@ -296,9 +294,7 @@ function generateComplexTypedData(count: number): {
   const rows: unknown[][] = [];
   for (let i = 0; i < count; i++) {
     const tags = [`tag_${i % 5}`, `cat_${i % 3}`, `type_${i % 7}`];
-    const scores = new Float64Array(
-      Array.from({ length: 50 }, () => Math.random() * 100),
-    );
+    const scores = new Float64Array(Array.from({ length: 50 }, () => Math.random() * 100));
     const metadata = i % 3 === 0 ? null : `meta_${i}`;
     json.push({ id: i, tags, scores, metadata });
     rows.push([i, tags, scores, metadata]);
@@ -320,9 +316,7 @@ function generateVariantData(count: number): {
   for (let i = 0; i < count; i++) {
     // Rotate through the variant types
     const variant =
-      i % 3 === 0 ? [0, `str_${i}`] :
-        i % 3 === 1 ? [1, BigInt(i * 100)] :
-          [2, Math.random() * 100];
+      i % 3 === 0 ? [0, `str_${i}`] : i % 3 === 1 ? [1, BigInt(i * 100)] : [2, Math.random() * 100];
     // JSON representation uses the raw value
     const jsonVal = i % 3 === 0 ? `str_${i}` : i % 3 === 1 ? i * 100 : Math.random() * 100;
     json.push({ id: i, v: jsonVal });
@@ -345,10 +339,13 @@ function generateDynamicData(count: number): {
   for (let i = 0; i < count; i++) {
     // Mix of types: string, bigint, float, bool
     const val =
-      i % 4 === 0 ? `str_${i}` :
-        i % 4 === 1 ? BigInt(i) :
-          i % 4 === 2 ? Math.random() * 100 :
-            i % 2 === 0;
+      i % 4 === 0
+        ? `str_${i}`
+        : i % 4 === 1
+          ? BigInt(i)
+          : i % 4 === 2
+            ? Math.random() * 100
+            : i % 2 === 0;
     // JSON representation
     const jsonVal = typeof val === "bigint" ? Number(val) : val;
     json.push({ id: i, d: jsonVal });
@@ -421,13 +418,11 @@ async function main() {
   const ROWS = 10_000;
   const ITERATIONS = benchOptions.iterations ?? 50;
 
-  console.log(
-    `Benchmarking with ${ROWS} rows, ${ITERATIONS} iterations each\n`,
-  );
+  console.log(`Benchmarking with ${ROWS} rows, ${ITERATIONS} iterations each\n`);
 
   // Generate all test data
   const simple = generateSimpleData(ROWS);
-  const escape = generateEscapeData(ROWS);
+  const escapeData = generateEscapeData(ROWS);
   const complex = generateComplexData(ROWS);
   const complexTyped = generateComplexTypedData(ROWS);
   const variant = generateVariantData(ROWS);
@@ -445,9 +440,9 @@ async function main() {
     {
       name: "Escape Data",
       description: "strings with quotes, newlines, backslashes",
-      columns: escape.columns,
-      jsonData: escape.json,
-      rowsArray: escape.rows,
+      columns: escapeData.columns,
+      jsonData: escapeData.json,
+      rowsArray: escapeData.rows,
     },
     {
       name: "Complex Data",
@@ -493,10 +488,8 @@ async function main() {
 
   // Summary
   console.log("=== Summary (speedup vs JSON) ===\n");
-  const fmtSpeed = (json: number, native: number) =>
-    `Native ${(json / native).toFixed(2)}x`;
-  const fmtSize = (json: number, native: number) =>
-    `Native ${(json / native).toFixed(2)}x smaller`;
+  const fmtSpeed = (json: number, native: number) => `Native ${(json / native).toFixed(2)}x`;
+  const fmtSize = (json: number, native: number) => `Native ${(json / native).toFixed(2)}x smaller`;
 
   for (const r of results) {
     console.log(`${r.name}:`);
@@ -512,41 +505,60 @@ async function main() {
   const simpleNativeEncoded = encodeNativeRows(simple.columns, simple.rows);
 
   console.log("Decoding (sync vs streaming):");
-  const syncDec = await benchAsync("Sync decode", async () => {
-    await decodeBatch(simpleNativeEncoded);
-  }, { ...benchOptions, iterations: ITERATIONS });
+  const syncDec = await benchAsync(
+    "Sync decode",
+    async () => {
+      await decodeBatch(simpleNativeEncoded);
+    },
+    { ...benchOptions, iterations: ITERATIONS },
+  );
   console.log(formatResult(syncDec, ROWS));
 
-  const stream1 = await benchAsync("Stream decode (1 chunk)", async () => {
-    await collectNative(chunkedStream(simpleNativeEncoded, simpleNativeEncoded.length));
-  }, { ...benchOptions, iterations: ITERATIONS });
+  const stream1 = await benchAsync(
+    "Stream decode (1 chunk)",
+    async () => {
+      await collectNative(chunkedStream(simpleNativeEncoded, simpleNativeEncoded.length));
+    },
+    { ...benchOptions, iterations: ITERATIONS },
+  );
   console.log(formatResult(stream1, ROWS));
 
-  const stream64k = await benchAsync("Stream decode (64KB chunks)", async () => {
-    await collectNative(chunkedStream(simpleNativeEncoded, 64 * 1024));
-  }, { ...benchOptions, iterations: ITERATIONS });
+  const stream64k = await benchAsync(
+    "Stream decode (64KB chunks)",
+    async () => {
+      await collectNative(chunkedStream(simpleNativeEncoded, 64 * 1024));
+    },
+    { ...benchOptions, iterations: ITERATIONS },
+  );
   console.log(formatResult(stream64k, ROWS));
 
-  const stream4k = await benchAsync("Stream decode (4KB chunks)", async () => {
-    await collectNative(chunkedStream(simpleNativeEncoded, 4 * 1024));
-  }, { ...benchOptions, iterations: ITERATIONS });
+  const stream4k = await benchAsync(
+    "Stream decode (4KB chunks)",
+    async () => {
+      await collectNative(chunkedStream(simpleNativeEncoded, 4 * 1024));
+    },
+    { ...benchOptions, iterations: ITERATIONS },
+  );
   console.log(formatResult(stream4k, ROWS));
 
   console.log("\nEncoding (sync vs streaming):");
-  const syncEnc = benchSync(
-    "Sync encode",
-    () => encodeNativeRows(simple.columns, simple.rows),
-    { ...benchOptions, iterations: ITERATIONS },
-  );
+  const syncEnc = benchSync("Sync encode", () => encodeNativeRows(simple.columns, simple.rows), {
+    ...benchOptions,
+    iterations: ITERATIONS,
+  });
   console.log(formatResult(syncEnc, ROWS));
 
   async function* batchGenerator() {
     yield batchFromRows(simple.columns, simple.rows);
   }
 
-  const streamEnc = await benchAsync("Stream encode", async () => {
-    await collectBytes(streamEncodeNative(batchGenerator()));
-  }, { ...benchOptions, iterations: ITERATIONS });
+  const streamEnc = await benchAsync(
+    "Stream encode",
+    async () => {
+      await collectBytes(streamEncodeNative(batchGenerator()));
+    },
+    { ...benchOptions, iterations: ITERATIONS },
+  );
   console.log(formatResult(streamEnc, ROWS));
 
   console.log("\nStreaming overhead:");

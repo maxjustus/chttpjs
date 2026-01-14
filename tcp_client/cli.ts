@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 /**
  * TCP Client CLI - streams protocol packets as NDJSON to stdout.
  *
@@ -13,10 +14,10 @@
  *   CH_PASSWORD - Password (default: "")
  */
 
-import * as readline from "node:readline";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as readline from "node:readline";
 import { TcpClient } from "./client.ts";
 import type { Packet } from "./types.ts";
 
@@ -33,7 +34,7 @@ function loadHistory(): string[] {
 
 function saveHistory(history: string[]): void {
   try {
-    fs.writeFileSync(HISTORY_FILE, history.slice(-MAX_HISTORY).join("\n") + "\n");
+    fs.writeFileSync(HISTORY_FILE, `${history.slice(-MAX_HISTORY).join("\n")}\n`);
   } catch {
     // Ignore write errors
   }
@@ -46,14 +47,15 @@ const options = {
   password: process.env.CH_PASSWORD ?? "",
   settings: {
     output_format_native_use_flattened_dynamic_and_json_serialization: 1,
-  }
+  },
 };
 
 // Convert non-JSON-safe types for serialization
 function toJSON(obj: unknown): unknown {
   if (typeof obj === "bigint") return obj.toString();
   if (obj instanceof Date) return obj.toISOString();
-  if (obj instanceof Map) return Object.fromEntries([...obj.entries()].map(([k, v]) => [k, toJSON(v)]));
+  if (obj instanceof Map)
+    return Object.fromEntries([...obj.entries()].map(([k, v]) => [k, toJSON(v)]));
   if (Array.isArray(obj)) return obj.map(toJSON);
   if (obj !== null && typeof obj === "object") {
     const result: Record<string, unknown> = {};
@@ -111,7 +113,7 @@ async function runQuery(client: TcpClient, query: string, pretty: boolean = fals
 
 async function runLoad(client: TcpClient, filePath: string, tableName: string): Promise<void> {
   const content = fs.readFileSync(filePath, "utf-8");
-  const lines = content.split("\n").filter(line => line.trim());
+  const lines = content.split("\n").filter((line) => line.trim());
 
   function* rows() {
     for (const line of lines) {
@@ -123,7 +125,9 @@ async function runLoad(client: TcpClient, filePath: string, tableName: string): 
   console.log(`Loading ${count} rows from ${filePath} into ${tableName}...`);
 
   let writtenRows = 0n;
-  for await (const packet of client.insert(`INSERT INTO ${tableName} VALUES`, rows(), { batchSize: 10000 })) {
+  for await (const packet of client.insert(`INSERT INTO ${tableName} VALUES`, rows(), {
+    batchSize: 10000,
+  })) {
     if (packet.type === "Progress") {
       writtenRows = packet.accumulated.writtenRows;
     }
@@ -143,7 +147,7 @@ async function runInteractive(client: TcpClient): Promise<void> {
   });
 
   console.log(`Connected to ${options.host}:${options.port}`);
-  console.log('Commands: \\load <file.jsonl> INTO <table>, exit\n');
+  console.log("Commands: \\load <file.jsonl> INTO <table>, exit\n");
   rl.prompt();
 
   for await (const line of rl) {

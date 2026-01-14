@@ -6,16 +6,23 @@
 export type CollectableAsyncGenerator<T> = AsyncGenerator<T, void, unknown> & PromiseLike<T[]>;
 
 /** Wrap an async generator to make it awaitable (collects all items on await). */
-export function collectable<T>(gen: AsyncGenerator<T, void, unknown>): CollectableAsyncGenerator<T> {
+export function collectable<T>(
+  gen: AsyncGenerator<T, void, unknown>,
+): CollectableAsyncGenerator<T> {
   return {
-    [Symbol.asyncIterator]() { return gen; },
-    [Symbol.asyncDispose]: async () => { await gen.return(undefined as void); },
+    [Symbol.asyncIterator]() {
+      return gen;
+    },
+    [Symbol.asyncDispose]: async () => {
+      await gen.return(undefined as undefined);
+    },
     next: () => gen.next(),
-    return: (v?: void) => gen.return(v as void),
+    return: (v?: undefined) => gen.return(v as undefined),
     throw: (e: unknown) => gen.throw(e),
+    // biome-ignore lint/suspicious/noThenProperty: intentional PromiseLike implementation
     then<TResult1 = T[], TResult2 = never>(
       resolve?: ((value: T[]) => TResult1 | PromiseLike<TResult1>) | null,
-      reject?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
+      reject?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
     ): Promise<TResult1 | TResult2> {
       return (async () => {
         const items: T[] = [];

@@ -1,16 +1,15 @@
-
-import { test, describe } from "node:test";
 import assert from "node:assert";
-import { TcpClient } from "../client.ts";
+import { describe, test } from "node:test";
 import { batchFromRows } from "../../native/table.ts";
-import { type ColumnDef } from "../../native/types.ts";
+import type { ColumnDef } from "../../native/types.ts";
+import { TcpClient } from "../client.ts";
 
 describe("TCP Client Integration", () => {
   const options = {
     host: "localhost",
     port: 9000,
     user: "default",
-    password: ""
+    password: "",
   };
 
   test("should connect and run a simple SELECT query", async () => {
@@ -37,15 +36,19 @@ describe("TCP Client Integration", () => {
       const tableName = `test_tcp_insert_${Date.now()}`;
       await client.query(`CREATE TABLE ${tableName} (id UInt64, name String) ENGINE = Memory`);
 
-      const batch = batchFromRows([
-        { name: "id", type: "UInt64" },
-        { name: "name", type: "String" }
-      ], [
-        [1n, "Alice"],
-        [2n, "Bob"]
-      ]);
+      const batch = batchFromRows(
+        [
+          { name: "id", type: "UInt64" },
+          { name: "name", type: "String" },
+        ],
+        [
+          [1n, "Alice"],
+          [2n, "Bob"],
+        ],
+      );
 
-      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, batch)) {}
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, batch)) {
+      }
 
       // Verify
       const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`);
@@ -88,14 +91,17 @@ describe("TCP Client Integration", () => {
     await client.connect();
     try {
       const tableName = `test_row_objects_${Date.now()}`;
-      await client.query(`CREATE TABLE ${tableName} (id UInt32, name String, value Float64) ENGINE = Memory`);
+      await client.query(
+        `CREATE TABLE ${tableName} (id UInt32, name String, value Float64) ENGINE = Memory`,
+      );
 
       // Insert row objects - types will be coerced based on server schema
       for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [
         { id: 1, name: "alice", value: 1.5 },
         { id: 2, name: "bob", value: 2.5 },
         { id: 3, name: "charlie", value: 3.5 },
-      ])) {}
+      ])) {
+      }
 
       // Verify
       const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`);
@@ -133,7 +139,10 @@ describe("TCP Client Integration", () => {
         }
       }
 
-      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, generateRows(), { batchSize: 100 })) {}
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, generateRows(), {
+        batchSize: 100,
+      })) {
+      }
 
       const stream = client.query(`SELECT count() as cnt FROM ${tableName}`);
       let count = 0;
@@ -163,9 +172,12 @@ describe("TCP Client Integration", () => {
         { name: "name", type: "String" },
       ];
 
-      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [
-        { id: 1, name: "test" },
-      ], { schema })) {}
+      for await (const _ of client.insert(
+        `INSERT INTO ${tableName} VALUES`,
+        [{ id: 1, name: "test" }],
+        { schema },
+      )) {
+      }
 
       const stream = client.query(`SELECT count() as cnt FROM ${tableName}`);
       let count = 0;
@@ -193,14 +205,18 @@ describe("TCP Client Integration", () => {
     const client = new TcpClient(options);
     await client.connect();
     const wrongSchema: ColumnDef[] = [
-      { name: "id", type: "UInt64" },  // Wrong type!
+      { name: "id", type: "UInt64" }, // Wrong type!
       { name: "name", type: "String" },
     ];
 
-    await assert.rejects(
-      async () => { for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [{ id: 1, name: "test" }], { schema: wrongSchema })) {} },
-      /Schema mismatch.*UInt64.*UInt32/
-    );
+    await assert.rejects(async () => {
+      for await (const _ of client.insert(
+        `INSERT INTO ${tableName} VALUES`,
+        [{ id: 1, name: "test" }],
+        { schema: wrongSchema },
+      )) {
+      }
+    }, /Schema mismatch.*UInt64.*UInt32/);
     client.close();
 
     const cleanupClient = new TcpClient(options);
@@ -220,14 +236,18 @@ describe("TCP Client Integration", () => {
     const client = new TcpClient(options);
     await client.connect();
     const wrongSchema: ColumnDef[] = [
-      { name: "user_id", type: "UInt32" },  // Wrong name!
+      { name: "user_id", type: "UInt32" }, // Wrong name!
       { name: "name", type: "String" },
     ];
 
-    await assert.rejects(
-      async () => { for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [{ id: 1, name: "test" }], { schema: wrongSchema })) {} },
-      /Schema mismatch.*user_id.*id/
-    );
+    await assert.rejects(async () => {
+      for await (const _ of client.insert(
+        `INSERT INTO ${tableName} VALUES`,
+        [{ id: 1, name: "test" }],
+        { schema: wrongSchema },
+      )) {
+      }
+    }, /Schema mismatch.*user_id.*id/);
     client.close();
 
     const cleanupClient = new TcpClient(options);
@@ -251,10 +271,12 @@ describe("TCP Client Integration", () => {
       // Missing 'name' column
     ];
 
-    await assert.rejects(
-      async () => { for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [{ id: 1 }], { schema: wrongSchema })) {} },
-      /Schema mismatch.*expected 1 columns.*got 2/
-    );
+    await assert.rejects(async () => {
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [{ id: 1 }], {
+        schema: wrongSchema,
+      })) {
+      }
+    }, /Schema mismatch.*expected 1 columns.*got 2/);
     client.close();
 
     const cleanupClient = new TcpClient(options);
@@ -284,10 +306,9 @@ describe("TCP Client Integration", () => {
       `);
 
       // Read back using native format with flattened JSON serialization
-      const stream = client.query(
-        `SELECT * FROM ${tableName} ORDER BY id`,
-        { settings: { output_format_native_use_flattened_dynamic_and_json_serialization: 1 } }
-      );
+      const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`, {
+        settings: { output_format_native_use_flattened_dynamic_and_json_serialization: 1 },
+      });
 
       const allRows: any[] = [];
       for await (const packet of stream) {

@@ -55,7 +55,7 @@ function main() {
     }
 
     // Clean up the path for display
-    const shortUrl = url.replace(/^file:\/\//, "").replace(process.cwd() + "/", "");
+    const shortUrl = url.replace(/^file:\/\//, "").replace(`${process.cwd()}/`, "");
     const loc = lineNumber >= 0 ? `${shortUrl}:${lineNumber + 1}` : shortUrl;
     const fn = functionName || "(anonymous)";
     const key = `${fn}@${loc}`;

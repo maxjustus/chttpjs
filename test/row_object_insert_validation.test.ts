@@ -1,5 +1,5 @@
-import { describe, it } from "node:test";
 import assert from "node:assert";
+import { describe, it } from "node:test";
 import { transposeRowObjectsToColumns } from "../tcp_client/row_object_insert.ts";
 
 describe("row object insert validation", () => {
@@ -10,7 +10,10 @@ describe("row object insert validation", () => {
       { a: 2, b: "y" },
     ];
     const cols = transposeRowObjectsToColumns(schema, rows);
-    assert.deepStrictEqual(cols, [[1, 2], ["x", "y"]]);
+    assert.deepStrictEqual(cols, [
+      [1, 2],
+      ["x", "y"],
+    ]);
   });
 
   it("throws on missing key", () => {
@@ -53,4 +56,3 @@ describe("row object insert validation", () => {
     );
   });
 });
-

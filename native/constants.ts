@@ -43,7 +43,7 @@ export const Dynamic = {
   VERSION_V3: 3n,
 } as const;
 
-export const JSON = {
+export const JSONFormat = {
   VERSION_V3: 3n,
 } as const;
 
@@ -51,9 +51,9 @@ export const Variant = {
   // UInt64 LE mode flag: 0=BASIC (row-by-row), 1=COMPACT (granule-based, storage only)
   MODE_BASIC: 0n,
   MODE_COMPACT: 1n,
-  
+
   // 0xFF (255) is reserved for NULL in Variant
-  NULL_DISCRIMINATOR: 0xFF,
+  NULL_DISCRIMINATOR: 0xff,
 } as const;
 
 export const Sparse = {

@@ -18,10 +18,7 @@ function isNumericLikeCodec(codec: Codec): codec is NumericLikeCodec {
  * This is intentionally simple and allocation-friendly (packed array) and keeps
  * builder implementations consistent across codecs.
  */
-function CollectingBuilder(
-  size: number,
-  finish: (values: unknown[]) => Column,
-): ColumnBuilder {
+function CollectingBuilder(size: number, finish: (values: unknown[]) => Column): ColumnBuilder {
   const values = new Array(size);
   let offset = 0;
   const builder: ColumnBuilder = {
@@ -35,61 +32,55 @@ function CollectingBuilder(
 }
 
 import {
-  type TypedArray,
-  type EnumMapping,
-  TEXT_ENCODER,
-  ClickHouseDateTime64,
-  parseTypeList,
-  parseTupleElements,
-  parseEnumDefinition,
-  ipv6ToBytes,
-  bytesToIpv6,
-  readBigInt128,
-  writeBigInt128,
-  readBigInt256,
-  writeBigInt256,
-  decimalByteSize,
-  extractDecimalScale,
-  formatScaledBigInt,
-  parseDecimalToScaledBigInt,
-} from "./types.ts";
-
+  ArrayColumn,
+  type Column,
+  countAndIndexDiscriminators,
+  DataColumn,
+  type DiscriminatorArray,
+  DynamicColumn,
+  EnumColumn,
+  JsonColumn,
+  MapColumn,
+  NullableColumn,
+  TupleColumn,
+  VariantColumn,
+} from "./columns.ts";
 import {
-  BufferWriter,
-  BufferReader,
-  type TypedArrayConstructor,
-} from "./io.ts";
+  Dynamic,
+  IPv6 as IPv6Const,
+  JSONFormat,
+  LowCardinality as LC,
+  SerializationKind,
+  Sparse,
+  Time,
+  UUID as UUIDConst,
+  Variant,
+} from "./constants.ts";
+import { type BufferReader, BufferWriter, type TypedArrayConstructor } from "./io.ts";
 import {
+  DEFAULT_DENSE_NODE,
   type DeserializerState,
   type SerializationNode,
-  DEFAULT_DENSE_NODE,
 } from "./serialization.ts";
 import {
-  type Column,
-  type DiscriminatorArray,
-  DataColumn,
-  EnumColumn,
-  TupleColumn,
-  MapColumn,
-  VariantColumn,
-  DynamicColumn,
-  JsonColumn,
-  NullableColumn,
-  ArrayColumn,
-  countAndIndexDiscriminators,
-} from "./columns.ts";
-
-import {
-  SerializationKind,
-  LowCardinality as LC,
-  Dynamic,
-  JSON,
-  Variant,
-  Sparse,
-  UUID as UUIDConst,
-  IPv6 as IPv6Const,
-  Time,
-} from "./constants.ts";
+  bytesToIpv6,
+  ClickHouseDateTime64,
+  decimalByteSize,
+  type EnumMapping,
+  extractDecimalScale,
+  formatScaledBigInt,
+  ipv6ToBytes,
+  parseDecimalToScaledBigInt,
+  parseEnumDefinition,
+  parseTupleElements,
+  parseTypeList,
+  readBigInt128,
+  readBigInt256,
+  TEXT_ENCODER,
+  type TypedArray,
+  writeBigInt128,
+  writeBigInt256,
+} from "./types.ts";
 
 export function defaultDeserializerState(): DeserializerState {
   return {
@@ -123,11 +114,7 @@ function readKinds1(reader: BufferReader, child: Codec): SerializationNode {
  * Read serialization kinds for wrapper codec with 2 children.
  * Used by Map (key + value).
  */
-function readKinds2(
-  reader: BufferReader,
-  childA: Codec,
-  childB: Codec,
-): SerializationNode {
+function readKinds2(reader: BufferReader, childA: Codec, childB: Codec): SerializationNode {
   const kind = reader.readU8();
   return { kind, children: [childA.readKinds(reader), childB.readKinds(reader)] };
 }
@@ -195,20 +182,13 @@ const INT256_MIN = -(1n << 255n);
 const INT256_MAX = (1n << 255n) - 1n;
 const UINT256_MAX = (1n << 256n) - 1n;
 
-function toIntInRange(
-  v: unknown,
-  typeName: string,
-  min: number,
-  max: number,
-): number {
+function toIntInRange(v: unknown, typeName: string, min: number, max: number): number {
   const n = toNumber(v);
   if (!Number.isFinite(n)) {
     throw new TypeError(`Cannot coerce ${typeof v} "${v}" to ${typeName}`);
   }
   if (!Number.isInteger(n)) {
-    throw new TypeError(
-      `Cannot coerce ${typeof v} "${v}" to ${typeName} (expected integer)`,
-    );
+    throw new TypeError(`Cannot coerce ${typeof v} "${v}" to ${typeName} (expected integer)`);
   }
   if (n < min || n > max) {
     throw new RangeError(`${typeName} out of range: ${n} not in [${min}, ${max}]`);
@@ -216,12 +196,7 @@ function toIntInRange(
   return n;
 }
 
-function toBigIntInRange(
-  v: unknown,
-  typeName: string,
-  min: bigint,
-  max: bigint,
-): bigint {
+function toBigIntInRange(v: unknown, typeName: string, min: bigint, max: bigint): bigint {
   const b =
     typeof v === "number"
       ? (() => {
@@ -299,7 +274,8 @@ function toValidIPv6(v: unknown): string {
   return String(v);
 }
 
-const UUID_REGEX = /^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$/;
+const UUID_REGEX =
+  /^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$/;
 
 function toValidUUID(v: unknown): string {
   if (v == null) return "00000000-0000-0000-0000-000000000000";
@@ -407,11 +383,7 @@ export abstract class BaseCodec implements Codec {
   abstract builder(size: number): ColumnBuilder;
   abstract zeroValue(): unknown;
   abstract estimateSize(rows: number): number;
-  abstract decodeDense(
-    reader: BufferReader,
-    rows: number,
-    state: DeserializerState,
-  ): Column;
+  abstract decodeDense(reader: BufferReader, rows: number, state: DeserializerState): Column;
 
   decode(reader: BufferReader, rows: number, state: DeserializerState): Column {
     if (state.serNode.kind === SerializationKind.Sparse) {
@@ -437,10 +409,7 @@ function readSparse(
   state: DeserializerState,
 ): Column {
   const node = state.serNode;
-  const [initialTrailing, hasValueAfter] = state.sparseRuntime.get(node) || [
-    0,
-    false,
-  ];
+  const [initialTrailing, hasValueAfter] = state.sparseRuntime.get(node) || [0, false];
 
   let trailingDefaultCount = initialTrailing;
   let hasValueAfterTrailing = hasValueAfter;
@@ -473,8 +442,8 @@ function readSparse(
       offsetValue &= ~Sparse.END_OF_GRANULE_FLAG;
     }
 
-    let defaultsBeforeValue = Number(offsetValue);
-    let nextTotalRows = totalRows + defaultsBeforeValue;
+    const defaultsBeforeValue = Number(offsetValue);
+    const nextTotalRows = totalRows + defaultsBeforeValue;
 
     // Check if we've exceeded the requested rows
     if (nextTotalRows >= rows) {
@@ -491,8 +460,7 @@ function readSparse(
     }
 
     // This VarInt represents a non-default value at position (startOfGroup + defaultsBeforeValue)
-    const startOfGroup =
-      !isFirstValue && indices.length > 0 ? indices[indices.length - 1] + 1 : 0;
+    const startOfGroup = !isFirstValue && indices.length > 0 ? indices[indices.length - 1] + 1 : 0;
     if (defaultsBeforeValue >= readOffset) {
       indices.push(startOfGroup + defaultsBeforeValue - readOffset);
       readOffset = 0;
@@ -571,19 +539,14 @@ class NumericCodec<T extends TypedArray> extends BaseCodec {
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    _state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     return new DataColumn(this.type, reader.readTypedArray(this.Ctor, rows));
   }
 
   fromValues(values: unknown[]): DataColumn<T> {
     const arr = new this.Ctor(values.length);
     if (this.converter) {
-      for (let i = 0; i < values.length; i++)
-        arr[i] = this.converter(values[i]) as any;
+      for (let i = 0; i < values.length; i++) arr[i] = this.converter(values[i]) as any;
     } else {
       for (let i = 0; i < values.length; i++) arr[i] = values[i] as any;
     }
@@ -648,16 +611,14 @@ class EnumCodec extends BaseCodec {
     }
 
     if (!Number.isInteger(num)) throw new Error(`Invalid enum value: ${val}`);
-    if (num < this.min || num > this.max)
-      throw new Error(`Enum value out of range: ${val}`);
+    if (num < this.min || num > this.max) throw new Error(`Enum value out of range: ${val}`);
     return num;
   }
 
   encode(col: Column): Uint8Array {
     // Fast path: underlying typed array matches - zero-copy
     const underlying =
-      col instanceof EnumColumn ? col.data :
-      col instanceof DataColumn ? col.data : null;
+      col instanceof EnumColumn ? col.data : col instanceof DataColumn ? col.data : null;
     if (underlying instanceof this.Ctor) {
       return new Uint8Array(underlying.buffer, underlying.byteOffset, underlying.byteLength);
     }
@@ -670,10 +631,16 @@ class EnumCodec extends BaseCodec {
   }
 
   decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
-    const arr = this.Ctor === Int8Array
-      ? reader.readTypedArray(Int8Array, rows)
-      : reader.readTypedArray(Int16Array, rows);
-    return new EnumColumn(this.type, arr, this.mapping.valueToName, reader.options?.enumAsNumber ?? false);
+    const arr =
+      this.Ctor === Int8Array
+        ? reader.readTypedArray(Int8Array, rows)
+        : reader.readTypedArray(Int16Array, rows);
+    return new EnumColumn(
+      this.type,
+      arr,
+      this.mapping.valueToName,
+      reader.options?.enumAsNumber ?? false,
+    );
   }
 
   fromValues(values: unknown[]): EnumColumn {
@@ -686,7 +653,10 @@ class EnumCodec extends BaseCodec {
     const arr = new this.Ctor(size);
     let offset = 0;
     const b: ColumnBuilder = {
-      append: (v: unknown) => { arr[offset++] = this.toEnumValue(v); return b; },
+      append: (v: unknown) => {
+        arr[offset++] = this.toEnumValue(v);
+        return b;
+      },
       finish: () => new EnumColumn(this.type, arr, this.mapping.valueToName, false),
     };
     return b;
@@ -737,11 +707,7 @@ class StringCodec extends BaseCodec {
     return writer.finish();
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    _state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) values[i] = reader.readString();
     return new DataColumn(this.type, values);
@@ -777,26 +743,16 @@ class UUIDCodec extends BaseCodec {
       // CH stores as: [low_64_reversed] [high_64_reversed]
       const off = i * 16;
       for (let j = 0; j < 8; j++) {
-        buf[off + j] = parseInt(
-          clean.substring((7 - j) * 2, (7 - j) * 2 + 2),
-          16,
-        );
+        buf[off + j] = parseInt(clean.substring((7 - j) * 2, (7 - j) * 2 + 2), 16);
       }
       for (let j = 0; j < 8; j++) {
-        buf[off + 8 + j] = parseInt(
-          clean.substring((15 - j) * 2, (15 - j) * 2 + 2),
-          16,
-        );
+        buf[off + 8 + j] = parseInt(clean.substring((15 - j) * 2, (15 - j) * 2 + 2), 16);
       }
     }
     return buf;
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    _state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     reader.ensureAvailable(rows * UUIDConst.BYTE_SIZE);
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
@@ -867,11 +823,7 @@ class FixedStringCodec extends BaseCodec {
     return buf;
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    _state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     reader.ensureAvailable(rows * this.len);
     const values: Uint8Array[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
@@ -961,11 +913,7 @@ class BigIntCodec extends BaseCodec {
     return buf;
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    _state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     reader.ensureAvailable(rows * this.byteSize);
     const values: bigint[] = new Array(rows);
     const readFn = this.byteSize === 16 ? readBigInt128 : readBigInt256;
@@ -1053,11 +1001,7 @@ class DecimalCodec extends BaseCodec {
     return buf;
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    _state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     reader.ensureAvailable(rows * this.byteSize);
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
@@ -1158,11 +1102,7 @@ class DateTime64Codec extends BaseCodec {
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    _state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     const arr = reader.readTypedArray(BigInt64Array, rows);
     const values: ClickHouseDateTime64[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
@@ -1244,18 +1184,12 @@ class DateTime64Codec extends BaseCodec {
 }
 
 // handles Date, Date32, DateTime (ms since epoch / multiplier)
-class EpochCodec<
-  T extends Uint16Array | Int32Array | Uint32Array,
-> extends BaseCodec {
+class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> extends BaseCodec {
   readonly type: string;
   private Ctor: TypedArrayConstructor<T>;
   private multiplier: number;
 
-  constructor(
-    type: string,
-    Ctor: TypedArrayConstructor<T>,
-    multiplier: number,
-  ) {
+  constructor(type: string, Ctor: TypedArrayConstructor<T>, multiplier: number) {
     super();
     this.type = type;
     this.Ctor = Ctor;
@@ -1268,19 +1202,25 @@ class EpochCodec<
     const type = this.type;
     const multiplier = this.multiplier;
     const [minUnits, maxUnits] =
-      type === "Date" ? [0, UINT16_MAX] :
-      type === "DateTime" ? [0, UINT32_MAX] :
-      [INT32_MIN, INT32_MAX];
+      type === "Date"
+        ? [0, UINT16_MAX]
+        : type === "DateTime"
+          ? [0, UINT32_MAX]
+          : [INT32_MIN, INT32_MAX];
     for (let i = 0; i < len; i++) {
       const v = col.get(i);
       const ms =
-        v instanceof Date ? v.getTime() :
-        typeof v === "number" ? v :
-        typeof v === "string" ? toValidDate(v, type).getTime() :
-        v == null ? 0 :
-        (() => {
-          throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
-        })();
+        v instanceof Date
+          ? v.getTime()
+          : typeof v === "number"
+            ? v
+            : typeof v === "string"
+              ? toValidDate(v, type).getTime()
+              : v == null
+                ? 0
+                : (() => {
+                    throw new TypeError(`Cannot coerce ${typeof v} to ${type}`);
+                  })();
 
       if (!Number.isFinite(ms)) {
         throw new TypeError(`Cannot coerce "${v}" to ${type}`);
@@ -1296,11 +1236,7 @@ class EpochCodec<
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    _state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     const arr = reader.readTypedArray(this.Ctor, rows);
     const values: Date[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
@@ -1361,24 +1297,17 @@ class IPv4Codec extends BaseCodec {
         parseInt(m[3], 10),
         parseInt(m[4], 10),
       ];
-      arr[i] =
-        (parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24)) >>>
-        0;
+      arr[i] = (parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24)) >>> 0;
     }
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    _state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     const arr = reader.readTypedArray(Uint32Array, rows);
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const v = arr[i];
-      values[i] =
-        `${v & 0xff}.${(v >> 8) & 0xff}.${(v >> 16) & 0xff}.${(v >> 24) & 0xff}`;
+      values[i] = `${v & 0xff}.${(v >> 8) & 0xff}.${(v >> 16) & 0xff}.${(v >> 24) & 0xff}`;
     }
     return new DataColumn(this.type, values);
   }
@@ -1413,11 +1342,7 @@ class IPv6Codec extends BaseCodec {
     return result;
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    _state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const bytes = reader.readBytes(IPv6Const.BYTE_SIZE);
@@ -1469,11 +1394,7 @@ class ArrayCodec extends BaseCodec {
 
     // Write offsets
     writer.write(
-      new Uint8Array(
-        arr.offsets.buffer,
-        arr.offsets.byteOffset,
-        arr.offsets.byteLength,
-      ),
+      new Uint8Array(arr.offsets.buffer, arr.offsets.byteOffset, arr.offsets.byteLength),
     );
 
     // Write inner data with estimated size
@@ -1483,11 +1404,7 @@ class ArrayCodec extends BaseCodec {
     return writer.finish();
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, state: DeserializerState): Column {
     const offsets = reader.readTypedArray(BigUint64Array, rows);
     const totalCount = rows > 0 ? Number(offsets[rows - 1]) : 0;
     const inner = this.inner.decode(reader, totalCount, childState(state, 0));
@@ -1564,8 +1481,7 @@ class ArrayCodec extends BaseCodec {
         offsets[rowIdx++] = offset;
         return builder;
       },
-      finish: () =>
-        new ArrayColumn(type, offsets, this.inner.fromValues(allInner)),
+      finish: () => new ArrayColumn(type, offsets, this.inner.fromValues(allInner)),
     };
     return builder;
   }
@@ -1618,11 +1534,7 @@ class NullableCodec extends BaseCodec {
     return writer.finish();
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, state: DeserializerState): Column {
     const nullFlags = reader.readTypedArray(Uint8Array, rows);
     const inner = this.inner.decode(reader, rows, childState(state, 0));
     return new NullableColumn(this.type, nullFlags, inner);
@@ -1640,11 +1552,7 @@ class NullableCodec extends BaseCodec {
         innerValues[i] = values[i];
       }
     }
-    return new NullableColumn(
-      this.type,
-      nullFlags,
-      this.inner.fromValues(innerValues),
-    );
+    return new NullableColumn(this.type, nullFlags, this.inner.fromValues(innerValues));
   }
 
   builder(size: number): ColumnBuilder {
@@ -1664,8 +1572,7 @@ class NullableCodec extends BaseCodec {
         offset++;
         return builder;
       },
-      finish: () =>
-        new NullableColumn(type, nullFlags, this.inner.fromValues(innerValues)),
+      finish: () => new NullableColumn(type, nullFlags, this.inner.fromValues(innerValues)),
     };
     return builder;
   }
@@ -1697,8 +1604,7 @@ class LowCardinalityCodec extends BaseCodec {
     this.type = type;
     this.inner = inner;
     // For Nullable inner types, dictionary stores unwrapped type (nulls use index 0)
-    this.dictCodec =
-      inner instanceof NullableCodec ? inner.getInnerCodec() : inner;
+    this.dictCodec = inner instanceof NullableCodec ? inner.getInnerCodec() : inner;
   }
 
   writePrefix(writer: BufferWriter) {
@@ -1767,11 +1673,7 @@ class LowCardinalityCodec extends BaseCodec {
     return writer.finish();
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    _state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, _state: DeserializerState): Column {
     if (rows === 0) return new DataColumn(this.type, []);
 
     const flags = reader.readU64LE();
@@ -1781,17 +1683,12 @@ class LowCardinalityCodec extends BaseCodec {
     const dictSize = Number(reader.readU64LE());
 
     // Dictionary values are never sparse
-    const dict = this.dictCodec.decode(
-      reader,
-      dictSize,
-      defaultDeserializerState(),
-    );
+    const dict = this.dictCodec.decode(reader, dictSize, defaultDeserializerState());
 
     const count = Number(reader.readU64LE());
 
     let indices: TypedArray;
-    if (indexType === Number(LC.INDEX_U8))
-      indices = reader.readTypedArray(Uint8Array, count);
+    if (indexType === Number(LC.INDEX_U8)) indices = reader.readTypedArray(Uint8Array, count);
     else if (indexType === Number(LC.INDEX_U16))
       indices = reader.readTypedArray(Uint16Array, count);
     else if (indexType === Number(LC.INDEX_U32))
@@ -1836,10 +1733,7 @@ class LowCardinalityCodec extends BaseCodec {
     // Stable stringification with sorted keys for objects
     if (typeof v === "object") {
       const keys = Object.keys(v as object).sort();
-      return (
-        "\0O:" +
-        keys.map((k) => `${k}:${this.getDictKey((v as any)[k])}`).join(",")
-      );
+      return `\0O:${keys.map((k) => `${k}:${this.getDictKey((v as any)[k])}`).join(",")}`;
     }
     return v;
   }
@@ -1885,11 +1779,7 @@ class MapCodec extends BaseCodec {
     const hint = sizeHint ?? this.estimateSize(col.length);
     const writer = new BufferWriter(hint);
     writer.write(
-      new Uint8Array(
-        map.offsets.buffer,
-        map.offsets.byteOffset,
-        map.offsets.byteLength,
-      ),
+      new Uint8Array(map.offsets.buffer, map.offsets.byteOffset, map.offsets.byteLength),
     );
     const keyHint = this.keyCodec.estimateSize(map.keys.length);
     const valHint = this.valCodec.estimateSize(map.values.length);
@@ -1898,22 +1788,12 @@ class MapCodec extends BaseCodec {
     return writer.finish();
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    state: DeserializerState,
-  ): Column {
+  decodeDense(reader: BufferReader, rows: number, state: DeserializerState): Column {
     const offsets = reader.readTypedArray(BigUint64Array, rows);
     const total = rows > 0 ? Number(offsets[rows - 1]) : 0;
     const keys = this.keyCodec.decode(reader, total, childState(state, 0));
     const vals = this.valCodec.decode(reader, total, childState(state, 1));
-    return new MapColumn(
-      this.type,
-      offsets,
-      keys,
-      vals,
-      reader.options?.mapAsArray ?? false,
-    );
+    return new MapColumn(this.type, offsets, keys, vals, reader.options?.mapAsArray ?? false);
   }
 
   fromValues(values: unknown[]): MapColumn {
@@ -1933,7 +1813,9 @@ class MapCodec extends BaseCodec {
         for (let j = 0; j < m.length; j++) {
           const pair = m[j];
           if (!Array.isArray(pair) || pair.length !== 2) {
-            throw new TypeError(`Invalid Map entry at index ${j}: expected [key, value] pair, got ${typeof pair}`);
+            throw new TypeError(
+              `Invalid Map entry at index ${j}: expected [key, value] pair, got ${typeof pair}`,
+            );
           }
           keys.push(pair[0]);
           vals.push(pair[1]);
@@ -1947,7 +1829,9 @@ class MapCodec extends BaseCodec {
         }
         offset += BigInt(entries.length);
       } else {
-        throw new TypeError(`Expected Map, Array, or object for ${this.type}, got ${m === null ? "null" : typeof m}`);
+        throw new TypeError(
+          `Expected Map, Array, or object for ${this.type}, got ${m === null ? "null" : typeof m}`,
+        );
       }
       offsets[i] = offset;
     }
@@ -1978,7 +1862,9 @@ class MapCodec extends BaseCodec {
           for (let j = 0; j < m.length; j++) {
             const pair = m[j];
             if (!Array.isArray(pair) || pair.length !== 2) {
-              throw new TypeError(`Invalid Map entry at index ${j}: expected [key, value] pair, got ${typeof pair}`);
+              throw new TypeError(
+                `Invalid Map entry at index ${j}: expected [key, value] pair, got ${typeof pair}`,
+              );
             }
             keys.push(pair[0]);
             vals.push(pair[1]);
@@ -1992,7 +1878,9 @@ class MapCodec extends BaseCodec {
           }
           offset += BigInt(entries.length);
         } else {
-          throw new TypeError(`Expected Map, Array, or object for ${type}, got ${m === null ? "null" : typeof m}`);
+          throw new TypeError(
+            `Expected Map, Array, or object for ${type}, got ${m === null ? "null" : typeof m}`,
+          );
         }
         offsets[rowIdx++] = offset;
         return builder;
@@ -2015,9 +1903,7 @@ class MapCodec extends BaseCodec {
   estimateSize(rows: number) {
     const avgEntries = rows * 3;
     return (
-      rows * 8 +
-      this.keyCodec.estimateSize(avgEntries) +
-      this.valCodec.estimateSize(avgEntries)
+      rows * 8 + this.keyCodec.estimateSize(avgEntries) + this.valCodec.estimateSize(avgEntries)
     );
   }
 
@@ -2031,11 +1917,7 @@ class TupleCodec extends BaseCodec {
   private elements: { name: string | null; codec: Codec }[];
   private isNamed: boolean;
 
-  constructor(
-    type: string,
-    elements: { name: string | null; codec: Codec }[],
-    isNamed: boolean,
-  ) {
+  constructor(type: string, elements: { name: string | null; codec: Codec }[], isNamed: boolean) {
     super();
     this.type = type;
     this.elements = elements;
@@ -2060,22 +1942,14 @@ class TupleCodec extends BaseCodec {
     const hint = sizeHint ?? this.estimateSize(col.length);
     const writer = new BufferWriter(hint);
     for (let i = 0; i < this.elements.length; i++) {
-      const elemHint = this.elements[i].codec.estimateSize(
-        tuple.columns[i].length,
-      );
+      const elemHint = this.elements[i].codec.estimateSize(tuple.columns[i].length);
       writer.write(this.elements[i].codec.encode(tuple.columns[i], elemHint));
     }
     return writer.finish();
   }
 
-  decodeDense(
-    reader: BufferReader,
-    rows: number,
-    state: DeserializerState,
-  ): Column {
-    const cols = this.elements.map((e, i) =>
-      e.codec.decode(reader, rows, childState(state, i))
-    );
+  decodeDense(reader: BufferReader, rows: number, state: DeserializerState): Column {
+    const cols = this.elements.map((e, i) => e.codec.decode(reader, rows, childState(state, i)));
     return new TupleColumn(
       this.type,
       this.elements.map((e) => ({ name: e.name })),
@@ -2132,9 +2006,7 @@ class TupleCodec extends BaseCodec {
           throw new TypeError(`Expected array for tuple ${type}, got ${typeof tuple}`);
         }
         for (let i = 0; i < this.elements.length; i++) {
-          builders[i].append(
-            this.isNamed ? tuple[this.elements[i].name!] : tuple[i],
-          );
+          builders[i].append(this.isNamed ? tuple[this.elements[i].name!] : tuple[i]);
         }
         return builder;
       },
@@ -2154,14 +2026,14 @@ class TupleCodec extends BaseCodec {
   }
   // Sum of all element sizes
   estimateSize(rows: number) {
-    return this.elements.reduce(
-      (sum, e) => sum + e.codec.estimateSize(rows),
-      0,
-    );
+    return this.elements.reduce((sum, e) => sum + e.codec.estimateSize(rows), 0);
   }
 
   readKinds(reader: BufferReader): SerializationNode {
-    return readKindsMany(reader, this.elements.map(e => e.codec));
+    return readKindsMany(
+      reader,
+      this.elements.map((e) => e.codec),
+    );
   }
 }
 
@@ -2208,11 +2080,7 @@ class VariantCodec implements Codec {
     return writer.finish();
   }
 
-  decode(
-    reader: BufferReader,
-    rows: number,
-    state: DeserializerState,
-  ): VariantColumn {
+  decode(reader: BufferReader, rows: number, state: DeserializerState): VariantColumn {
     const discriminators = reader.readTypedArray(Uint8Array, rows);
     const { counts, indices } = countAndIndexDiscriminators(
       discriminators,
@@ -2230,11 +2098,7 @@ class VariantCodec implements Codec {
       const v = values[i];
       if (v === null) {
         discriminators[i] = Variant.NULL_DISCRIMINATOR;
-      } else if (
-        Array.isArray(v) &&
-        v.length === 2 &&
-        typeof v[0] === "number"
-      ) {
+      } else if (Array.isArray(v) && v.length === 2 && typeof v[0] === "number") {
         const disc = v[0] as number;
         if (disc < 0 || disc >= this.codecs.length) {
           throw new Error(
@@ -2268,9 +2132,7 @@ class VariantCodec implements Codec {
     );
   }
 
-  private buildVariantFromValues(
-    values: unknown[],
-  ): [Uint8Array, Map<number, Column>] {
+  private buildVariantFromValues(values: unknown[]): [Uint8Array, Map<number, Column>] {
     const discriminators = new Uint8Array(values.length);
     const variantValues: unknown[][] = this.codecs.map(() => []);
 
@@ -2278,11 +2140,7 @@ class VariantCodec implements Codec {
       const v = values[i];
       if (v === null) {
         discriminators[i] = Variant.NULL_DISCRIMINATOR;
-      } else if (
-        Array.isArray(v) &&
-        v.length === 2 &&
-        typeof v[0] === "number"
-      ) {
+      } else if (Array.isArray(v) && v.length === 2 && typeof v[0] === "number") {
         const disc = v[0] as number;
         if (disc < 0 || disc >= this.codecs.length) {
           throw new TypeError(
@@ -2314,9 +2172,7 @@ class VariantCodec implements Codec {
   // Discriminators + variant data (assume even distribution)
   estimateSize(rows: number) {
     const perVariant = Math.ceil(rows / this.codecs.length);
-    return (
-      rows + this.codecs.reduce((sum, c) => sum + c.estimateSize(perVariant), 0)
-    );
+    return rows + this.codecs.reduce((sum, c) => sum + c.estimateSize(perVariant), 0);
   }
 
   findVariantIndex(value: unknown, types: string[]): number {
@@ -2324,20 +2180,14 @@ class VariantCodec implements Codec {
     for (let i = 0; i < types.length; i++) {
       const t = types[i];
       if (t === "String" && typeof value === "string") return i;
-      if ((t === "Int64" || t === "UInt64") && typeof value === "bigint")
-        return i;
+      if ((t === "Int64" || t === "UInt64") && typeof value === "bigint") return i;
       if (
-        (t.startsWith("Int") ||
-          t.startsWith("UInt") ||
-          t.startsWith("Float")) &&
+        (t.startsWith("Int") || t.startsWith("UInt") || t.startsWith("Float")) &&
         typeof value === "number"
       )
         return i;
       if (t === "Bool" && typeof value === "boolean") return i;
-      if (
-        (t === "Date" || t === "DateTime" || t.startsWith("DateTime64")) &&
-        value instanceof Date
-      )
+      if ((t === "Date" || t === "DateTime" || t.startsWith("DateTime64")) && value instanceof Date)
         return i;
       if (t.startsWith("Array") && Array.isArray(value)) return i;
       if (
@@ -2423,25 +2273,16 @@ class DynamicCodec implements Codec {
     return writer.finish();
   }
 
-  decode(
-    reader: BufferReader,
-    rows: number,
-    state: DeserializerState,
-  ): DynamicColumn {
+  decode(reader: BufferReader, rows: number, state: DeserializerState): DynamicColumn {
     const nullDisc = this.types.length;
     const discLimit = nullDisc + 1;
 
     let discriminators: DiscriminatorArray;
-    if (discLimit <= 256)
-      discriminators = reader.readTypedArray(Uint8Array, rows);
-    else if (discLimit <= 65536)
-      discriminators = reader.readTypedArray(Uint16Array, rows);
+    if (discLimit <= 256) discriminators = reader.readTypedArray(Uint8Array, rows);
+    else if (discLimit <= 65536) discriminators = reader.readTypedArray(Uint16Array, rows);
     else discriminators = reader.readTypedArray(Uint32Array, rows);
 
-    const { counts, indices } = countAndIndexDiscriminators(
-      discriminators,
-      nullDisc,
-    );
+    const { counts, indices } = countAndIndexDiscriminators(discriminators, nullDisc);
     const groups = decodeGroups(reader, this.codecs, counts, state);
     return new DynamicColumn(this.types, discriminators, groups, indices);
   }
@@ -2465,8 +2306,7 @@ class DynamicCodec implements Codec {
     const discriminators = new Uint8Array(values.length);
     for (let i = 0; i < values.length; i++) {
       const v = values[i];
-      discriminators[i] =
-        v === null ? nullDisc : typeOrder.indexOf(this.guessType(v));
+      discriminators[i] = v === null ? nullDisc : typeOrder.indexOf(this.guessType(v));
     }
 
     const groups = new Map<number, Column>();
@@ -2488,27 +2328,18 @@ class DynamicCodec implements Codec {
   // Discriminators + type data (assume most values are strings)
   estimateSize(rows: number) {
     // Dynamic can have variable discriminator size but usually 1-2 bytes + data
-    return (
-      rows * 2 +
-      this.codecs.reduce(
-        (sum, c) => sum + c.estimateSize(Math.ceil(rows / 3)),
-        0,
-      )
-    );
+    return rows * 2 + this.codecs.reduce((sum, c) => sum + c.estimateSize(Math.ceil(rows / 3)), 0);
   }
 
   guessType(value: unknown): string {
     if (value === null) return "String";
     if (typeof value === "string") return "String";
-    if (typeof value === "number")
-      return Number.isInteger(value) ? "Int64" : "Float64";
+    if (typeof value === "number") return Number.isInteger(value) ? "Int64" : "Float64";
     if (typeof value === "bigint") return "Int64";
     if (typeof value === "boolean") return "Bool";
     if (value instanceof Date) return "DateTime64(3)";
     if (Array.isArray(value))
-      return value.length
-        ? `Array(${this.guessType(value[0])})`
-        : "Array(String)";
+      return value.length ? `Array(${this.guessType(value[0])})` : "Array(String)";
     if (typeof value === "object") return "Map(String,String)";
     return "String";
   }
@@ -2540,7 +2371,7 @@ class JsonCodec implements Codec {
     const typedPathNames = new Set(this.typedPaths.map((tp) => tp.name));
     this.dynamicPaths = json.paths.filter((p) => !typedPathNames.has(p));
 
-    writer.writeU64LE(JSON.VERSION_V3);
+    writer.writeU64LE(JSONFormat.VERSION_V3);
     writer.writeVarint(this.dynamicPaths.length);
     for (const p of this.dynamicPaths) writer.writeString(p);
 
@@ -2563,8 +2394,7 @@ class JsonCodec implements Codec {
 
   readPrefix(reader: BufferReader) {
     const ver = reader.readU64LE();
-    if (ver !== JSON.VERSION_V3)
-      throw new Error(`JSON: only V3 supported, got V${ver}`);
+    if (ver !== JSONFormat.VERSION_V3) throw new Error(`JSON: only V3 supported, got V${ver}`);
 
     // Read path count and names (these are ALL paths, both typed and dynamic)
     const count = reader.readVarint();
@@ -2612,11 +2442,7 @@ class JsonCodec implements Codec {
     return writer.finish();
   }
 
-  decode(
-    reader: BufferReader,
-    rows: number,
-    state: DeserializerState,
-  ): JsonColumn {
+  decode(reader: BufferReader, rows: number, state: DeserializerState): JsonColumn {
     const pathColumns = new Map<string, Column>();
     let idx = 0;
 
@@ -2634,17 +2460,15 @@ class JsonCodec implements Codec {
     }
 
     // Combine all paths
-    const allPaths = [
-      ...this.typedPaths.map((tp) => tp.name),
-      ...this.dynamicPaths,
-    ];
+    const allPaths = [...this.typedPaths.map((tp) => tp.name), ...this.dynamicPaths];
     return new JsonColumn(allPaths, pathColumns, rows);
   }
 
   fromValues(values: unknown[]): JsonColumn {
-    const extractPath = (path: string) => values.map(v =>
-      v && typeof v === "object" ? (v as Record<string, unknown>)[path] ?? null : null
-    );
+    const extractPath = (path: string) =>
+      values.map((v) =>
+        v && typeof v === "object" ? ((v as Record<string, unknown>)[path] ?? null) : null,
+      );
 
     const pathColumns = new Map<string, Column>();
     const typedPathNames = new Set<string>();
@@ -2689,10 +2513,7 @@ class JsonCodec implements Codec {
 
   readKinds(reader: BufferReader): SerializationNode {
     // Combine typed paths (from schema) and dynamic paths (from readPrefix)
-    const allCodecs = [
-      ...this.typedPaths.map(tp => tp.codec),
-      ...this.dynamicCodecs.values(),
-    ];
+    const allCodecs = [...this.typedPaths.map((tp) => tp.codec), ...this.dynamicCodecs.values()];
     return readKindsMany(reader, allCodecs);
   }
 }
@@ -2721,10 +2542,8 @@ export function getCodec(type: string): Codec {
 }
 
 function createCodec(type: string): Codec {
-  if (type.startsWith("Nullable"))
-    return new NullableCodec(type, getCodec(extractTypeArgs(type)));
-  if (type.startsWith("Array"))
-    return new ArrayCodec(type, getCodec(extractTypeArgs(type)));
+  if (type.startsWith("Nullable")) return new NullableCodec(type, getCodec(extractTypeArgs(type)));
+  if (type.startsWith("Array")) return new ArrayCodec(type, getCodec(extractTypeArgs(type)));
   if (type.startsWith("LowCardinality"))
     return new LowCardinalityCodec(type, getCodec(extractTypeArgs(type)));
   if (type.startsWith("Map")) {
@@ -2763,7 +2582,7 @@ function createCodec(type: string): Codec {
   }
 
   if (type.startsWith("FixedString"))
-    return new FixedStringCodec(parseInt(extractTypeArgs(type)));
+    return new FixedStringCodec(parseInt(extractTypeArgs(type), 10));
 
   if (type.startsWith("DateTime64")) {
     const precisionMatch = type.match(/DateTime64\((\d+)/);
@@ -2859,10 +2678,9 @@ function parseJsonTypedPaths(type: string): { name: string; type: string }[] {
 
   // Filter to only named elements, excluding config params and SKIP directives
   return elements
-    .filter((el): el is { name: string; type: string } =>
-      el.name !== null &&
-      !el.type.includes("=") &&
-      !el.name.toUpperCase().startsWith("SKIP")
+    .filter(
+      (el): el is { name: string; type: string } =>
+        el.name !== null && !el.type.includes("=") && !el.name.toUpperCase().startsWith("SKIP"),
     )
-    .map(el => ({ name: el.name, type: el.type }));
+    .map((el) => ({ name: el.name, type: el.type }));
 }

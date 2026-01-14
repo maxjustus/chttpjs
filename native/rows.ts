@@ -1,4 +1,4 @@
-import { type RecordBatch, type Row, type MaterializeOptions } from "./table.ts";
+import type { MaterializeOptions, RecordBatch, Row } from "./table.ts";
 
 /**
  * Iterate rows from a stream of RecordBatches.
@@ -13,9 +13,7 @@ import { type RecordBatch, type Row, type MaterializeOptions } from "./table.ts"
  *   console.log(row.id, row.name);
  * }
  */
-export async function* rows(
-  batches: AsyncIterable<RecordBatch>,
-): AsyncGenerator<Row> {
+export async function* rows(batches: AsyncIterable<RecordBatch>): AsyncGenerator<Row> {
   for await (const batch of batches) {
     for (const row of batch) yield row;
   }

@@ -1,11 +1,11 @@
 /**
  * Tests for HTTP Content-Encoding compression of query bodies.
  */
-import { describe, it, before, after } from "node:test";
-import assert from "node:assert/strict";
 
+import assert from "node:assert/strict";
+import { after, before, describe, it } from "node:test";
+import { collectJsonEachRow, init, query } from "../client.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { init, query, collectJsonEachRow } from "../client.ts";
 import { generateSessionId } from "./test_utils.ts";
 
 describe("HTTP query body compression", { timeout: 60000 }, () => {
@@ -17,7 +17,7 @@ describe("HTTP query body compression", { timeout: 60000 }, () => {
   before(async () => {
     await init();
     clickhouse = await startClickHouse();
-    baseUrl = clickhouse.url + "/";
+    baseUrl = `${clickhouse.url}/`;
     auth = { username: clickhouse.username, password: clickhouse.password };
   });
 

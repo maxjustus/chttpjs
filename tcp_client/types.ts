@@ -1,4 +1,4 @@
-import { RecordBatch } from "@maxjustus/chttp/native";
+import type { RecordBatch } from "@maxjustus/chttp/native";
 
 // Modern revision. We rely on the default server settings for serialization.
 export const DBMS_TCP_PROTOCOL_VERSION = 54479n;
@@ -330,10 +330,10 @@ export class ClickHouseException extends Error {
     message: string,
     serverStackTrace: string,
     hasNested: boolean,
-    nested?: ClickHouseException
+    nested?: ClickHouseException,
   ) {
     super(`${exceptionName}: ${message}`);
-    this.name = 'ClickHouseException';
+    this.name = "ClickHouseException";
     this.code = code;
     this.exceptionName = exceptionName;
     this.serverStackTrace = serverStackTrace;

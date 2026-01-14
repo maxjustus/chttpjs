@@ -1,8 +1,8 @@
-import { describe, it } from "node:test";
 import assert from "node:assert";
-import { RecordBatch, type ColumnDef } from "../../native/index.ts";
+import { describe, it } from "node:test";
+import { type ColumnDef, RecordBatch } from "../../native/index.ts";
 import { parseEnumDefinition } from "../../native/types.ts";
-import { encodeNativeRows, decodeBatch, toArrayRows } from "../test_utils.ts";
+import { decodeBatch, encodeNativeRows, toArrayRows } from "../test_utils.ts";
 
 describe("encodeNative", () => {
   it("encodes empty block", async () => {
@@ -75,7 +75,16 @@ describe("encodeNative", () => {
       { name: "u64", type: "UInt64" },
     ];
     const rows = [
-      [-128, -32768, -2147483648, -9223372036854775808n, 255, 65535, 4294967295, 18446744073709551615n],
+      [
+        -128,
+        -32768,
+        -2147483648,
+        -9223372036854775808n,
+        255,
+        65535,
+        4294967295,
+        18446744073709551615n,
+      ],
       [127, 32767, 2147483647, 9223372036854775807n, 0, 0, 0, 0n],
     ];
     const encoded = encodeNativeRows(columns, rows);
@@ -122,7 +131,7 @@ describe("encodeNative", () => {
       { name: "f64", type: "Float64" },
     ];
     const rows = [
-      [3.14, 3.141592653589793],
+      [3.14, Math.PI],
       [-1.5, -1.5],
     ];
     const encoded = encodeNativeRows(columns, rows);
@@ -132,7 +141,7 @@ describe("encodeNative", () => {
     // Float32 loses precision
     const decodedRows = toArrayRows(decoded);
     assert.strictEqual(typeof decodedRows[0][0], "number");
-    assert.strictEqual(decodedRows[0][1], 3.141592653589793);
+    assert.strictEqual(decodedRows[0][1], Math.PI);
   });
 
   it("encodes String with unicode", async () => {
@@ -164,17 +173,14 @@ describe("encodeNative", () => {
 
     assert.deepStrictEqual(decoded.columns, columns);
     // Arrays of integers decode as TypedArrays for performance
-    assert.deepStrictEqual([...decodedRows[0][0] as Int32Array], [1, 2, 3]);
-    assert.deepStrictEqual([...decodedRows[1][0] as Int32Array], []);
-    assert.deepStrictEqual([...decodedRows[2][0] as Int32Array], [42]);
+    assert.deepStrictEqual([...(decodedRows[0][0] as Int32Array)], [1, 2, 3]);
+    assert.deepStrictEqual([...(decodedRows[1][0] as Int32Array)], []);
+    assert.deepStrictEqual([...(decodedRows[2][0] as Int32Array)], [42]);
   });
 
   it("encodes Map", async () => {
     const columns: ColumnDef[] = [{ name: "m", type: "Map(String, Int32)" }];
-    const rows = [
-      [{ a: 1, b: 2 }],
-      [{}],
-    ];
+    const rows = [[{ a: 1, b: 2 }], [{}]];
     const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeBatch(encoded);
     const decodedRows = toArrayRows(decoded);
@@ -241,10 +247,7 @@ describe("encodeNative", () => {
     );
     assert.throws(
       () =>
-        encodeNativeRows(
-          [{ name: "dt", type: "DateTime" }],
-          [[new Date("2200-01-01T00:00:00Z")]],
-        ),
+        encodeNativeRows([{ name: "dt", type: "DateTime" }], [[new Date("2200-01-01T00:00:00Z")]]),
       /DateTime out of range/,
     );
   });
@@ -308,22 +311,13 @@ describe("additional scalar types", () => {
     assert.deepStrictEqual(decoded.columns, columns);
     // Date truncates to day precision
     assert.ok(decodedRows[0][0] instanceof Date);
-    assert.strictEqual(
-      (decodedRows[0][0] as Date).toISOString().split("T")[0],
-      "2024-01-15",
-    );
+    assert.strictEqual((decodedRows[0][0] as Date).toISOString().split("T")[0], "2024-01-15");
     // DateTime has second precision
     assert.ok(decodedRows[0][1] instanceof Date);
-    assert.strictEqual(
-      (decodedRows[0][1] as Date).getUTCHours(),
-      10,
-    );
+    assert.strictEqual((decodedRows[0][1] as Date).getUTCHours(), 10);
     // Date32 truncates to day precision
     assert.ok(decodedRows[0][2] instanceof Date);
-    assert.strictEqual(
-      (decodedRows[0][2] as Date).toISOString().split("T")[0],
-      "2024-01-15",
-    );
+    assert.strictEqual((decodedRows[0][2] as Date).toISOString().split("T")[0], "2024-01-15");
   });
 
   it("encodes DateTime64 from ISO strings", async () => {
@@ -404,10 +398,7 @@ describe("additional scalar types", () => {
   it("throws on invalid string coercion to DateTime", () => {
     const columns: ColumnDef[] = [{ name: "dt", type: "DateTime" }];
     const rows = [["not-a-date"]];
-    assert.throws(
-      () => encodeNativeRows(columns, rows),
-      /Cannot coerce "not-a-date" to DateTime/,
-    );
+    assert.throws(() => encodeNativeRows(columns, rows), /Cannot coerce "not-a-date" to DateTime/);
   });
 
   it("throws on invalid string coercion to DateTime64", () => {
@@ -459,10 +450,7 @@ describe("additional scalar types", () => {
 
   it("throws on invalid IPv4 address", () => {
     const columns: ColumnDef[] = [{ name: "ip", type: "IPv4" }];
-    assert.throws(
-      () => encodeNativeRows(columns, [["not-an-ip"]]),
-      /Invalid IPv4 address/,
-    );
+    assert.throws(() => encodeNativeRows(columns, [["not-an-ip"]]), /Invalid IPv4 address/);
     assert.throws(
       () => encodeNativeRows(columns, [["256.1.1.1"]]),
       /Invalid IPv4 address.*octet 256 > 255/,
@@ -471,42 +459,21 @@ describe("additional scalar types", () => {
 
   it("throws on invalid IPv6 address", () => {
     const columns: ColumnDef[] = [{ name: "ip", type: "IPv6" }];
-    assert.throws(
-      () => encodeNativeRows(columns, [["not-an-ip"]]),
-      /Invalid IPv6 address/,
-    );
-    assert.throws(
-      () => encodeNativeRows(columns, [[":::"]]),
-      /Invalid IPv6 address/,
-    );
-    assert.throws(
-      () => encodeNativeRows(columns, [["2001:db8::1::2"]]),
-      /Invalid IPv6 address/,
-    );
+    assert.throws(() => encodeNativeRows(columns, [["not-an-ip"]]), /Invalid IPv6 address/);
+    assert.throws(() => encodeNativeRows(columns, [[":::"]]), /Invalid IPv6 address/);
+    assert.throws(() => encodeNativeRows(columns, [["2001:db8::1::2"]]), /Invalid IPv6 address/);
   });
 
   it("throws on invalid UUID", () => {
     const columns: ColumnDef[] = [{ name: "id", type: "UUID" }];
-    assert.throws(
-      () => encodeNativeRows(columns, [["not-a-uuid"]]),
-      /Invalid UUID/,
-    );
-    assert.throws(
-      () => encodeNativeRows(columns, [["123"]]),
-      /Invalid UUID/,
-    );
+    assert.throws(() => encodeNativeRows(columns, [["not-a-uuid"]]), /Invalid UUID/);
+    assert.throws(() => encodeNativeRows(columns, [["123"]]), /Invalid UUID/);
   });
 
   it("throws on invalid Decimal", () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Decimal64(2)" }];
-    assert.throws(
-      () => encodeNativeRows(columns, [["not-a-number"]]),
-      /Invalid Decimal/,
-    );
-    assert.throws(
-      () => encodeNativeRows(columns, [["12.34.56"]]),
-      /Invalid Decimal/,
-    );
+    assert.throws(() => encodeNativeRows(columns, [["not-a-number"]]), /Invalid Decimal/);
+    assert.throws(() => encodeNativeRows(columns, [["12.34.56"]]), /Invalid Decimal/);
   });
 
   it("encodes Enum8 and supports both decode modes", async () => {
@@ -524,12 +491,19 @@ describe("additional scalar types", () => {
   });
 
   it("encodes Enum8 with string values", async () => {
-    const columns: ColumnDef[] = [{ name: "e", type: "Enum8('pending' = 0, 'active' = 1, 'done' = 2)" }];
+    const columns: ColumnDef[] = [
+      { name: "e", type: "Enum8('pending' = 0, 'active' = 1, 'done' = 2)" },
+    ];
     const rows = [["pending"], ["active"], ["done"], ["pending"]];
     const encoded = encodeNativeRows(columns, rows);
 
     const decodedStrings = await decodeBatch(encoded);
-    assert.deepStrictEqual(toArrayRows(decodedStrings), [["pending"], ["active"], ["done"], ["pending"]]);
+    assert.deepStrictEqual(toArrayRows(decodedStrings), [
+      ["pending"],
+      ["active"],
+      ["done"],
+      ["pending"],
+    ]);
 
     const decodedNumbers = await decodeBatch(encoded, { enumAsNumber: true });
     assert.deepStrictEqual(toArrayRows(decodedNumbers), [[0], [1], [2], [0]]);
@@ -583,7 +557,10 @@ describe("additional scalar types", () => {
 
   it("encodes Int128", async () => {
     const columns: ColumnDef[] = [{ name: "i", type: "Int128" }];
-    const rows = [[170141183460469231731687303715884105727n], [-170141183460469231731687303715884105728n]];
+    const rows = [
+      [170141183460469231731687303715884105727n],
+      [-170141183460469231731687303715884105728n],
+    ];
     const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeBatch(encoded);
     const decodedRows = toArrayRows(decoded);
@@ -702,10 +679,7 @@ describe("additional scalar types", () => {
       () => encodeNativeRows(columns, [["not-a-tuple"]]),
       /Expected array for tuple.*got string/,
     );
-    assert.throws(
-      () => encodeNativeRows(columns, [[null]]),
-      /Expected tuple for.*got null/,
-    );
+    assert.throws(() => encodeNativeRows(columns, [[null]]), /Expected tuple for.*got null/);
   });
 
   it("throws on invalid named Tuple input", () => {
@@ -787,18 +761,9 @@ describe("additional scalar types", () => {
 
   it("throws on invalid Bool string", () => {
     const columns: ColumnDef[] = [{ name: "b", type: "Bool" }];
-    assert.throws(
-      () => encodeNativeRows(columns, [["yes"]]),
-      /Cannot coerce string "yes" to Bool/,
-    );
-    assert.throws(
-      () => encodeNativeRows(columns, [["no"]]),
-      /Cannot coerce string "no" to Bool/,
-    );
-    assert.throws(
-      () => encodeNativeRows(columns, [[{}]]),
-      /Cannot coerce object to Bool/,
-    );
+    assert.throws(() => encodeNativeRows(columns, [["yes"]]), /Cannot coerce string "yes" to Bool/);
+    assert.throws(() => encodeNativeRows(columns, [["no"]]), /Cannot coerce string "no" to Bool/);
+    assert.throws(() => encodeNativeRows(columns, [[{}]]), /Cannot coerce object to Bool/);
   });
 
   it("coerces Int128/UInt128 with toBigInt helper", async () => {
@@ -807,10 +772,10 @@ describe("additional scalar types", () => {
       { name: "u128", type: "UInt128" },
     ];
     const rows = [
-      [true, true],     // boolean -> 1n
-      [false, false],   // boolean -> 0n
-      [null, null],     // null -> 0n
-      ["123", "456"],   // string -> bigint
+      [true, true], // boolean -> 1n
+      [false, false], // boolean -> 0n
+      [null, null], // null -> 0n
+      ["123", "456"], // string -> bigint
     ];
     const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeBatch(encoded);
@@ -849,7 +814,10 @@ describe("DateTime64 precision edge cases", () => {
     assert.deepStrictEqual(decoded.columns, columns);
     const dt = decodedRows[0][0] as { toClosestDate(): Date };
     // 500ms truncated to deciseconds (5 * 100ms = 500ms)
-    assert.strictEqual(dt.toClosestDate().getTime(), new Date("2024-01-15T10:30:00.500Z").getTime());
+    assert.strictEqual(
+      dt.toClosestDate().getTime(),
+      new Date("2024-01-15T10:30:00.500Z").getTime(),
+    );
   });
 
   it("encodes DateTime64(2) - precision < 3 requires division", async () => {
@@ -863,7 +831,10 @@ describe("DateTime64 precision edge cases", () => {
 
     assert.deepStrictEqual(decoded.columns, columns);
     const dt = decodedRows[0][0] as { toClosestDate(): Date };
-    assert.strictEqual(dt.toClosestDate().getTime(), new Date("2024-01-15T10:30:00.120Z").getTime());
+    assert.strictEqual(
+      dt.toClosestDate().getTime(),
+      new Date("2024-01-15T10:30:00.120Z").getTime(),
+    );
   });
 
   it("encodes DateTime64(0) - seconds only", async () => {
@@ -878,7 +849,10 @@ describe("DateTime64 precision edge cases", () => {
     assert.deepStrictEqual(decoded.columns, columns);
     const dt = decodedRows[0][0] as { toClosestDate(): Date };
     // 999ms truncated to seconds
-    assert.strictEqual(dt.toClosestDate().getTime(), new Date("2024-01-15T10:30:00.000Z").getTime());
+    assert.strictEqual(
+      dt.toClosestDate().getTime(),
+      new Date("2024-01-15T10:30:00.000Z").getTime(),
+    );
   });
 });
 

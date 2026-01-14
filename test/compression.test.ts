@@ -1,22 +1,20 @@
-import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
+import { before, describe, it } from "node:test";
 
 import {
-  init,
-  encodeBlock,
+  concat,
   decodeBlock,
   decodeBlocks,
+  encodeBlock,
+  init,
   Method,
+  readUInt32LE,
   usingNativeLz4,
   usingNativeZstd,
-  concat,
-  readUInt32LE,
 } from "../compression.ts";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-
-
 
 describe("Compression", () => {
   before(async () => {
@@ -68,15 +66,10 @@ describe("Compression", () => {
       const zstdDecompressed = decodeBlock(zstdCompressed);
 
       assert.strictEqual(decoder.decode(lz4Decompressed), decoder.decode(data));
-      assert.strictEqual(
-        decoder.decode(zstdDecompressed),
-        decoder.decode(data),
-      );
+      assert.strictEqual(decoder.decode(zstdDecompressed), decoder.decode(data));
 
       // ZSTD typically achieves better compression
-      console.log(
-        `    LZ4: ${lz4Compressed.length} bytes, ZSTD: ${zstdCompressed.length} bytes`,
-      );
+      console.log(`    LZ4: ${lz4Compressed.length} bytes, ZSTD: ${zstdCompressed.length} bytes`);
     });
   });
 
@@ -171,11 +164,7 @@ describe("Compression", () => {
         }
 
         const result = await processChunks(chunks);
-        assert.strictEqual(
-          result,
-          decoder.decode(data),
-          `Failed for: ${testCase.name}`,
-        );
+        assert.strictEqual(result, decoder.decode(data), `Failed for: ${testCase.name}`);
       }
     });
   });
@@ -183,9 +172,7 @@ describe("Compression", () => {
   describe("Native compression backends", () => {
     it("should report native backend status", () => {
       console.log(`    LZ4: ${usingNativeLz4 ? "native (lz4-napi)" : "WASM"}`);
-      console.log(
-        `    ZSTD: ${usingNativeZstd ? "native (zstd-napi)" : "WASM"}`,
-      );
+      console.log(`    ZSTD: ${usingNativeZstd ? "native (zstd-napi)" : "WASM"}`);
       // In Node.js with native deps installed, both should be native
       if (typeof process !== "undefined" && process.versions?.node) {
         assert.ok(usingNativeLz4, "Should use native LZ4 in Node.js");
@@ -208,11 +195,7 @@ describe("Compression", () => {
           data.length,
           `LZ4 size mismatch for ${size} bytes`,
         );
-        assert.deepStrictEqual(
-          lz4Decompressed,
-          data,
-          `LZ4 data mismatch for ${size} bytes`,
-        );
+        assert.deepStrictEqual(lz4Decompressed, data, `LZ4 data mismatch for ${size} bytes`);
 
         // ZSTD round-trip
         const zstdCompressed = encodeBlock(data, Method.ZSTD);
@@ -222,11 +205,7 @@ describe("Compression", () => {
           data.length,
           `ZSTD size mismatch for ${size} bytes`,
         );
-        assert.deepStrictEqual(
-          zstdDecompressed,
-          data,
-          `ZSTD data mismatch for ${size} bytes`,
-        );
+        assert.deepStrictEqual(zstdDecompressed, data, `ZSTD data mismatch for ${size} bytes`);
       }
     });
 
@@ -247,19 +226,11 @@ describe("Compression", () => {
 
       // Bytes 17-20: compressed size (includes 9-byte header)
       const compressedSize = readUInt32LE(compressed, 17);
-      assert.strictEqual(
-        compressedSize,
-        compressed.length - 16,
-        "Compressed size should match",
-      );
+      assert.strictEqual(compressedSize, compressed.length - 16, "Compressed size should match");
 
       // Bytes 21-24: uncompressed size
       const uncompressedSize = readUInt32LE(compressed, 21);
-      assert.strictEqual(
-        uncompressedSize,
-        data.length,
-        "Uncompressed size should match",
-      );
+      assert.strictEqual(uncompressedSize, data.length, "Uncompressed size should match");
     });
   });
 });

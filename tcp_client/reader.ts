@@ -1,12 +1,12 @@
+import type * as net from "node:net";
 import {
-  TEXT_DECODER,
-  readVarInt64,
   BufferUnderflowError,
   Compression,
+  readVarInt64,
+  TEXT_DECODER,
 } from "@maxjustus/chttp/native";
 import { decodeBlock } from "../compression.ts";
 import { ClickHouseException } from "./types.ts";
-import type * as net from "node:net";
 
 /**
  * Wraps a socket's async iterator to ensure errors are propagated to pending next() calls.
@@ -17,7 +17,7 @@ function createErrorPropagatingIterator(socket: net.Socket): AsyncIterator<Uint8
   let pendingReject: ((err: Error) => void) | null = null;
   let socketError: Error | null = null;
 
-  socket.on('error', (err) => {
+  socket.on("error", (err) => {
     socketError = err;
     if (pendingReject) {
       pendingReject(err);
@@ -43,10 +43,10 @@ function createErrorPropagatingIterator(socket: net.Socket): AsyncIterator<Uint8
           (err) => {
             pendingReject = null;
             reject(err);
-          }
+          },
         );
       });
-    }
+    },
   };
 }
 
@@ -72,7 +72,9 @@ export class StreamingReader {
   private async ensure(n: number): Promise<void> {
     while (this.buffer.length - this.offset < n) {
       if (this.done) {
-        throw new Error(`Unexpected end of stream: needed ${n} bytes, only ${this.buffer.length - this.offset} available`);
+        throw new Error(
+          `Unexpected end of stream: needed ${n} bytes, only ${this.buffer.length - this.offset} available`,
+        );
       }
       if (this.compressionEnabled) {
         await this.pullCompressedBlock();
@@ -94,9 +96,13 @@ export class StreamingReader {
   private async pullCompressedBlock(): Promise<void> {
     const checksum = await this.readRaw(Compression.CHECKSUM_SIZE);
     const header = await this.readRaw(Compression.HEADER_SIZE);
-    
+
     // Header format: 1 byte method, 4 bytes compressed size, 4 bytes uncompressed size
-    const compressedSizeWithHeader = new DataView(header.buffer, header.byteOffset + 1, 4).getUint32(0, true);
+    const compressedSizeWithHeader = new DataView(
+      header.buffer,
+      header.byteOffset + 1,
+      4,
+    ).getUint32(0, true);
     const compressedDataSize = compressedSizeWithHeader - Compression.HEADER_SIZE;
     const compressedData = await this.readRaw(compressedDataSize);
 
@@ -143,7 +149,9 @@ export class StreamingReader {
 
   consume(n: number): void {
     if (this.offset + n > this.buffer.length) {
-      throw new Error(`Cannot consume ${n} bytes, only ${this.buffer.length - this.offset} available`);
+      throw new Error(
+        `Cannot consume ${n} bytes, only ${this.buffer.length - this.offset} available`,
+      );
     }
     this.offset += n;
   }
@@ -243,7 +251,11 @@ export class StreamingReader {
   async readCompressedBlock(): Promise<Uint8Array> {
     const checksum = await this.readFixed(Compression.CHECKSUM_SIZE);
     const header = await this.readFixed(Compression.HEADER_SIZE);
-    const compressedSizeWithHeader = new DataView(header.buffer, header.byteOffset + 1, 4).getUint32(0, true);
+    const compressedSizeWithHeader = new DataView(
+      header.buffer,
+      header.byteOffset + 1,
+      4,
+    ).getUint32(0, true);
     const compressedDataSize = compressedSizeWithHeader - Compression.HEADER_SIZE;
     const compressedData = await this.readFixed(compressedDataSize);
 

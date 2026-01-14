@@ -1,18 +1,19 @@
 import assert from "node:assert";
+import type { QueryPacket } from "../client.ts";
 import {
-  RecordBatchBuilder,
-  RecordBatch,
-  encodeNative,
-  streamDecodeNative,
   type ColumnDef,
   type DecodeOptions,
+  encodeNative,
+  RecordBatch,
+  RecordBatchBuilder,
+  streamDecodeNative,
 } from "../native/index.ts";
 import { TcpClient } from "../tcp_client/client.ts";
-import type { QueryPacket } from "../client.ts";
 
 // Async iterable helpers
 export async function consume(input: AsyncIterable<QueryPacket>): Promise<void> {
-  for await (const _ of input) {}
+  for await (const _ of input) {
+  }
 }
 
 export async function collect<T>(gen: AsyncIterable<T>): Promise<T[]> {
@@ -29,18 +30,20 @@ export async function* toAsync<T>(iter: Iterable<T>): AsyncIterable<T> {
 export function assertArrayEqual(
   actual: ArrayLike<unknown>,
   expected: unknown[],
-  message?: string
+  message?: string,
 ): void {
   assert.strictEqual(
     actual.length,
     expected.length,
-    message ? `${message}: length mismatch` : `length mismatch: ${actual.length} vs ${expected.length}`,
+    message
+      ? `${message}: length mismatch`
+      : `length mismatch: ${actual.length} vs ${expected.length}`,
   );
   for (let i = 0; i < expected.length; i++) {
     assert.strictEqual(
       actual[i],
       expected[i],
-      message ? `${message}: mismatch at index ${i}` : `mismatch at index ${i}`
+      message ? `${message}: mismatch at index ${i}` : `mismatch at index ${i}`,
     );
   }
 }
@@ -101,7 +104,7 @@ export type TcpConfig = {
 
 export function connectTcpClient(
   config: TcpConfig,
-  opts?: Omit<Parameters<typeof TcpClient.connect>[0], "host" | "port" | "user" | "password">
+  opts?: Omit<Parameters<typeof TcpClient.connect>[0], "host" | "port" | "user" | "password">,
 ) {
   return TcpClient.connect({
     host: config.host,
@@ -115,7 +118,7 @@ export function connectTcpClient(
 export async function collectQueryResults(
   client: TcpClient,
   sql: string,
-  options?: Parameters<TcpClient["query"]>[1]
+  options?: Parameters<TcpClient["query"]>[1],
 ): Promise<unknown[][]> {
   const allRows: unknown[][] = [];
   for await (const packet of client.query(sql, options)) {

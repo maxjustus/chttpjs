@@ -2,22 +2,23 @@
  * Deterministic integration matrix against real ClickHouse.
  * Focused on server-sensitive types rather than exhaustive fuzz coverage.
  */
-import { describe, it, before, after } from "node:test";
+
 import assert from "node:assert";
-import { init, insert, query, collectBytes } from "../../client.ts";
-import { type ColumnDef } from "../../native/index.ts";
+import { after, before, describe, it } from "node:test";
+import { collectBytes, init, insert, query } from "../../client.ts";
+import type { ColumnDef } from "../../native/index.ts";
 import { startClickHouse, stopClickHouse } from "../setup.ts";
-import { consume, encodeNativeRows, decodeBatch, toArrayRows } from "../test_utils.ts";
+import { consume, decodeBatch, encodeNativeRows, toArrayRows } from "../test_utils.ts";
 
 describe("Native integration type matrix", { timeout: 120000 }, () => {
   let baseUrl: string;
   let auth: { username: string; password: string };
-  const sessionId = "native_matrix_" + Date.now();
+  const sessionId = `native_matrix_${Date.now()}`;
 
   before(async () => {
     await init();
     const ch = await startClickHouse();
-    baseUrl = ch.url + "/";
+    baseUrl = `${ch.url}/`;
     auth = { username: ch.username, password: ch.password };
   });
 
@@ -28,7 +29,9 @@ describe("Native integration type matrix", { timeout: 120000 }, () => {
   it("round-trips a deterministic matrix of server-sensitive types", async () => {
     const table = "test_native_matrix";
     await consume(query(`DROP TABLE IF EXISTS ${table}`, sessionId, { baseUrl, auth }));
-    await consume(query(`
+    await consume(
+      query(
+        `
       CREATE TABLE ${table} (
         id UInt32,
         e Enum16('a' = 1, 'b' = 2),
@@ -42,7 +45,11 @@ describe("Native integration type matrix", { timeout: 120000 }, () => {
         v Variant(String, UInt64),
         p Point
       ) ENGINE = Memory
-    `, sessionId, { baseUrl, auth }));
+    `,
+        sessionId,
+        { baseUrl, auth },
+      ),
+    );
 
     try {
       const columns: ColumnDef[] = [
@@ -91,7 +98,9 @@ describe("Native integration type matrix", { timeout: 120000 }, () => {
       const encoded = encodeNativeRows(columns, rows);
       await insert(`INSERT INTO ${table} FORMAT Native`, encoded, sessionId, { baseUrl, auth });
 
-      const data = await collectBytes(query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }));
+      const data = await collectBytes(
+        query(`SELECT * FROM ${table} ORDER BY id FORMAT Native`, sessionId, { baseUrl, auth }),
+      );
       const decoded = await decodeBatch(data);
       const decodedRows = toArrayRows(decoded);
       const decoder = new TextDecoder();
@@ -119,7 +128,10 @@ describe("Native integration type matrix", { timeout: 120000 }, () => {
 
       const map0 = decodedRows[0][8] as Map<string, bigint>;
       const map1 = decodedRows[1][8] as Map<string, bigint>;
-      assert.deepStrictEqual(Array.from(map0), [["a", 1n], ["b", 2n]]);
+      assert.deepStrictEqual(Array.from(map0), [
+        ["a", 1n],
+        ["b", 2n],
+      ]);
       assert.deepStrictEqual(Array.from(map1), []);
 
       assert.deepStrictEqual(decodedRows[0][9], [0, "hello"]);

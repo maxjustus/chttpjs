@@ -1,5 +1,5 @@
-import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
+import { after, before, describe, it } from "node:test";
 import { TcpClient } from "../tcp_client/client.ts";
 import type { AccumulatedProgress } from "../tcp_client/types.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
@@ -143,7 +143,7 @@ describe("TCP progress accumulation", { timeout: 60000 }, () => {
 
       let lastProgress: AccumulatedProgress | null = null;
       let progressCount = 0;
-      let profileInfoCount = 0;
+      let _profileInfoCount = 0;
       let endOfStreamCount = 0;
 
       for await (const packet of client.insert(`INSERT INTO ${tableName} VALUES`, rows)) {
@@ -151,7 +151,7 @@ describe("TCP progress accumulation", { timeout: 60000 }, () => {
           lastProgress = packet.accumulated;
           progressCount++;
         } else if (packet.type === "ProfileInfo") {
-          profileInfoCount++;
+          _profileInfoCount++;
         } else if (packet.type === "EndOfStream") {
           endOfStreamCount++;
         }
@@ -163,8 +163,13 @@ describe("TCP progress accumulation", { timeout: 60000 }, () => {
       // Check that progress was received and writtenRows is populated
       if (progressCount > 0) {
         assert.ok(lastProgress, "Expected accumulated progress");
-        assert.ok(lastProgress.writtenRows > 0n, `Expected writtenRows > 0, got ${lastProgress.writtenRows}`);
-        console.log(`Insert progress: ${progressCount} packets, writtenRows=${lastProgress.writtenRows}`);
+        assert.ok(
+          lastProgress.writtenRows > 0n,
+          `Expected writtenRows > 0, got ${lastProgress.writtenRows}`,
+        );
+        console.log(
+          `Insert progress: ${progressCount} packets, writtenRows=${lastProgress.writtenRows}`,
+        );
       }
 
       // Verify rows were actually inserted

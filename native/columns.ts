@@ -1,14 +1,11 @@
-import { type TypedArray } from "./types.ts";
 import { Variant } from "./constants.ts";
+import type { TypedArray } from "./types.ts";
 
 export type DiscriminatorArray = Uint8Array | Uint16Array | Uint32Array;
 
 const MAX_SAFE_INDEX_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
-function assertOffsetsFitInJsNumber(
-  offsets: BigUint64Array,
-  context: string,
-): void {
+function assertOffsetsFitInJsNumber(offsets: BigUint64Array, context: string): void {
   if (offsets.length === 0) return;
   const last = offsets[offsets.length - 1];
   if (last > MAX_SAFE_INDEX_BIGINT) {
@@ -66,9 +63,7 @@ abstract class AbstractColumn implements Column {
   }
 }
 
-export class DataColumn<
-  T extends TypedArray | unknown[],
-> extends AbstractColumn {
+export class DataColumn<T extends TypedArray | unknown[]> extends AbstractColumn {
   readonly type: string;
   readonly data: T;
 
@@ -225,8 +220,7 @@ export class VariantColumn extends AbstractColumn {
     this.groups = groups;
     this.groupIndices =
       groupIndices ??
-      countAndIndexDiscriminators(discriminators, Variant.NULL_DISCRIMINATOR)
-        .indices;
+      countAndIndexDiscriminators(discriminators, Variant.NULL_DISCRIMINATOR).indices;
   }
 
   get length(): number {
@@ -236,7 +230,7 @@ export class VariantColumn extends AbstractColumn {
   get(index: number): [number, unknown] | null {
     const d = this.discriminators[index];
     if (d === Variant.NULL_DISCRIMINATOR) return null;
-    return [d, this.groups.get(d)!.get(this.groupIndices[index])];
+    return [d, this.groups.get(d)?.get(this.groupIndices[index])];
   }
 }
 
@@ -260,8 +254,7 @@ export class DynamicColumn extends AbstractColumn {
     this.groups = groups;
     this.nullDisc = types.length;
     this.groupIndices =
-      groupIndices ??
-      countAndIndexDiscriminators(discriminators, this.nullDisc).indices;
+      groupIndices ?? countAndIndexDiscriminators(discriminators, this.nullDisc).indices;
   }
 
   get length(): number {
@@ -271,21 +264,17 @@ export class DynamicColumn extends AbstractColumn {
   get(index: number): unknown {
     const d = this.discriminators[index];
     if (d === this.nullDisc) return null;
-    return this.groups.get(d)!.get(this.groupIndices[index]);
+    return this.groups.get(d)?.get(this.groupIndices[index]);
   }
 }
 
 export class JsonColumn extends AbstractColumn {
   readonly type: string = "JSON";
   readonly paths: string[];
-  readonly pathColumns: Map<string, Column>;  // Polymorphic: typed paths use their codecs
+  readonly pathColumns: Map<string, Column>; // Polymorphic: typed paths use their codecs
   private _length: number;
 
-  constructor(
-    paths: string[],
-    pathColumns: Map<string, Column>,
-    length: number,
-  ) {
+  constructor(paths: string[], pathColumns: Map<string, Column>, length: number) {
     super();
     this.paths = paths;
     this.pathColumns = pathColumns;
@@ -299,7 +288,7 @@ export class JsonColumn extends AbstractColumn {
   get(index: number): Record<string, unknown> {
     const obj: Record<string, unknown> = {};
     for (const path of this.paths) {
-      const val = this.pathColumns.get(path)!.get(index);
+      const val = this.pathColumns.get(path)?.get(index);
       if (val !== null) obj[path] = val;
     }
     return obj;
