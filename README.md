@@ -578,7 +578,7 @@ await client.insert("INSERT INTO t", batch);
 // Multiple batches
 await client.insert("INSERT INTO t", [batch1, batch2]);
 
-// Row objects with auto-coercion (types inferred from server schema; must include all columns, no extras)
+// Row objects with auto-coercion (types inferred from server schema; unknown keys ignored; omitted keys use defaults)
 await client.insert("INSERT INTO t", [
   { id: 1, name: "alice" },
   { id: 2, name: "bob" },

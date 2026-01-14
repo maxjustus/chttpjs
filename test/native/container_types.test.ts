@@ -237,6 +237,18 @@ describe("Variant", () => {
     assert.deepStrictEqual(decodedRows[2][0], [1, 123n]);
   });
 
+  it("treats Variant undefined as null", async () => {
+    const columns: ColumnDef[] = [{ name: "v", type: "Variant(String, UInt64)" }];
+    const rows = [[[0, "test"]], [undefined], [[1, 123n]]];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.deepStrictEqual(decodedRows[0][0], [0, "test"]);
+    assert.strictEqual(decodedRows[1][0], null);
+    assert.deepStrictEqual(decodedRows[2][0], [1, 123n]);
+  });
+
   it("encodes Variant with all nulls", async () => {
     const columns: ColumnDef[] = [{ name: "v", type: "Variant(String, Int32)" }];
     const rows = [[null], [null], [null]];
@@ -304,6 +316,18 @@ describe("Dynamic", () => {
   it("encodes Dynamic with nulls", async () => {
     const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
     const rows = [["test"], [null], [123]];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.strictEqual(decodedRows[0][0], "test");
+    assert.strictEqual(decodedRows[1][0], null);
+    assert.strictEqual(decodedRows[2][0], 123n); // Int64 decoded as bigint
+  });
+
+  it("treats Dynamic undefined as null", async () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Dynamic" }];
+    const rows = [["test"], [undefined], [123]];
     const encoded = encodeNativeRows(columns, rows);
     const decoded = await decodeBatch(encoded);
     const decodedRows = toArrayRows(decoded);

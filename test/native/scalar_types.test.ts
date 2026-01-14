@@ -144,6 +144,29 @@ describe("encodeNative", () => {
     assert.strictEqual(decodedRows[0][1], Math.PI);
   });
 
+  it("round-trips Float Infinity and NaN", async () => {
+    // Native format supports IEEE 754 special values (unlike JSON)
+    const columns: ColumnDef[] = [
+      { name: "f32", type: "Float32" },
+      { name: "f64", type: "Float64" },
+    ];
+    const rows = [
+      [Infinity, Infinity],
+      [-Infinity, -Infinity],
+      [NaN, NaN],
+    ];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.strictEqual(decodedRows[0][0], Infinity);
+    assert.strictEqual(decodedRows[0][1], Infinity);
+    assert.strictEqual(decodedRows[1][0], -Infinity);
+    assert.strictEqual(decodedRows[1][1], -Infinity);
+    assert.ok(Number.isNaN(decodedRows[2][0]), "Float32 NaN should round-trip");
+    assert.ok(Number.isNaN(decodedRows[2][1]), "Float64 NaN should round-trip");
+  });
+
   it("encodes String with unicode", async () => {
     const columns: ColumnDef[] = [{ name: "text", type: "String" }];
     const rows = [["hello"], ["世界"], ["🎉"], [""]];
@@ -152,6 +175,20 @@ describe("encodeNative", () => {
 
     assert.deepStrictEqual(decoded.columns, columns);
     assert.deepStrictEqual(toArrayRows(decoded), rows);
+  });
+
+  it("coerces arrays/objects to JSON strings for String", async () => {
+    const columns: ColumnDef[] = [{ name: "s", type: "String" }];
+    const rows = [[{ a: 1 }], [[1, 2, 3]], [new Map([["x", 1]])], [1n], [new Uint8Array([1, 2])]];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.strictEqual(decodedRows[0][0], '{"a":1}');
+    assert.strictEqual(decodedRows[1][0], "[1,2,3]");
+    assert.strictEqual(decodedRows[2][0], '{"x":1}');
+    assert.strictEqual(decodedRows[3][0], "1");
+    assert.strictEqual(decodedRows[4][0], "[1,2]");
   });
 
   it("encodes Nullable", async () => {
@@ -176,6 +213,47 @@ describe("encodeNative", () => {
     assert.deepStrictEqual([...(decodedRows[0][0] as Int32Array)], [1, 2, 3]);
     assert.deepStrictEqual([...(decodedRows[1][0] as Int32Array)], []);
     assert.deepStrictEqual([...(decodedRows[2][0] as Int32Array)], [42]);
+  });
+
+  it("treats null/undefined as defaults for container types", async () => {
+    const columns: ColumnDef[] = [
+      { name: "arr", type: "Array(Int32)" },
+      { name: "m", type: "Map(String, Int32)" },
+      { name: "t", type: "Tuple(Int32, String)" },
+      { name: "e", type: "Enum8('a' = 2, 'b' = 1)" },
+    ];
+    const rows = [
+      [null, null, null, null],
+      [undefined, undefined, undefined, undefined],
+      [[1, 2], { x: 1 }, [3, "z"], "b"],
+    ];
+
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded, { enumAsNumber: true });
+    const decodedRows = toArrayRows(decoded);
+
+    // Array defaults to empty array
+    assert.deepStrictEqual([...(decodedRows[0][0] as Int32Array)], []);
+    assert.deepStrictEqual([...(decodedRows[1][0] as Int32Array)], []);
+
+    // Map defaults to empty map
+    assert.strictEqual((decodedRows[0][1] as Map<unknown, unknown>).size, 0);
+    assert.strictEqual((decodedRows[1][1] as Map<unknown, unknown>).size, 0);
+
+    // Tuple defaults each element (Int32=0, String="")
+    assert.deepStrictEqual(decodedRows[0][2], [0, ""]);
+    assert.deepStrictEqual(decodedRows[1][2], [0, ""]);
+
+    // Enum defaults to minimum mapped value for both null and undefined.
+    // (ClickHouse Native protocol silently converts invalid values like 0 to min.)
+    assert.strictEqual(decodedRows[0][3], 1);
+    assert.strictEqual(decodedRows[1][3], 1);
+
+    // Non-default row still round-trips
+    assert.deepStrictEqual([...(decodedRows[2][0] as Int32Array)], [1, 2]);
+    assert.strictEqual((decodedRows[2][1] as Map<string, number>).get("x"), 1);
+    assert.deepStrictEqual(decodedRows[2][2], [3, "z"]);
+    assert.strictEqual(decodedRows[2][3], 1);
   });
 
   it("encodes Map", async () => {
@@ -386,6 +464,27 @@ describe("additional scalar types", () => {
     );
   });
 
+  it("coerces valid numeric strings to numbers", async () => {
+    const columns: ColumnDef[] = [
+      { name: "i32", type: "Int32" },
+      { name: "f64", type: "Float64" },
+    ];
+    const rows = [
+      ["123", "3.14"],
+      [" -456 ", " -2.5 "], // whitespace trimmed
+      ["0", "0.0"],
+    ];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+    assert.strictEqual(decodedRows[0][0], 123);
+    assert.strictEqual(decodedRows[0][1], 3.14);
+    assert.strictEqual(decodedRows[1][0], -456);
+    assert.strictEqual(decodedRows[1][1], -2.5);
+    assert.strictEqual(decodedRows[2][0], 0);
+    assert.strictEqual(decodedRows[2][1], 0.0);
+  });
+
   it("throws on invalid string coercion to bigint", () => {
     const columns: ColumnDef[] = [{ name: "n", type: "Int64" }];
     const rows = [["not-a-number"]];
@@ -548,6 +647,19 @@ describe("additional scalar types", () => {
     assert.deepStrictEqual(decodedRows, rows);
   });
 
+  it("coerces numbers to Decimal", async () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Decimal64(2)" }];
+    const rows = [[123.45], [-99.99], [0], [null]];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.strictEqual(decodedRows[0][0], "123.45");
+    assert.strictEqual(decodedRows[1][0], "-99.99");
+    assert.strictEqual(decodedRows[2][0], "0.00");
+    assert.strictEqual(decodedRows[3][0], "0.00"); // null → default
+  });
+
   it("throws on Decimal out of range", () => {
     assert.throws(
       () => encodeNativeRows([{ name: "d", type: "Decimal64(2)" }], [["9223372036854775807"]]),
@@ -667,10 +779,6 @@ describe("additional scalar types", () => {
       () => encodeNativeRows(columns, [["not-a-map"]]),
       /Expected Map, Array, or object.*got string/,
     );
-    assert.throws(
-      () => encodeNativeRows(columns, [[null]]),
-      /Expected Map, Array, or object.*got null/,
-    );
   });
 
   it("throws on invalid Tuple input", () => {
@@ -679,7 +787,6 @@ describe("additional scalar types", () => {
       () => encodeNativeRows(columns, [["not-a-tuple"]]),
       /Expected array for tuple.*got string/,
     );
-    assert.throws(() => encodeNativeRows(columns, [[null]]), /Expected tuple for.*got null/);
   });
 
   it("throws on invalid named Tuple input", () => {
@@ -688,6 +795,12 @@ describe("additional scalar types", () => {
       () => encodeNativeRows(columns, [["not-an-object"]]),
       /Expected object for named tuple.*got string/,
     );
+  });
+
+  it("throws on invalid Enum value", () => {
+    const columns: ColumnDef[] = [{ name: "e", type: "Enum8('a' = 1, 'b' = 2)" }];
+    assert.throws(() => encodeNativeRows(columns, [[128]]), /Enum value out of range/);
+    assert.throws(() => encodeNativeRows(columns, [[3]]), /Invalid enum value/);
   });
 
   it("throws on invalid Map array pairs", () => {
@@ -764,6 +877,8 @@ describe("additional scalar types", () => {
     assert.throws(() => encodeNativeRows(columns, [["yes"]]), /Cannot coerce string "yes" to Bool/);
     assert.throws(() => encodeNativeRows(columns, [["no"]]), /Cannot coerce string "no" to Bool/);
     assert.throws(() => encodeNativeRows(columns, [[{}]]), /Cannot coerce object to Bool/);
+    // Empty string is not a valid Bool (matches CH input_format_json_empty_as_default=false)
+    assert.throws(() => encodeNativeRows(columns, [[""]]), /Cannot coerce string "" to Bool/);
   });
 
   it("coerces Int128/UInt128 with toBigInt helper", async () => {

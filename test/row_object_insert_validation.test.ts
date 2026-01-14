@@ -16,28 +16,22 @@ describe("row object insert validation", () => {
     ]);
   });
 
-  it("throws on missing key", () => {
+  it("treats missing keys as omitted (undefined)", () => {
     const schema = [{ name: "a" }, { name: "b" }];
-    assert.throws(
-      () => transposeRowObjectsToColumns(schema, [{ a: 1 } as any]),
-      /missing required key "b"/,
-    );
+    const cols = transposeRowObjectsToColumns(schema, [{ a: 1 } as any]);
+    assert.deepStrictEqual(cols, [[1], [undefined]]);
   });
 
-  it("throws on undefined value", () => {
+  it("treats undefined values as omitted (undefined)", () => {
     const schema = [{ name: "a" }, { name: "b" }];
-    assert.throws(
-      () => transposeRowObjectsToColumns(schema, [{ a: 1, b: undefined }]),
-      /key "b" is undefined/,
-    );
+    const cols = transposeRowObjectsToColumns(schema, [{ a: 1, b: undefined }]);
+    assert.deepStrictEqual(cols, [[1], [undefined]]);
   });
 
-  it("throws on extra key", () => {
+  it("ignores extra keys", () => {
     const schema = [{ name: "a" }, { name: "b" }];
-    assert.throws(
-      () => transposeRowObjectsToColumns(schema, [{ a: 1, b: "x", c: 3 } as any]),
-      /unexpected key "c"/,
-    );
+    const cols = transposeRowObjectsToColumns(schema, [{ a: 1, b: "x", c: 3 } as any]);
+    assert.deepStrictEqual(cols, [[1], ["x"]]);
   });
 
   it("throws on non-object rows", () => {

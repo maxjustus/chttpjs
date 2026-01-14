@@ -143,11 +143,51 @@ function toNumber(v: unknown): number {
   if (typeof v === "boolean") return v ? 1 : 0;
   if (typeof v === "bigint") return Number(v);
   if (v == null) return 0;
+  if (typeof v === "string") {
+    const trimmed = v.trim();
+    if (trimmed.length === 0) {
+      throw new TypeError(`Cannot coerce string "${v}" to number`);
+    }
+    const n = Number(trimmed);
+    if (Number.isNaN(n)) {
+      throw new TypeError(`Cannot coerce string "${v}" to number`);
+    }
+    return n;
+  }
   const n = +(v as any);
   if (Number.isNaN(n)) {
     throw new TypeError(`Cannot coerce ${typeof v} "${v}" to number`);
   }
   return n;
+}
+
+function stringifyReplacer(_key: string, value: unknown): unknown {
+  if (typeof value === "bigint") return value.toString();
+  if (value instanceof Map) return Object.fromEntries(value);
+  if (value instanceof Set) return Array.from(value);
+  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+    return Array.from(value as unknown as ArrayLike<number>);
+  }
+  return value;
+}
+
+function coerceToString(v: unknown): string {
+  if (v == null) return "";
+  if (v instanceof Date) return v.toJSON();
+  if (v instanceof ClickHouseDateTime64) return v.toJSON();
+  switch (typeof v) {
+    case "string":
+    case "number":
+    case "boolean":
+    case "bigint":
+      return String(v);
+    case "object": {
+      const s = JSON.stringify(v, stringifyReplacer);
+      return typeof s === "string" ? s : "";
+    }
+    default:
+      return String(v);
+  }
 }
 
 function toBigInt(v: unknown): bigint {
@@ -237,7 +277,7 @@ function toBool(v: unknown): number {
   if (typeof v === "string") {
     const lower = v.toLowerCase();
     if (lower === "true" || lower === "1") return 1;
-    if (lower === "false" || lower === "0" || lower === "") return 0;
+    if (lower === "false" || lower === "0") return 0;
     throw new TypeError(`Cannot coerce string "${v}" to Bool`);
   }
   throw new TypeError(`Cannot coerce ${typeof v} to Bool`);
@@ -581,6 +621,7 @@ class EnumCodec extends BaseCodec {
   private mapping: EnumMapping;
   private min: number;
   private max: number;
+  private defaultValue: number;
 
   constructor(type: string) {
     super();
@@ -591,9 +632,19 @@ class EnumCodec extends BaseCodec {
     const parsed = parseEnumDefinition(type);
     if (!parsed) throw new Error(`Failed to parse enum definition: ${type}`);
     this.mapping = parsed;
+    // Default to minimum valid enum value. ClickHouse Native protocol silently
+    // converts invalid values (like 0 for enums that don't define it) to the
+    // minimum valid value, so we match that behavior for null/undefined.
+    let minValue: number | null = null;
+    for (const v of this.mapping.valueToName.keys()) {
+      if (minValue === null || v < minValue) minValue = v;
+    }
+    if (minValue === null) throw new Error(`Enum has no values: ${type}`);
+    this.defaultValue = minValue;
   }
 
   private toEnumValue(val: unknown): number {
+    if (val === undefined || val === null) return this.defaultValue;
     if (typeof val === "string") {
       const num = this.mapping.nameToValue.get(val);
       if (num === undefined) throw new Error(`Invalid enum value: ${val}`);
@@ -612,6 +663,7 @@ class EnumCodec extends BaseCodec {
 
     if (!Number.isInteger(num)) throw new Error(`Invalid enum value: ${val}`);
     if (num < this.min || num > this.max) throw new Error(`Enum value out of range: ${val}`);
+    if (!this.mapping.valueToName.has(num)) throw new Error(`Invalid enum value: ${val}`);
     return num;
   }
 
@@ -663,7 +715,7 @@ class EnumCodec extends BaseCodec {
   }
 
   zeroValue(): number {
-    return Math.min(...this.mapping.valueToName.keys());
+    return 0;
   }
 
   estimateSize(rows: number): number {
@@ -702,7 +754,7 @@ class StringCodec extends BaseCodec {
     const len = col.length;
     const writer = new BufferWriter(sizeHint ?? this.estimateSize(len));
     for (let i = 0; i < len; i++) {
-      writer.writeString(String(col.get(i) ?? ""));
+      writer.writeString(coerceToString(col.get(i)));
     }
     return writer.finish();
   }
@@ -718,7 +770,7 @@ class StringCodec extends BaseCodec {
   }
 
   builder(size: number): ColumnBuilder {
-    return SimpleArrayBuilder(this.type, size, (v) => String(v ?? ""));
+    return SimpleArrayBuilder(this.type, size, (v) => coerceToString(v));
   }
 
   zeroValue() {
@@ -1414,21 +1466,27 @@ class ArrayCodec extends BaseCodec {
   fromValues(values: unknown[]): ArrayColumn {
     const offsets = new BigUint64Array(values.length);
 
-    // Validate all values are arrays (regular or TypedArray)
+    // Compute per-row lengths and validate non-null values are arrays (regular or TypedArray)
+    const lengths = new Array<number>(values.length);
+    let totalCount = 0;
     for (let i = 0; i < values.length; i++) {
-      if (!isArrayLike(values[i])) {
-        throw new TypeError(`Expected array for ${this.type}, got ${typeof values[i]}`);
+      const v = values[i];
+      if (v == null) {
+        lengths[i] = 0;
+        continue;
       }
+      if (!isArrayLike(v)) {
+        throw new TypeError(`Expected array for ${this.type}, got ${typeof v}`);
+      }
+      const len = (v as ArrayLike<unknown>).length;
+      lengths[i] = len;
+      totalCount += len;
     }
 
     // Fast path for numeric inner types: build TypedArray directly
     // Use a type guard rather than casting to an internal codec class.
     if (isNumericLikeCodec(this.inner)) {
       const inner = this.inner;
-      let totalCount = 0;
-      for (let i = 0; i < values.length; i++) {
-        totalCount += (values[i] as ArrayLike<unknown>).length;
-      }
       const allInner = new inner.Ctor(totalCount);
       const convert = inner.converter;
       let offset = 0n;
@@ -1436,16 +1494,26 @@ class ArrayCodec extends BaseCodec {
       // `as never` needed: TS can't unify number|bigint with generic TypedArray element types
       if (convert) {
         for (let i = 0; i < values.length; i++) {
-          const arr = values[i] as ArrayLike<unknown>;
+          const v = values[i];
+          if (v == null) {
+            offsets[i] = offset;
+            continue;
+          }
+          const arr = v as ArrayLike<unknown>;
           for (let j = 0; j < arr.length; j++) allInner[idx++] = convert(arr[j]) as never;
-          offset += BigInt(arr.length);
+          offset += BigInt(lengths[i]);
           offsets[i] = offset;
         }
       } else {
         for (let i = 0; i < values.length; i++) {
-          const arr = values[i] as ArrayLike<number | bigint>;
+          const v = values[i];
+          if (v == null) {
+            offsets[i] = offset;
+            continue;
+          }
+          const arr = v as ArrayLike<number | bigint>;
           for (let j = 0; j < arr.length; j++) allInner[idx++] = arr[j] as never;
-          offset += BigInt(arr.length);
+          offset += BigInt(lengths[i]);
           offsets[i] = offset;
         }
       }
@@ -1456,8 +1524,16 @@ class ArrayCodec extends BaseCodec {
     const allInner: unknown[] = [];
     let offset = 0n;
     for (let i = 0; i < values.length; i++) {
-      const arr = values[i] as unknown[];
-      for (const v of arr) allInner.push(v);
+      const v = values[i];
+      if (v == null) {
+        offsets[i] = offset;
+        continue;
+      }
+      if (!isArrayLike(v)) {
+        throw new TypeError(`Expected array for ${this.type}, got ${typeof v}`);
+      }
+      const arr = v as ArrayLike<unknown> & Iterable<unknown>;
+      for (const item of arr) allInner.push(item);
       offset += BigInt(arr.length);
       offsets[i] = offset;
     }
@@ -1472,6 +1548,10 @@ class ArrayCodec extends BaseCodec {
     let rowIdx = 0;
     const builder: ColumnBuilder = {
       append: (v: unknown) => {
+        if (v == null) {
+          offsets[rowIdx++] = offset;
+          return builder;
+        }
         if (!isArrayLike(v)) {
           throw new TypeError(`Expected array for ${type}, got ${typeof v}`);
         }
@@ -1803,6 +1883,10 @@ class MapCodec extends BaseCodec {
     let offset = 0n;
     for (let i = 0; i < values.length; i++) {
       const m = values[i];
+      if (m == null) {
+        offsets[i] = offset;
+        continue;
+      }
       if (m instanceof Map) {
         for (const [k, v] of m) {
           keys.push(k);
@@ -1852,6 +1936,10 @@ class MapCodec extends BaseCodec {
     let rowIdx = 0;
     const builder: ColumnBuilder = {
       append: (m: any) => {
+        if (m == null) {
+          offsets[rowIdx++] = offset;
+          return builder;
+        }
         if (m instanceof Map) {
           for (const [k, v] of m) {
             keys.push(k);
@@ -1962,9 +2050,7 @@ class TupleCodec extends BaseCodec {
     // Validate all values have the expected shape
     for (let i = 0; i < values.length; i++) {
       const tuple = values[i];
-      if (tuple == null) {
-        throw new TypeError(`Expected tuple for ${this.type}, got ${tuple}`);
-      }
+      if (tuple == null) continue;
       if (this.isNamed && typeof tuple !== "object") {
         throw new TypeError(`Expected object for named tuple ${this.type}, got ${typeof tuple}`);
       }
@@ -1979,7 +2065,7 @@ class TupleCodec extends BaseCodec {
       const elemValues: unknown[] = new Array(values.length);
       for (let i = 0; i < values.length; i++) {
         const tuple = values[i] as any;
-        elemValues[i] = this.isNamed ? tuple[elem.name!] : tuple[ei];
+        elemValues[i] = tuple == null ? undefined : this.isNamed ? tuple[elem.name!] : tuple[ei];
       }
       columns.push(elem.codec.fromValues(elemValues));
     }
@@ -1997,7 +2083,8 @@ class TupleCodec extends BaseCodec {
     const builder: ColumnBuilder = {
       append: (tuple: any) => {
         if (tuple == null) {
-          throw new TypeError(`Expected tuple for ${type}, got ${tuple}`);
+          for (let i = 0; i < this.elements.length; i++) builders[i].append(undefined);
+          return builder;
         }
         if (this.isNamed && typeof tuple !== "object") {
           throw new TypeError(`Expected object for named tuple ${type}, got ${typeof tuple}`);
@@ -2096,7 +2183,7 @@ class VariantCodec implements Codec {
 
     for (let i = 0; i < values.length; i++) {
       const v = values[i];
-      if (v === null) {
+      if (v == null) {
         discriminators[i] = Variant.NULL_DISCRIMINATOR;
       } else if (Array.isArray(v) && v.length === 2 && typeof v[0] === "number") {
         const disc = v[0] as number;
@@ -2138,7 +2225,7 @@ class VariantCodec implements Codec {
 
     for (let i = 0; i < values.length; i++) {
       const v = values[i];
-      if (v === null) {
+      if (v == null) {
         discriminators[i] = Variant.NULL_DISCRIMINATOR;
       } else if (Array.isArray(v) && v.length === 2 && typeof v[0] === "number") {
         const disc = v[0] as number;
@@ -2292,7 +2379,7 @@ class DynamicCodec implements Codec {
     const typeMap = new Map<string, unknown[]>();
     const typeOrder: string[] = [];
     for (const v of values) {
-      if (v !== null) {
+      if (v != null) {
         const vType = this.guessType(v);
         if (!typeMap.has(vType)) {
           typeMap.set(vType, []);
@@ -2306,7 +2393,7 @@ class DynamicCodec implements Codec {
     const discriminators = new Uint8Array(values.length);
     for (let i = 0; i < values.length; i++) {
       const v = values[i];
-      discriminators[i] = v === null ? nullDisc : typeOrder.indexOf(this.guessType(v));
+      discriminators[i] = v == null ? nullDisc : typeOrder.indexOf(this.guessType(v));
     }
 
     const groups = new Map<number, Column>();
