@@ -16,6 +16,9 @@ fuzz: build
 fuzz-tcp: build
 	npm run test:tcp-fuzz
 
+format:
+	npm run format
+
 bench:
 	npm run bench
 
