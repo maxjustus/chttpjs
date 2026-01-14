@@ -647,6 +647,19 @@ describe("additional scalar types", () => {
     assert.deepStrictEqual(decodedRows, rows);
   });
 
+  it("coerces numbers to Decimal", async () => {
+    const columns: ColumnDef[] = [{ name: "d", type: "Decimal64(2)" }];
+    const rows = [[123.45], [-99.99], [0], [null]];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+
+    assert.strictEqual(decodedRows[0][0], "123.45");
+    assert.strictEqual(decodedRows[1][0], "-99.99");
+    assert.strictEqual(decodedRows[2][0], "0.00");
+    assert.strictEqual(decodedRows[3][0], "0.00"); // null → default
+  });
+
   it("throws on Decimal out of range", () => {
     assert.throws(
       () => encodeNativeRows([{ name: "d", type: "Decimal64(2)" }], [["9223372036854775807"]]),
