@@ -531,7 +531,8 @@ class NumericCodec<T extends TypedArray> extends BaseCodec {
     }
     const arr = new this.Ctor(values.length);
     if (this.converter) {
-      for (let i = 0; i < values.length; i++) arr[i] = this.converter((values as unknown[])[i]) as any;
+      for (let i = 0; i < values.length; i++)
+        arr[i] = this.converter((values as unknown[])[i]) as any;
     } else {
       for (let i = 0; i < values.length; i++) arr[i] = (values as unknown[])[i] as any;
     }

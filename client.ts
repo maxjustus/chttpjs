@@ -95,9 +95,7 @@ function isHttpExternalTable(v: unknown): v is HttpExternalTable {
  * For iterables: collects and encodes all batches.
  * For async iterables: buffers first batch for schema, returns streaming encoder.
  */
-async function normalizeExternalTable(
-  input: HttpExternalTableInput,
-): Promise<HttpExternalTable> {
+async function normalizeExternalTable(input: HttpExternalTableInput): Promise<HttpExternalTable> {
   // Already an HttpExternalTable
   if (isHttpExternalTable(input)) {
     return input;
@@ -160,7 +158,9 @@ async function normalizeExternalTables(
   tables: Record<string, HttpExternalTableInput>,
 ): Promise<Record<string, HttpExternalTable>> {
   const entries = await Promise.all(
-    Object.entries(tables).map(async ([name, input]) => [name, await normalizeExternalTable(input)] as const),
+    Object.entries(tables).map(
+      async ([name, input]) => [name, await normalizeExternalTable(input)] as const,
+    ),
   );
   return Object.fromEntries(entries);
 }

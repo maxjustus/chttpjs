@@ -211,26 +211,17 @@ describe("RecordBatch static methods", () => {
   });
 
   it("fromRows throws on overflow and invalid values", () => {
-    assert.throws(
-      () => batchFromRows([{ name: "x", type: "Int8" }], [[128]]),
-      /Int8 out of range/,
-    );
+    assert.throws(() => batchFromRows([{ name: "x", type: "Int8" }], [[128]]), /Int8 out of range/);
     assert.throws(
       () => batchFromRows([{ name: "x", type: "UInt8" }], [[-1]]),
       /UInt8 out of range/,
     );
-    assert.throws(
-      () => batchFromRows([{ name: "x", type: "Int32" }], [[1.5]]),
-      /expected integer/,
-    );
+    assert.throws(() => batchFromRows([{ name: "x", type: "Int32" }], [[1.5]]), /expected integer/);
     assert.throws(
       () => batchFromRows([{ name: "x", type: "UInt64" }], [[-1n]]),
       /UInt64 out of range/,
     );
-    assert.throws(
-      () => batchFromRows([{ name: "x", type: "Int32" }], [["abc"]]),
-      /Cannot coerce/,
-    );
+    assert.throws(() => batchFromRows([{ name: "x", type: "Int32" }], [["abc"]]), /Cannot coerce/);
   });
 });
 
@@ -405,7 +396,12 @@ describe("Complex types via fromCols", () => {
 
   it("Variant(String, Int64, Bool) - explicit discriminators", async () => {
     const table = batchFromCols({
-      val: getCodec("Variant(String, Int64, Bool)").fromValues([[0, "hello"], [1, 42n], [2, true], null]),
+      val: getCodec("Variant(String, Int64, Bool)").fromValues([
+        [0, "hello"],
+        [1, 42n],
+        [2, true],
+        null,
+      ]),
     });
     assert.deepStrictEqual(table.getColumn("val")?.get(0), [0, "hello"]);
     assert.deepStrictEqual(table.getColumn("val")?.get(1), [1, 42n]);

@@ -98,9 +98,13 @@ describe("TCP external tables", { timeout: 120000 }, () => {
   it("handles multiple batches for single external table (sync iterable)", async () => {
     const client = await connectTcpClient(chConfig);
     try {
-      const batch1 = batchFromCols({ n: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])) });
+      const batch1 = batchFromCols({
+        n: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])),
+      });
       const batch2 = batchFromCols({ n: getCodec("UInt32").fromValues(new Uint32Array([4, 5])) });
-      const batch3 = batchFromCols({ n: getCodec("UInt32").fromValues(new Uint32Array([6, 7, 8, 9, 10])) });
+      const batch3 = batchFromCols({
+        n: getCodec("UInt32").fromValues(new Uint32Array([6, 7, 8, 9, 10])),
+      });
 
       const rows = await collectQueryResults(
         client,

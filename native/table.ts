@@ -18,7 +18,10 @@ import type { ColumnDef, TypedArray } from "./types.ts";
 type NumericConverter = (v: unknown) => number | bigint;
 
 /** Map of numeric ClickHouse types to their TypedArray constructors and converters. */
-const NUMERIC_TYPES: Record<string, { ctor: TypedArrayConstructor<any>; convert: NumericConverter }> = {
+const NUMERIC_TYPES: Record<
+  string,
+  { ctor: TypedArrayConstructor<any>; convert: NumericConverter }
+> = {
   Int8: { ctor: Int8Array, convert: toInt8 },
   Int16: { ctor: Int16Array, convert: toInt16 },
   Int32: { ctor: Int32Array, convert: toInt32 },
@@ -31,7 +34,9 @@ const NUMERIC_TYPES: Record<string, { ctor: TypedArrayConstructor<any>; convert:
   Float64: { ctor: Float64Array, convert: toNumber },
 };
 
-function getNumericTypeInfo(type: string): { ctor: TypedArrayConstructor<any>; convert: NumericConverter } | undefined {
+function getNumericTypeInfo(
+  type: string,
+): { ctor: TypedArrayConstructor<any>; convert: NumericConverter } | undefined {
   return NUMERIC_TYPES[type];
 }
 

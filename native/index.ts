@@ -45,7 +45,13 @@ export { getCodec } from "./codecs.ts";
 // Re-export constants needed by tcp_client
 export { BlockInfoField, Compression } from "./constants.ts";
 // Re-export IO utilities needed by tcp_client
-export { BufferReader, BufferUnderflowError, BufferWriter, readVarInt64, StreamBuffer } from "./io.ts";
+export {
+  BufferReader,
+  BufferUnderflowError,
+  BufferWriter,
+  readVarInt64,
+  StreamBuffer,
+} from "./io.ts";
 
 export interface Block {
   columns: ColumnDef[];
