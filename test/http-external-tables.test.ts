@@ -5,6 +5,7 @@
 import assert from "node:assert";
 import { after, before, describe, it } from "node:test";
 import { collectText, init, query } from "../client.ts";
+import { batchFromCols, getCodec } from "../native/index.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 import { generateSessionId } from "./test_utils.ts";
 
@@ -241,5 +242,69 @@ describe("HTTP external tables", { timeout: 120000 }, () => {
     assert.strictEqual(rows.length, 3);
     assert.strictEqual(rows[0].name, "Alice");
     assert.strictEqual(rows[2].name, "Charlie");
+  });
+
+  // Unified API tests - pass RecordBatch directly (same as TCP)
+
+  it("queries with RecordBatch directly (unified API)", async () => {
+    const batch = batchFromCols({
+      id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])),
+      name: getCodec("String").fromValues(["Alice", "Bob", "Charlie"]),
+    });
+
+    const result = await collectText(
+      query("SELECT * FROM mydata ORDER BY id FORMAT JSONEachRow", sessionId, {
+        baseUrl,
+        auth,
+        externalTables: { mydata: batch },
+      }),
+    );
+
+    const rows = result
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.strictEqual(rows.length, 3);
+    assert.strictEqual(rows[0].id, 1);
+    assert.strictEqual(rows[0].name, "Alice");
+    assert.strictEqual(rows[2].id, 3);
+    assert.strictEqual(rows[2].name, "Charlie");
+  });
+
+  it("queries with sync iterable of RecordBatch (unified API)", async () => {
+    const batches = [
+      batchFromCols({ val: getCodec("UInt32").fromValues(new Uint32Array([1, 2])) }),
+      batchFromCols({ val: getCodec("UInt32").fromValues(new Uint32Array([3, 4])) }),
+    ];
+
+    const result = await collectText(
+      query("SELECT sum(val) as total FROM vals FORMAT JSONEachRow", sessionId, {
+        baseUrl,
+        auth,
+        externalTables: { vals: batches },
+      }),
+    );
+
+    const row = JSON.parse(result.trim());
+    assert.strictEqual(row.total, 10); // 1+2+3+4
+  });
+
+  it("queries with async iterable of RecordBatch (unified API)", async () => {
+    async function* generateBatches() {
+      yield batchFromCols({ n: getCodec("UInt32").fromValues(new Uint32Array([10])) });
+      yield batchFromCols({ n: getCodec("UInt32").fromValues(new Uint32Array([20])) });
+      yield batchFromCols({ n: getCodec("UInt32").fromValues(new Uint32Array([30])) });
+    }
+
+    const result = await collectText(
+      query("SELECT sum(n) as total FROM nums FORMAT JSONEachRow", sessionId, {
+        baseUrl,
+        auth,
+        externalTables: { nums: generateBatches() },
+      }),
+    );
+
+    const row = JSON.parse(result.trim());
+    assert.strictEqual(row.total, 60); // 10+20+30
   });
 });

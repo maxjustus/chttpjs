@@ -16,11 +16,13 @@ export {
   collectRows,
   type DecodeResult,
   encodeNative,
+  type ExternalTableData,
   RecordBatch,
   rows,
   streamDecodeNative,
   streamEncodeNative,
 } from "@maxjustus/chttp/native";
+import { encodeNative, type ExternalTableData, RecordBatch } from "@maxjustus/chttp/native";
 import { StreamBuffer } from "./native/io.ts";
 import { type CollectableAsyncGenerator, collectable } from "./util.ts";
 
@@ -75,6 +77,92 @@ function concatBytes(arrays: Uint8Array[]): Uint8Array {
     offset += arr.length;
   }
   return result;
+}
+
+/** Convert RecordBatch schema to ClickHouse structure string. */
+function schemaToStructure(batch: RecordBatch): string {
+  return batch.schema.map((c) => `${c.name} ${c.type}`).join(", ");
+}
+
+/** Check if value is an HttpExternalTable (has structure and data fields). */
+function isHttpExternalTable(v: unknown): v is HttpExternalTable {
+  return v !== null && typeof v === "object" && "structure" in v && "data" in v;
+}
+
+/**
+ * Normalize HttpExternalTableInput to HttpExternalTable.
+ * For RecordBatch: encodes to Native format, extracts schema.
+ * For iterables: collects and encodes all batches.
+ * For async iterables: buffers first batch for schema, returns streaming encoder.
+ */
+async function normalizeExternalTable(
+  input: HttpExternalTableInput,
+): Promise<HttpExternalTable> {
+  // Already an HttpExternalTable
+  if (isHttpExternalTable(input)) {
+    return input;
+  }
+
+  // Single RecordBatch
+  if (input instanceof RecordBatch) {
+    return {
+      structure: schemaToStructure(input),
+      format: "Native",
+      data: encodeNative(input),
+    };
+  }
+
+  // AsyncIterable<RecordBatch>
+  if (Symbol.asyncIterator in input) {
+    const iter = (input as AsyncIterable<RecordBatch>)[Symbol.asyncIterator]();
+    const first = await iter.next();
+    if (first.done) {
+      throw new Error("Empty async iterable for external table");
+    }
+    const firstBatch = first.value;
+    const structure = schemaToStructure(firstBatch);
+
+    // Create async iterable that yields encoded batches
+    const streamingData: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]: () => {
+        let sentFirst = false;
+        return {
+          async next() {
+            if (!sentFirst) {
+              sentFirst = true;
+              return { done: false, value: encodeNative(firstBatch) };
+            }
+            const result = await iter.next();
+            if (result.done) {
+              return { done: true, value: undefined };
+            }
+            return { done: false, value: encodeNative(result.value) };
+          },
+        };
+      },
+    };
+
+    return { structure, format: "Native", data: streamingData };
+  }
+
+  // Sync Iterable<RecordBatch>
+  const batches = [...(input as Iterable<RecordBatch>)];
+  if (batches.length === 0) {
+    throw new Error("Empty iterable for external table");
+  }
+  const structure = schemaToStructure(batches[0]);
+  const encoded = batches.map((b) => encodeNative(b));
+  return { structure, format: "Native", data: concatBytes(encoded) };
+}
+
+/** Normalize all external tables in a record. */
+async function normalizeExternalTables(
+  tables: Record<string, HttpExternalTableInput>,
+): Promise<Record<string, HttpExternalTable>> {
+  const entries = await Promise.all(
+    Object.entries(tables).map(async ([name, input]) => [name, await normalizeExternalTable(input)] as const),
+  );
+  return Object.fromEntries(entries);
 }
 
 function readUInt32LE(arr: Uint8Array, offset: number): number {
@@ -405,6 +493,12 @@ export interface HttpExternalTable {
   data: HttpExternalTableData;
 }
 
+/**
+ * Input for HTTP external tables.
+ * Accepts RecordBatch (schema auto-extracted), iterables of RecordBatch, or explicit HttpExternalTable.
+ */
+export type HttpExternalTableInput = ExternalTableData | HttpExternalTable;
+
 export interface QueryOptions {
   baseUrl?: string;
   auth?: AuthConfig;
@@ -427,8 +521,8 @@ export interface QueryOptions {
   settings?: ClickHouseSettings;
   /** Query parameters for parameterized queries like SELECT {x:UInt64} */
   params?: QueryParams;
-  /** External tables to send with the query */
-  externalTables?: Record<string, HttpExternalTable>;
+  /** External tables to send with the query (RecordBatch, iterables, or HttpExternalTable) */
+  externalTables?: Record<string, HttpExternalTableInput>;
   /** Custom query ID for tracking in system.query_log and KILL QUERY */
   queryId?: string;
 }
@@ -590,12 +684,14 @@ async function* queryImpl(
     }
   }
 
-  // Handle external tables: query goes in URL, body is multipart
+  // Handle external tables: normalize inputs, query goes in URL, body is multipart
   const hasExternalTables =
     options.externalTables && Object.keys(options.externalTables).length > 0;
+  let normalizedTables: Record<string, HttpExternalTable> | undefined;
   if (hasExternalTables) {
+    normalizedTables = await normalizeExternalTables(options.externalTables!);
     params.query = sql;
-    for (const [name, table] of Object.entries(options.externalTables!)) {
+    for (const [name, table] of Object.entries(normalizedTables)) {
       params[`${name}_structure`] = table.structure;
       if (table.format) {
         params[`${name}_format`] = table.format;
@@ -612,7 +708,7 @@ async function* queryImpl(
 
   let response: Response;
   if (hasExternalTables) {
-    const { body, boundary } = buildMultipartBody(options.externalTables!);
+    const { body, boundary } = buildMultipartBody(normalizedTables!);
     headers["Content-Type"] = `multipart/form-data; boundary=${boundary}`;
 
     // Need duplex: "half" for streaming body

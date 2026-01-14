@@ -18,7 +18,14 @@ import {
   type DeserializerState,
   type SerializationNode,
 } from "./serialization.ts";
-import { batchFromCols, batchFromRows, type MaterializeOptions, RecordBatch, type Row } from "./table.ts";
+import {
+  batchFromCols,
+  batchFromRows,
+  type ExternalTableData,
+  type MaterializeOptions,
+  RecordBatch,
+  type Row,
+} from "./table.ts";
 import { type ColumnDef, type DecodeOptions, parseTupleElements, parseTypeList } from "./types.ts";
 
 // Re-export types for public API
@@ -32,7 +39,7 @@ export {
 
 // Re-export table helpers / types
 export { type Column, RecordBatch, type Row, type MaterializeOptions, EnumColumn };
-export { batchFromRows, batchFromCols };
+export { batchFromRows, batchFromCols, type ExternalTableData };
 export { rows, collectRows };
 export { getCodec } from "./codecs.ts";
 // Re-export constants needed by tcp_client

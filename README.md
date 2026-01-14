@@ -1,6 +1,6 @@
 # chttp
 
-ClickHouse HTTP client with native compression (LZ4/ZSTD).
+ClickHouse HTTP/TCP client with native compression (LZ4/ZSTD) and Native format support.
 
 ## Install
 
@@ -8,7 +8,20 @@ ClickHouse HTTP client with native compression (LZ4/ZSTD).
 npm install @maxjustus/chttp
 ```
 
+## HTTP vs TCP
+
+| Feature | HTTP | TCP |
+|---------|------|-----|
+| Browser support | Yes | No (Node.js only) |
+| Streaming progress | Limited | Real-time |
+| Latency | Higher | Lower |
+| Connection | Stateless | Persistent |
+
+Use **HTTP** for browser apps or simple server scripts. Use **TCP** for high-throughput pipelines, real-time progress tracking, or lower latency.
+
 ## Quick Start
+
+### HTTP Client
 
 ```ts
 import { insert, query, streamEncodeJsonEachRow, collectText } from "@maxjustus/chttp";
@@ -18,51 +31,49 @@ const config = {
   auth: { username: "default", password: "" },
 };
 
-// Insert - returns { summary, queryId } (HTTP is request/response, no streaming progress)
+// Insert
 const { summary } = await insert(
   "INSERT INTO table FORMAT JSONEachRow",
   streamEncodeJsonEachRow([{ id: 1, name: "test" }]),
   "session123",
-  config, // compression defaults to "lz4"
+  config,
 );
 console.log(`Wrote ${summary.written_rows} rows`);
 
-// Insert raw bytes (any format)
-const encoder = new TextEncoder();
-const csvData = encoder.encode("1,test\n2,other\n");
-await insert("INSERT INTO table FORMAT CSV", csvData, "session123", config);
-
-// Query - yields packets: Progress, Data, Summary (mirrors TCP client API)
-// Helper functions filter for Data packets automatically:
+// Query
 const json = await collectText(query("SELECT * FROM table FORMAT JSON", "session123", config));
 
-// Or iterate packets directly for progress/summary access:
-for await (const packet of query("SELECT * FROM table FORMAT JSON", "session123", config)) {
-  switch (packet.type) {
-    case "Progress":
-      console.log(`Progress: ${packet.progress.read_rows} rows`);
-      break;
-    case "Data":
-      processChunk(packet.chunk);
-      break;
-    case "Summary":
-      console.log(`Done: ${packet.summary.read_rows} rows in ${packet.summary.elapsed_ns}ns`);
-      break;
+// DDL
+for await (const _ of query("CREATE TABLE ...", "session123", config)) {}
+```
+
+### TCP Client
+
+```ts
+import { TcpClient } from "@maxjustus/chttp/tcp";
+
+const client = new TcpClient({ host: "localhost", port: 9000 });
+await client.connect();
+
+// Query
+for await (const packet of client.query("SELECT * FROM table")) {
+  if (packet.type === "Data") {
+    for (const row of packet.batch) console.log(row.id, row.name);
   }
 }
 
-// DDL statements
-for await (const _ of query("CREATE TABLE ...", "session123", config)) {}
+// Insert
+await client.insert("INSERT INTO table", [{ id: 1, name: "alice" }]);
+
+client.close();
 ```
 
 ## Query Parameters
 
-Use ClickHouse's native query parameters to safely inject values:
+Both HTTP and TCP clients use ClickHouse's native query parameters with identical `{name: Type}` syntax:
 
 ```ts
-import { query, collectText } from "@maxjustus/chttp";
-
-// Single parameter
+// HTTP
 const result = await collectText(
   query("SELECT {id: UInt64} as id, {name: String} as name FORMAT JSON", sessionId, {
     ...config,
@@ -70,22 +81,11 @@ const result = await collectText(
   }),
 );
 
-// Multiple parameters with different types
-const filtered = await collectText(
-  query(
-    "SELECT * FROM users WHERE age > {min_age: UInt32} AND status = {status: String} FORMAT JSON",
-    sessionId,
-    { ...config, params: { min_age: 18, status: "active" } },
-  ),
-);
-
-// BigInt for large integers
-const big = await collectText(
-  query("SELECT {value: UInt64} FORMAT JSON", sessionId, {
-    ...config,
-    params: { value: 9007199254740993n },
-  }),
-);
+// TCP (same syntax)
+for await (const packet of client.query(
+  "SELECT * FROM users WHERE age > {min_age: UInt32}",
+  { params: { min_age: 18 } }
+)) { /* ... */ }
 ```
 
 Parameters are type-safe and prevent SQL injection. The type annotation (e.g., `{name: String}`) tells ClickHouse how to parse the value.
@@ -348,33 +348,17 @@ Supports all ClickHouse types including integers (Int8-Int256, UInt8-UInt256), f
 
 **Limitation**: `Dynamic` and `JSON` types require V3 flattened format. On ClickHouse 25.6+, set `output_format_native_use_flattened_dynamic_and_json_serialization=1`.
 
-### BigInt
+### BigInt Handling
 
-ClickHouse integer types (Int64, UInt64, Int128, etc.) are returned as JavaScript BigInt values via the Native format to preserve full precision.
-By default, `JSON.stringify()` throws when trying to serialize BigInts.
-Add this code so it runs once at startup to enable serialization of BigInts to strings as a global default (matching ClickHouse's default behavior for JSON encoding):
-
-```typescript
-BigInt.prototype.toJSON = function() { return this.toString(); };
-```
-
-as awful as it might seem to monkeypatch built-ins this is actually a "blessed"/suggested approach:
-https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt#use_within_json
-
-Alternatively you can pass `{ bigIntAsString: true }` to convert bigints to strings when materializing rows:
+ClickHouse 64-bit+ integers (Int64, UInt64, Int128, etc.) are returned as JavaScript BigInt. Pass `{ bigIntAsString: true }` to convert to strings for JSON serialization:
 
 ```ts
-// On row access
 const row = batch.get(0, { bigIntAsString: true });
-console.log(row.largeId); // "9223372036854775807" (string)
-
-// On toObject/toArray
 const obj = row.toObject({ bigIntAsString: true });
-const arr = row.toArray({ bigIntAsString: true });
-
-// On batch materialization
 const allRows = batch.toArray({ bigIntAsString: true });
 ```
+
+> **Global alternative**: Add `BigInt.prototype.toJSON = function() { return this.toString(); };` at startup. See [MDN](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt#use_within_json).
 
 ## TCP Client (Experimental)
 
@@ -425,38 +409,6 @@ const client = new TcpClient({
   queryTimeout: 30000, // ms
   tls: true, // or tls.ConnectionOptions
 });
-```
-
-### Query Parameters
-
-Use parameterized queries to safely inject values:
-
-```ts
-// UInt64 parameter
-for await (const packet of client.query(
-  "SELECT {value: UInt64} as v",
-  { params: { value: 42 } }
-)) {
-  if (packet.type === "Data") {
-    console.log(packet.batch.getColumn("v")?.get(0)); // 42n
-  }
-}
-
-// String parameter
-for await (const packet of client.query(
-  "SELECT {name: String} as s",
-  { params: { name: "hello world" } }
-)) {
-  // ...
-}
-
-// Multiple parameters
-for await (const packet of client.query(
-  "SELECT * FROM users WHERE age > {min_age: UInt32} AND status = {status: String}",
-  { params: { min_age: 18, status: "active" } }
-)) {
-  // ...
-}
 ```
 
 ### Streaming Results
@@ -624,64 +576,60 @@ await using client = await TcpClient.connect(options);
 // automatically closed when scope exits
 ```
 
-### External Tables (TCP)
+## External Tables
 
-Send data as temporary in-memory tables available during query execution:
+Send temporary in-memory tables with your query. Both HTTP and TCP support passing RecordBatches directly with automatic schema extraction.
+
+### Unified API (RecordBatch)
+
+Pass RecordBatches directly to either client. Schema is auto-extracted from the batch.
 
 ```ts
-import { batchFromCols, getCodec } from "@maxjustus/chttp";
+import { batchFromCols, getCodec, query, collectText } from "@maxjustus/chttp";
 
 const users = batchFromCols({
   id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])),
   name: getCodec("String").fromValues(["Alice", "Bob", "Charlie"]),
 });
 
+// TCP
 for await (const packet of client.query(
   "SELECT * FROM users WHERE id > 1",
   { externalTables: { users } }
 )) {
   if (packet.type === "Data") {
-    for (const row of packet.batch) {
-      console.log(row.name);
-    }
+    for (const row of packet.batch) console.log(row.name);
   }
 }
 
-// Multiple tables for JOINs
-const orders = batchFromCols({
-  user_id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 1])),
-  amount: getCodec("Float64").fromValues(new Float64Array([10.5, 20.0, 15.5])),
-});
-
-client.query(
-  "SELECT u.name, sum(o.amount) FROM users u JOIN orders o ON u.id = o.user_id GROUP BY u.name",
-  { externalTables: { users, orders } }
-);
-
-// Stream large external tables with async generators
-async function* generateBatches() {
-  for (let i = 0; i < 100; i++) {
-    yield batchFromCols({
-      id: getCodec("UInt32").fromValues(new Uint32Array([i])),
-    });
-  }
-}
-client.query("SELECT count() FROM data", { externalTables: { data: generateBatches() } });
+// HTTP - same API
+const result = await collectText(query(
+  "SELECT * FROM users WHERE id > 1 FORMAT JSON",
+  sessionId,
+  { baseUrl, auth, externalTables: { users } }
+));
 ```
 
-## External Tables (HTTP)
-
-Send temporary tables via multipart/form-data. Schema must be specified explicitly.
+Supports streaming via iterables/async iterables of RecordBatch:
 
 ```ts
-import { query, collectText, encodeNative, batchFromCols, getCodec } from "@maxjustus/chttp";
+async function* generateBatches() {
+  for (let i = 0; i < 10; i++) {
+    yield batchFromCols({ id: getCodec("UInt32").fromValues([i]) });
+  }
+}
 
-// Native format (recommended - compact binary encoding)
-const batch = batchFromCols({
-  id: getCodec("UInt32").fromValues(new Uint32Array([1, 2, 3])),
-  name: getCodec("String").fromValues(["Alice", "Bob", "Charlie"]),
+// Works with both TCP and HTTP
+await client.query("SELECT sum(id) FROM data", {
+  externalTables: { data: generateBatches() }
 });
+```
 
+### HTTP with Raw Data
+
+For raw TSV/CSV/JSON data, use the explicit structure form:
+
+```ts
 const result = await collectText(query(
   "SELECT * FROM mydata ORDER BY id FORMAT JSON",
   sessionId,
@@ -690,27 +638,13 @@ const result = await collectText(query(
     externalTables: {
       mydata: {
         structure: "id UInt32, name String",
-        format: "Native",
-        data: encodeNative(batch)
+        format: "TabSeparated",  // or JSONEachRow, CSV, etc.
+        data: "1\tAlice\n2\tBob\n"
       }
     }
   }
 ));
-
-// Text formats work too (TabSeparated is default)
-query("SELECT sum(value) FROM numbers", sessionId, {
-  externalTables: {
-    numbers: {
-      structure: "value Int64",
-      data: "100\n200\n300\n"
-    }
-  }
-});
 ```
-
-Data can be `string`, `Uint8Array`, or `AsyncIterable<Uint8Array>`. Supports any ClickHouse input format via the `format` option.
-
-**Note**: HTTP external tables do not support request body compression. Use Native or Parquet format for efficient binary encoding.
 
 ## Timeout and Cancellation
 

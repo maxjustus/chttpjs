@@ -353,3 +353,6 @@ export function batchFromCols(columns: Record<string, Column>): RecordBatch {
   const rowCount = columnData[0]?.length ?? 0;
   return new RecordBatch({ columns: schema, columnData, rowCount });
 }
+
+/** Data that can be sent as an external table (shared by HTTP and TCP clients). */
+export type ExternalTableData = RecordBatch | Iterable<RecordBatch> | AsyncIterable<RecordBatch>;

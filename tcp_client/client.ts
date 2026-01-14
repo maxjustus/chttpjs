@@ -6,6 +6,7 @@ import {
   BufferWriter,
   type ColumnDef,
   decodeNativeBlock,
+  type ExternalTableData,
   getCodec,
   RecordBatch,
 } from "@maxjustus/chttp/native";
@@ -28,20 +29,6 @@ import {
 import { StreamingWriter } from "./writer.ts";
 
 export type { CollectableAsyncGenerator } from "../util.ts";
-
-/**
- * Duck-type check for RecordBatch-like objects.
- * Using instanceof fails across bundle boundaries (each bundle has its own class).
- */
-function isRecordBatch(obj: unknown): obj is RecordBatch {
-  return (
-    obj !== null &&
-    typeof obj === "object" &&
-    "columns" in obj &&
-    "columnData" in obj &&
-    "rowCount" in obj
-  );
-}
 
 export interface TcpClientOptions {
   host: string;
@@ -83,8 +70,7 @@ export interface InsertOptions {
   queryId?: string;
 }
 
-/** Data that can be sent as an external table */
-export type ExternalTableData = RecordBatch | Iterable<RecordBatch> | AsyncIterable<RecordBatch>;
+export type { ExternalTableData };
 
 export interface QueryOptions {
   /** Per-query settings (merged with client defaults, overrides them) */
@@ -503,7 +489,7 @@ export class TcpClient {
       };
 
       // Single RecordBatch - fast path
-      if (isRecordBatch(data)) {
+      if (data instanceof RecordBatch) {
         await sendBatch(data);
       } else {
         // Get iterator (sync or async)
@@ -516,7 +502,7 @@ export class TcpClient {
         if (!firstResult.done) {
           const first = firstResult.value;
 
-          if (isRecordBatch(first)) {
+          if (first instanceof RecordBatch) {
             // RecordBatch mode
             await sendBatch(first);
             while (true) {
@@ -1138,7 +1124,7 @@ export class TcpClient {
     method: MethodCode,
   ): Promise<void> {
     for (const [name, data] of Object.entries(tables)) {
-      if (isRecordBatch(data)) {
+      if (data instanceof RecordBatch) {
         const packet = this.encodeBatchAsDataPacket(name, data, compress, method);
         await this.writeWithBackpressure(packet);
       } else if (Symbol.asyncIterator in data) {
