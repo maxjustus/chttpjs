@@ -464,6 +464,27 @@ describe("additional scalar types", () => {
     );
   });
 
+  it("coerces valid numeric strings to numbers", async () => {
+    const columns: ColumnDef[] = [
+      { name: "i32", type: "Int32" },
+      { name: "f64", type: "Float64" },
+    ];
+    const rows = [
+      ["123", "3.14"],
+      [" -456 ", " -2.5 "], // whitespace trimmed
+      ["0", "0.0"],
+    ];
+    const encoded = encodeNativeRows(columns, rows);
+    const decoded = await decodeBatch(encoded);
+    const decodedRows = toArrayRows(decoded);
+    assert.strictEqual(decodedRows[0][0], 123);
+    assert.strictEqual(decodedRows[0][1], 3.14);
+    assert.strictEqual(decodedRows[1][0], -456);
+    assert.strictEqual(decodedRows[1][1], -2.5);
+    assert.strictEqual(decodedRows[2][0], 0);
+    assert.strictEqual(decodedRows[2][1], 0.0);
+  });
+
   it("throws on invalid string coercion to bigint", () => {
     const columns: ColumnDef[] = [{ name: "n", type: "Int64" }];
     const rows = [["not-a-number"]];
