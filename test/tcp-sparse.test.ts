@@ -123,7 +123,7 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
     });
   }
 
-  it("reads sparse Variant data (tests skipSerializationTree with Variant)", async () => {
+  it("reads sparse Variant data", async () => {
     const client = new TcpClient({
       host: chConfig.host,
       port: chConfig.tcpPort,

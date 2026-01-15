@@ -11,7 +11,7 @@
 import { getCodec } from "./codecs.ts";
 import { type Column, DataColumn, EnumColumn } from "./columns.ts";
 import { BlockInfoField } from "./constants.ts";
-import { BufferReader, BufferWriter, StreamBuffer } from "./io.ts";
+import { BufferReader, BufferUnderflowError, BufferWriter, StreamBuffer } from "./io.ts";
 import { collectRows, rows } from "./rows.ts";
 import {
   DEFAULT_DENSE_NODE,
@@ -26,7 +26,7 @@ import {
   RecordBatch,
   type Row,
 } from "./table.ts";
-import { type ColumnDef, type DecodeOptions, parseTupleElements, parseTypeList } from "./types.ts";
+import { type ColumnDef, type DecodeOptions } from "./types.ts";
 
 // Re-export types for public API
 export {
@@ -63,117 +63,6 @@ export interface Block {
 interface BlockResult extends Block {
   bytesConsumed: number;
   isEndMarker: boolean;
-}
-
-interface BlockEstimate {
-  estimatedSize: number;
-  headerSize: number; // bytes consumed reading header (numCols, numRows, names, types)
-}
-
-/**
- * Peek at block header to estimate total block size without full decode.
- * Returns null if not enough data for header, or the estimate.
- */
-function estimateBlockSize(
-  data: Uint8Array,
-  offset: number,
-  options?: DecodeOptions,
-): BlockEstimate | null {
-  try {
-    const reader = new BufferReader(data, offset, options);
-    const startOffset = reader.offset;
-
-    const clientVersion = options?.clientVersion ?? 0;
-    if (clientVersion > 0) {
-      while (true) {
-        const fieldId = reader.readVarint();
-        if (fieldId === BlockInfoField.End) break;
-        if (fieldId === BlockInfoField.IsOverflows)
-          reader.offset += 1; // is_overflows
-        else if (fieldId === BlockInfoField.BucketNum) reader.offset += 4; // bucket_num
-      }
-    }
-
-    const numCols = reader.readVarint();
-    const numRows = reader.readVarint();
-
-    // End marker - tiny block
-    if (numCols === 0 && numRows === 0) {
-      return {
-        estimatedSize: reader.offset - startOffset,
-        headerSize: reader.offset - startOffset,
-      };
-    }
-
-    // Read column names and types to estimate data size
-    let dataEstimate = 0;
-
-    for (let i = 0; i < numCols; i++) {
-      reader.readString(); // name
-      const typeStr = reader.readString();
-
-      if (clientVersion >= 54454) {
-        const hasCustom = reader.readU8() !== 0;
-        if (hasCustom) {
-          skipSerializationTree(reader, typeStr);
-        }
-      }
-
-      dataEstimate += getCodec(typeStr).estimateSize(numRows);
-    }
-
-    const headerSize = reader.offset - startOffset;
-    // Add 20% buffer for prefix data, LowCardinality dictionaries, etc.
-    return {
-      estimatedSize: headerSize + Math.ceil(dataEstimate * 1.2),
-      headerSize,
-    };
-  } catch {
-    // Not enough data even for header
-    return null;
-  }
-}
-
-/**
- * Skip serialization tree bytes without building the tree.
- * Used when we only need to advance past the kind metadata.
- */
-function skipSerializationTree(reader: BufferReader, typeStr: string): void {
-  reader.readU8(); // kind byte
-
-  if (typeStr.startsWith("Tuple")) {
-    const elements = parseTupleElements(
-      typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")),
-    );
-    for (const el of elements) {
-      skipSerializationTree(reader, el.type);
-    }
-  } else if (typeStr.startsWith("Array")) {
-    const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
-    skipSerializationTree(reader, innerType);
-  } else if (typeStr.startsWith("Map")) {
-    const args = parseTypeList(
-      typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")),
-    );
-    skipSerializationTree(reader, args[0]);
-    skipSerializationTree(reader, args[1]);
-  } else if (typeStr.startsWith("Nullable")) {
-    const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
-    skipSerializationTree(reader, innerType);
-  } else if (typeStr.startsWith("LowCardinality")) {
-    const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
-    skipSerializationTree(reader, innerType);
-  } else if (typeStr.startsWith("Variant")) {
-    const innerTypes = parseTypeList(
-      typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")),
-    );
-    for (const t of innerTypes) {
-      skipSerializationTree(reader, t);
-    }
-  }
-  // Note: Dynamic and JSON types have children determined at readPrefix time,
-  // not from the type string. Size estimation may be incorrect for these types
-  // when used with clientVersion >= 54454.
 }
 
 /**
@@ -277,9 +166,12 @@ export function encodeNative(batch: RecordBatch): Uint8Array {
 
     writer.writeString(columns[i].name);
     writer.writeString(columns[i].type);
-    codec.writePrefix?.(writer, col);
-    const colHint = codec.estimateSize(col.length);
-    writer.write(codec.encode(col, colHint));
+    // Only write prefix and data when there are rows (matches decode behavior)
+    if (rowCount > 0) {
+      codec.writePrefix?.(writer, col);
+      const colHint = codec.estimateSize(col.length);
+      writer.write(codec.encode(col, colHint));
+    }
   }
 
   return writer.finish();
@@ -297,33 +189,39 @@ export async function* streamEncodeNative(
   }
 }
 
+interface DecodeStats {
+  underruns: number;
+  tooSmall: number;
+}
+
 /**
  * Helper to decode a block from a StreamBuffer with a stable slice.
+ * Returns null if not enough data is available (BufferUnderflowError).
  */
-function decodeFromStream(streamBuffer: StreamBuffer, options?: DecodeOptions): BlockResult | null {
+function decodeFromStream(
+  streamBuffer: StreamBuffer,
+  options?: DecodeOptions,
+  stats?: DecodeStats,
+): BlockResult | null {
   const buffer = streamBuffer.view;
-  if (buffer.length === 0) return null;
-
-  const estimate = estimateBlockSize(buffer, 0, options);
-  if (estimate === null) return null;
-
-  // Only attempt decode once we likely have enough bytes for the block.
-  // Use a stable copy so zero-copy typed arrays survive StreamBuffer compaction.
-  if (buffer.length >= estimate.estimatedSize) {
-    const stableSlice = buffer.slice();
-    try {
-      const block = decodeNativeBlock(stableSlice, 0, options);
-      streamBuffer.consume(block.bytesConsumed);
-      return block;
-    } catch {
-      // If decode failed even with enough estimated data, wait for more
-      return null;
-    }
+  if (buffer.length < 8) {
+    if (stats) stats.tooSmall++;
+    return null; // minimum: 2 varints for numCols/numRows
   }
 
-  // If we don't have enough data for the estimate, but the stream has potentially ended,
-  // we might still want to try. But streamDecodeNative handles the final cleanup.
-  return null;
+  // Use a stable copy so zero-copy typed arrays survive StreamBuffer compaction
+  const stableSlice = buffer.slice();
+  try {
+    const block = decodeNativeBlock(stableSlice, 0, options);
+    streamBuffer.consume(block.bytesConsumed);
+    return block;
+  } catch (e) {
+    if (e instanceof BufferUnderflowError) {
+      if (stats) stats.underruns++;
+      return null;
+    }
+    throw e;
+  }
 }
 
 export async function* streamDecodeNative(
@@ -335,13 +233,14 @@ export async function* streamDecodeNative(
   let columns: ColumnDef[] = [];
   let totalBytesReceived = 0;
   let blocksDecoded = 0;
+  const stats: DecodeStats = { underruns: 0, tooSmall: 0 };
 
   for await (const chunk of chunks) {
     streamBuffer.append(chunk);
     totalBytesReceived += chunk.length;
 
     while (true) {
-      const block = decodeFromStream(streamBuffer, options);
+      const block = decodeFromStream(streamBuffer, options, stats);
       if (!block) break;
 
       if (block.isEndMarker) continue;
@@ -356,7 +255,7 @@ export async function* streamDecodeNative(
     }
   }
 
-  // Final cleanup: try to decode whatever is left without the conservative estimate
+  // Final cleanup: decode whatever is left
   let buffer = streamBuffer.view;
   while (buffer.length > 0) {
     try {
@@ -379,7 +278,9 @@ export async function* streamDecodeNative(
   }
 
   if (options?.debug) {
-    console.log(`[streamDecodeNative] ${blocksDecoded} blocks, ${totalBytesReceived} bytes`);
+    console.log(
+      `[streamDecodeNative] ${blocksDecoded} blocks, ${totalBytesReceived} bytes, ${stats.underruns} underruns, ${stats.tooSmall} too-small`,
+    );
   }
 }
 
