@@ -47,6 +47,29 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
     }
     await setupClient.query(`INSERT INTO ${table} VALUES ${rows.join(",")}`);
     await setupClient.query(`OPTIMIZE TABLE ${table} FINAL`);
+
+    // Create Variant sparse test table
+    const variantTable = "test_tcp_variant_sparse";
+    await setupClient.query(`DROP TABLE IF EXISTS ${variantTable}`);
+    await setupClient.query(`
+      CREATE TABLE ${variantTable} (
+        id UInt32,
+        v Variant(String, UInt64)
+      ) ENGINE = MergeTree
+      ORDER BY id
+      SETTINGS ratio_of_defaults_for_sparse_serialization = 0.0001
+    `);
+
+    // Insert 10000 rows, mostly NULL to trigger sparse serialization
+    const variantRows: string[] = [];
+    for (let i = 0; i < rowCount; i++) {
+      if (i === 50) variantRows.push(`(${i}, 'hello')`);
+      else if (i === 5000) variantRows.push(`(${i}, 42)`);
+      else variantRows.push(`(${i}, NULL)`);
+    }
+    await setupClient.query(`INSERT INTO ${variantTable} VALUES ${variantRows.join(",")}`);
+    await setupClient.query(`OPTIMIZE TABLE ${variantTable} FINAL`);
+
     setupClient.close();
   });
 
@@ -99,4 +122,46 @@ describe("TCP sparse deserialization", { timeout: 120000 }, () => {
       }
     });
   }
+
+  it("reads sparse Variant data (tests skipSerializationTree with Variant)", async () => {
+    const client = new TcpClient({
+      host: chConfig.host,
+      port: chConfig.tcpPort,
+      user: chConfig.username,
+      password: chConfig.password,
+    });
+    await client.connect();
+
+    try {
+      const packets = client.query(`SELECT * FROM test_tcp_variant_sparse ORDER BY id`);
+
+      let totalRows = 0;
+      for await (const packet of packets) {
+        if (packet.type === "Data") {
+          const batch = packet.batch;
+          const decodedRows = toArrayRows(batch);
+          totalRows += batch.rowCount;
+
+          // Check specific values if we have enough rows
+          if (decodedRows.length > 50) {
+            assert.deepStrictEqual(
+              decodedRows[50][1],
+              [0, "hello"],
+              "Row 50 should have Variant(String) = 'hello'",
+            );
+          }
+          if (decodedRows.length > 5000) {
+            assert.deepStrictEqual(
+              decodedRows[5000][1],
+              [1, 42n],
+              "Row 5000 should have Variant(UInt64) = 42",
+            );
+          }
+        }
+      }
+      assert.strictEqual(totalRows, 10000, "Should receive 10000 rows total");
+    } finally {
+      client.close();
+    }
+  });
 });

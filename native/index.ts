@@ -160,7 +160,20 @@ function skipSerializationTree(reader: BufferReader, typeStr: string): void {
   } else if (typeStr.startsWith("Nullable")) {
     const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
     skipSerializationTree(reader, innerType);
+  } else if (typeStr.startsWith("LowCardinality")) {
+    const innerType = typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")"));
+    skipSerializationTree(reader, innerType);
+  } else if (typeStr.startsWith("Variant")) {
+    const innerTypes = parseTypeList(
+      typeStr.substring(typeStr.indexOf("(") + 1, typeStr.lastIndexOf(")")),
+    );
+    for (const t of innerTypes) {
+      skipSerializationTree(reader, t);
+    }
   }
+  // Note: Dynamic and JSON types have children determined at readPrefix time,
+  // not from the type string. Size estimation may be incorrect for these types
+  // when used with clientVersion >= 54454.
 }
 
 /**

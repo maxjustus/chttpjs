@@ -743,12 +743,12 @@ Benchmarks on Apple M4 Max, 10k rows. Native format is ClickHouse's columnar wir
 
 | Scenario | JSON+LZ4 | Native+LZ4 | JSON+ZSTD | Native+ZSTD | JSON+gzip | Native+gzip |
 |----------|----------|------------|-----------|-------------|-----------|-------------|
-| Simple (6 cols) | 11.4ms | 2.0ms | 12.1ms | 2.2ms | 18.1ms | 7.5ms |
-| Escape-heavy strings | 3.3ms | 2.6ms | 3.2ms | 2.7ms | 5.7ms | 5.9ms |
-| Arrays (50 floats/row) | 29ms | 7.7ms | 65ms | 11ms | 269ms | 106ms |
-| Variant | 1.1ms | 0.8ms | 1.2ms | 0.9ms | 5.8ms | 4.6ms |
-| Dynamic | 1.0ms | 0.8ms | 1.1ms | 0.8ms | 3.9ms | 4.3ms |
-| JSON column | 2.5ms | 3.4ms | 3.0ms | 3.9ms | 9.9ms | 10.1ms |
+| Simple (6 cols) | 12.2ms | 2.2ms | 12.6ms | 2.4ms | 19.7ms | 8.0ms |
+| Escape-heavy strings | 3.5ms | 2.7ms | 3.4ms | 2.7ms | 6.2ms | 6.5ms |
+| Arrays (50 floats/row) | 31ms | 8.3ms | 69ms | 12ms | 301ms | 113ms |
+| Variant | 1.1ms | 0.8ms | 1.3ms | 0.9ms | 6.5ms | 5.4ms |
+| Dynamic | 1.0ms | 0.8ms | 1.2ms | 0.9ms | 4.2ms | 4.5ms |
+| JSON column | 2.7ms | 3.0ms | 3.1ms | 3.2ms | 11.2ms | 9.6ms |
 
 ### Compressed Size (Native vs JSON)
 

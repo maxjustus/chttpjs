@@ -471,7 +471,22 @@ function readSparse(
 
   const values = decodeFn(reader, indices.length);
 
-  // Materialize to dense column
+  // Fast path: TypedArray-backed columns (NumericCodec, EpochCodec, BigIntCodec)
+  // Avoids boxing/unboxing through get()/fromValues() by copying directly.
+  if (values instanceof DataColumn && ArrayBuffer.isView(values.data)) {
+    const src = values.data as TypedArray;
+    const Ctor = src.constructor as TypedArrayConstructor<TypedArray>;
+    const dest = new Ctor(rows); // Zero-filled by default
+    for (let i = 0; i < indices.length; i++) {
+      const idx = indices[i];
+      if (idx < rows) {
+        dest[idx] = src[i];
+      }
+    }
+    return new DataColumn(codec.type, dest);
+  }
+
+  // Generic path: materialize via get() for complex types
   const resultValues = new Array(rows);
   for (let i = 0; i < rows; i++) resultValues[i] = zero;
 
@@ -2236,7 +2251,7 @@ export class JsonCodec implements Codec {
   }
 
   private discoverDynamicPaths(values: unknown[]): string[] {
-    if (this.cachedDynamicPaths && this.hasCachedPaths(values[0])) {
+    if (this.cachedDynamicPaths && this.matchesCachedSchema(values[0])) {
       return this.cachedDynamicPaths;
     }
 
@@ -2252,9 +2267,13 @@ export class JsonCodec implements Codec {
     return this.cachedDynamicPaths;
   }
 
-  private hasCachedPaths(row: unknown): boolean {
+  private matchesCachedSchema(row: unknown): boolean {
     if (!row || typeof row !== "object" || Array.isArray(row)) return false;
-    return this.cachedDynamicPaths!.every((p) => p in (row as Record<string, unknown>));
+    const cached = new Set(this.cachedDynamicPaths!);
+    for (const key of Object.keys(row)) {
+      if (!this.typedPathNames.has(key) && !cached.has(key)) return false;
+    }
+    return true;
   }
 
   zeroValue() {
