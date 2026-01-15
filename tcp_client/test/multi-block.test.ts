@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { describe, test } from "node:test";
-import { batchFromRows } from "../../native/table.ts";
-import { TcpClient } from "../client.ts";
+import { batchFromRows } from "@maxjustus/chttp/native";
+import { TcpClient } from "@maxjustus/chttp/tcp";
 
 describe("TCP Client Multi-block Integration", () => {
   const options = {

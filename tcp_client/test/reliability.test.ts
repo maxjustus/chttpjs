@@ -1,10 +1,8 @@
 import assert from "node:assert";
 import { after, before, describe, test } from "node:test";
-import { batchFromCols } from "../../native/table.ts";
-import { getCodec } from "../../native/codecs.ts";
+import { batchFromCols, getCodec } from "@maxjustus/chttp/native";
 import { startClickHouse, stopClickHouse } from "../../test/setup.ts";
-import { TcpClient } from "../client.ts";
-import { ClickHouseException } from "../types.ts";
+import { ClickHouseException, TcpClient } from "@maxjustus/chttp/tcp";
 
 describe("TCP Client Reliability", () => {
   let options: { host: string; port: number; user: string; password: string };

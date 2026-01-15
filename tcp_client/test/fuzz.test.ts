@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { describe, test } from "node:test";
 import type { ClickHouseSettings } from "../../settings.ts";
-import { TcpClient } from "../client.ts";
+import { TcpClient } from "@maxjustus/chttp/tcp";
 
 // Settings for complex/experimental types
 const QUERY_SETTINGS = {

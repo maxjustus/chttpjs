@@ -23,6 +23,7 @@
     },
     "./source": "./index.ts",
     "./tcp": {
+      "development": "./tcp_client/index.ts",
       "import": "./dist/tcp.js",
       "require": "./dist/tcp.cjs"
     }

@@ -4,7 +4,7 @@
 
 import assert from "node:assert";
 import { after, before, describe, it } from "node:test";
-import { batchFromCols, getCodec, RecordBatch } from "../native/index.ts";
+import { batchFromCols, getCodec, RecordBatch } from "@maxjustus/chttp/native";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 import { collectQueryResults, connectTcpClient, type TcpConfig } from "./test_utils.ts";
 

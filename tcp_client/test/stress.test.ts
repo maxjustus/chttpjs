@@ -1,9 +1,7 @@
 import assert from "node:assert";
 import { describe, test } from "node:test";
-import { getCodec } from "../../native/codecs.ts";
-import { batchFromCols, batchFromRows } from "../../native/table.ts";
-import { TcpClient } from "../client.ts";
-import { ClickHouseException } from "../types.ts";
+import { batchFromCols, batchFromRows, getCodec } from "@maxjustus/chttp/native";
+import { ClickHouseException, TcpClient } from "@maxjustus/chttp/tcp";
 
 describe("TCP Client Stress Tests", () => {
   const options = {

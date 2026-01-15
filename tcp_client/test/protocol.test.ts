@@ -1,8 +1,7 @@
 import assert from "node:assert";
 import { describe, test } from "node:test";
-import { batchFromCols } from "../../native/table.ts";
-import { getCodec } from "../../native/codecs.ts";
-import { TcpClient } from "../client.ts";
+import { batchFromCols, getCodec } from "@maxjustus/chttp/native";
+import { TcpClient } from "@maxjustus/chttp/tcp";
 
 describe("TCP Client Protocol Features", () => {
   const options = {
