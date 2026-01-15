@@ -2,6 +2,8 @@
 //
 // Tests encoding/decoding performance for both formats with various data types.
 
+import { promisify } from "node:util";
+import { gzip } from "node:zlib";
 import { collectBytes } from "../client.ts";
 import { encodeBlock, init, Method } from "../compression.ts";
 import {
@@ -19,6 +21,8 @@ import {
   readBenchOptions,
   reportEnvironment,
 } from "./harness.ts";
+
+const gzipAsync = promisify(gzip);
 
 function encodeNativeRows(columns: ColumnDef[], rows: unknown[][]): Uint8Array {
   return encodeNative(batchFromRows(columns, rows));
@@ -98,12 +102,18 @@ interface Scenario {
   rowsArray: unknown[][];
 }
 
+interface CompressionSizes {
+  lz4: number;
+  zstd: number;
+  gzip: number;
+}
+
 interface ScenarioResult {
   name: string;
   encode: { json: number; native: number };
   decode: { json: number; native: number };
   size: { json: number; native: number };
-  compressed: { json: number; native: number };
+  compressed: { json: CompressionSizes; native: CompressionSizes };
 }
 
 async function runScenario(
@@ -153,27 +163,66 @@ async function runScenario(
   );
   console.log(formatResult(nativeDec, rows));
 
-  // Compression
-  const jsonComp = encodeBlock(jsonEncoded, Method.ZSTD);
-  const nativeComp = encodeBlock(nativeEncoded, Method.ZSTD);
+  // Compression comparison (LZ4, ZSTD, gzip)
+  const jsonLz4 = encodeBlock(jsonEncoded, Method.LZ4);
+  const jsonZstd = encodeBlock(jsonEncoded, Method.ZSTD);
+  const jsonGzip = new Uint8Array(await gzipAsync(jsonEncoded));
+  const nativeLz4 = encodeBlock(nativeEncoded, Method.LZ4);
+  const nativeZstd = encodeBlock(nativeEncoded, Method.ZSTD);
+  const nativeGzip = new Uint8Array(await gzipAsync(nativeEncoded));
+
+  console.log("\nCompressed sizes:");
   console.log(
-    `\nCompressed sizes: JSON+ZSTD=${formatKB(jsonComp.length)}, Native+ZSTD=${formatKB(nativeComp.length)} (${pct(nativeComp.length, jsonComp.length)}%)`,
+    `  JSON:   LZ4=${formatKB(jsonLz4.length)}, ZSTD=${formatKB(jsonZstd.length)}, gzip=${formatKB(jsonGzip.length)}`,
+  );
+  console.log(
+    `  Native: LZ4=${formatKB(nativeLz4.length)} (${pct(nativeLz4.length, jsonLz4.length)}%), ZSTD=${formatKB(nativeZstd.length)} (${pct(nativeZstd.length, jsonZstd.length)}%), gzip=${formatKB(nativeGzip.length)} (${pct(nativeGzip.length, jsonGzip.length)}%)`,
   );
 
-  // Full path
-  console.log("\nFull path (encode + ZSTD compress):");
-  const jsonFull = benchSync(
+  // Full path benchmarks
+  console.log("\nFull path (encode + compress):");
+  const jsonLz4Full = benchSync(
+    "JSONEachRow + LZ4",
+    () => encodeBlock(encodeJsonEachRow(scenario.jsonData), Method.LZ4),
+    { ...benchOptions, iterations },
+  );
+  console.log(formatResult(jsonLz4Full, rows));
+  const nativeLz4Full = benchSync(
+    "Native + LZ4",
+    () => encodeBlock(encodeNativeRows(scenario.columns, scenario.rowsArray), Method.LZ4),
+    { ...benchOptions, iterations },
+  );
+  console.log(formatResult(nativeLz4Full, rows));
+
+  const jsonZstdFull = benchSync(
     "JSONEachRow + ZSTD",
     () => encodeBlock(encodeJsonEachRow(scenario.jsonData), Method.ZSTD),
     { ...benchOptions, iterations },
   );
-  console.log(formatResult(jsonFull, rows));
-  const nativeFull = benchSync(
+  console.log(formatResult(jsonZstdFull, rows));
+  const nativeZstdFull = benchSync(
     "Native + ZSTD",
     () => encodeBlock(encodeNativeRows(scenario.columns, scenario.rowsArray), Method.ZSTD),
     { ...benchOptions, iterations },
   );
-  console.log(formatResult(nativeFull, rows));
+  console.log(formatResult(nativeZstdFull, rows));
+
+  const jsonGzipFull = await benchAsync(
+    "JSONEachRow + gzip",
+    async () => {
+      await gzipAsync(encodeJsonEachRow(scenario.jsonData));
+    },
+    { ...benchOptions, iterations },
+  );
+  console.log(formatResult(jsonGzipFull, rows));
+  const nativeGzipFull = await benchAsync(
+    "Native + gzip",
+    async () => {
+      await gzipAsync(encodeNativeRows(scenario.columns, scenario.rowsArray));
+    },
+    { ...benchOptions, iterations },
+  );
+  console.log(formatResult(nativeGzipFull, rows));
 
   console.log("");
 
@@ -186,8 +235,8 @@ async function runScenario(
       native: nativeEncoded.length,
     },
     compressed: {
-      json: jsonComp.length,
-      native: nativeComp.length,
+      json: { lz4: jsonLz4.length, zstd: jsonZstd.length, gzip: jsonGzip.length },
+      native: { lz4: nativeLz4.length, zstd: nativeZstd.length, gzip: nativeGzip.length },
     },
   };
 }
@@ -496,7 +545,9 @@ async function main() {
     console.log(`  Encode: ${fmtSpeed(r.encode.json, r.encode.native)}`);
     console.log(`  Decode: ${fmtSpeed(r.decode.json, r.decode.native)}`);
     console.log(`  Size:   ${fmtSize(r.size.json, r.size.native)}`);
-    console.log(`  +ZSTD:  ${fmtSize(r.compressed.json, r.compressed.native)}`);
+    console.log(`  +LZ4:   ${fmtSize(r.compressed.json.lz4, r.compressed.native.lz4)}`);
+    console.log(`  +ZSTD:  ${fmtSize(r.compressed.json.zstd, r.compressed.native.zstd)}`);
+    console.log(`  +gzip:  ${fmtSize(r.compressed.json.gzip, r.compressed.native.gzip)}`);
     console.log("");
   }
 
