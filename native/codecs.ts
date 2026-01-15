@@ -2042,25 +2042,34 @@ class DynamicCodec implements Codec {
   }
 
   fromValues(values: unknown[]): DynamicColumn {
-    // Collect unique types
+    // Single pass: collect types, group values, and compute discriminators
     const typeMap = new Map<string, unknown[]>();
+    const typeIndex = new Map<string, number>(); // O(1) lookup
     const typeOrder: string[] = [];
-    for (const v of values) {
-      if (v != null) {
-        const vType = this.guessType(v);
-        if (!typeMap.has(vType)) {
-          typeMap.set(vType, []);
-          typeOrder.push(vType);
-        }
-        typeMap.get(vType)!.push(v);
-      }
-    }
-
-    const nullDisc = typeOrder.length;
     const discriminators = new Uint8Array(values.length);
+
     for (let i = 0; i < values.length; i++) {
       const v = values[i];
-      discriminators[i] = v == null ? nullDisc : typeOrder.indexOf(this.guessType(v));
+      if (v == null) {
+        // Will set null discriminator after we know typeOrder.length
+        continue;
+      }
+      const vType = this.guessType(v);
+      let idx = typeIndex.get(vType);
+      if (idx === undefined) {
+        idx = typeOrder.length;
+        typeIndex.set(vType, idx);
+        typeOrder.push(vType);
+        typeMap.set(vType, []);
+      }
+      discriminators[i] = idx;
+      typeMap.get(vType)!.push(v);
+    }
+
+    // Set null discriminators (null disc = typeOrder.length)
+    const nullDisc = typeOrder.length;
+    for (let i = 0; i < values.length; i++) {
+      if (values[i] == null) discriminators[i] = nullDisc;
     }
 
     const groups = new Map<number, Column>();
@@ -2099,13 +2108,13 @@ class DynamicCodec implements Codec {
   }
 }
 
-class JsonCodec implements Codec {
+export class JsonCodec implements Codec {
   readonly type = "JSON";
-  // Typed paths from schema (e.g., "currency LowCardinality(String)")
   private typedPaths: { name: string; type: string; codec: Codec }[] = [];
-  // Dynamic paths read from wire
+  private typedPathNames: Set<string>;
   private dynamicPaths: string[] = [];
-  private dynamicCodecs: Map<string, DynamicCodec> = new Map();
+  private dynamicCodecs = new Map<string, DynamicCodec>();
+  private cachedDynamicPaths?: string[];
 
   constructor(typedPaths: { name: string; type: string }[] = []) {
     this.typedPaths = typedPaths.map((p) => ({
@@ -2113,13 +2122,12 @@ class JsonCodec implements Codec {
       type: p.type,
       codec: getCodec(p.type),
     }));
+    this.typedPathNames = new Set(this.typedPaths.map((tp) => tp.name));
   }
 
   writePrefix(writer: BufferWriter, col: Column) {
     const json = col as JsonColumn;
-    // V3 format: only dynamic paths listed in header, typed paths are implicit from schema
-    const typedPathNames = new Set(this.typedPaths.map((tp) => tp.name));
-    this.dynamicPaths = json.paths.filter((p) => !typedPathNames.has(p));
+    this.dynamicPaths = json.paths.filter((p) => !this.typedPathNames.has(p));
 
     writer.writeU64LE(JSONFormat.VERSION_V3);
     writer.writeVarint(this.dynamicPaths.length);
@@ -2146,21 +2154,14 @@ class JsonCodec implements Codec {
     const ver = reader.readU64LE();
     if (ver !== JSONFormat.VERSION_V3) throw new Error(`JSON: only V3 supported, got V${ver}`);
 
-    // Read path count and names (these are ALL paths, both typed and dynamic)
     const count = reader.readVarint();
     const allPathNames: string[] = [];
     for (let i = 0; i < count; i++) allPathNames.push(reader.readString());
 
-    // Separate typed paths (from schema) from dynamic paths
-    const typedPathNames = new Set(this.typedPaths.map((tp) => tp.name));
-    this.dynamicPaths = allPathNames.filter((p) => !typedPathNames.has(p));
+    this.dynamicPaths = allPathNames.filter((p) => !this.typedPathNames.has(p));
 
-    // Read typed path prefixes first (in schema order)
-    for (const tp of this.typedPaths) {
-      tp.codec.readPrefix?.(reader);
-    }
+    for (const tp of this.typedPaths) tp.codec.readPrefix?.(reader);
 
-    // Read dynamic path prefixes
     for (const path of this.dynamicPaths) {
       const codec = new DynamicCodec();
       codec.readPrefix(reader);
@@ -2221,31 +2222,39 @@ class JsonCodec implements Codec {
       );
 
     const pathColumns = new Map<string, Column>();
-    const typedPathNames = new Set<string>();
-
-    // Typed paths use their specific codecs
     for (const tp of this.typedPaths) {
-      typedPathNames.add(tp.name);
       pathColumns.set(tp.name, tp.codec.fromValues(extractPath(tp.name)));
     }
 
-    // Collect and encode dynamic paths
-    const dynamicPaths = new Set<string>();
-    for (const v of values) {
-      if (v && typeof v === "object" && !Array.isArray(v)) {
-        for (const key of Object.keys(v)) {
-          if (!typedPathNames.has(key)) dynamicPaths.add(key);
-        }
-      }
-    }
-
+    const dynamicPaths = this.discoverDynamicPaths(values);
     const dynCodec = new DynamicCodec();
-    const sortedDynamic = [...dynamicPaths].sort();
-    for (const path of sortedDynamic) {
+    for (const path of dynamicPaths) {
       pathColumns.set(path, dynCodec.fromValues(extractPath(path)));
     }
 
-    return new JsonColumn([...typedPathNames, ...sortedDynamic], pathColumns, values.length);
+    return new JsonColumn([...this.typedPathNames, ...dynamicPaths], pathColumns, values.length);
+  }
+
+  private discoverDynamicPaths(values: unknown[]): string[] {
+    if (this.cachedDynamicPaths && this.hasCachedPaths(values[0])) {
+      return this.cachedDynamicPaths;
+    }
+
+    const paths = new Set<string>();
+    for (const v of values) {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        for (const key of Object.keys(v)) {
+          if (!this.typedPathNames.has(key)) paths.add(key);
+        }
+      }
+    }
+    this.cachedDynamicPaths = [...paths].sort();
+    return this.cachedDynamicPaths;
+  }
+
+  private hasCachedPaths(row: unknown): boolean {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+    return this.cachedDynamicPaths!.every((p) => p in (row as Record<string, unknown>));
   }
 
   zeroValue() {
