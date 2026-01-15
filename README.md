@@ -12,12 +12,13 @@ npm install @maxjustus/chttp
 
 | Feature | HTTP | TCP |
 |---------|------|-----|
-| Browser support | Yes | No (Node.js only) |
-| Streaming progress | Limited | Real-time |
-| Latency | Higher | Lower |
-| Connection | Stateless | Persistent |
+| Real-time progress | No | Yes (rows read/written, bytes, memory, CPU) |
+| Server logs | No | Yes (via `send_logs_level` setting) |
+| Profile events | No | Yes (detailed execution metrics) |
+| Long-running queries | Timeout-prone | Robust (persistent connection) |
+| Browser support | Yes | No (Node/Bun/Deno only) |
 
-Use **HTTP** for browser apps or simple server scripts. Use **TCP** for high-throughput pipelines, real-time progress tracking, or lower latency.
+Use **HTTP** for browser apps or simple queries. Use **TCP** for observability, long-running queries, and lower latency.
 
 ## Quick Start
 
@@ -261,6 +262,8 @@ const batch = batchFromCols({ id: idCol, name: nameCol });
 // batch.schema = [{ name: "id", type: "UInt32" }, { name: "name", type: "String" }]
 ```
 
+For numeric columns, pass TypedArrays (e.g., `Uint32Array`, `Float64Array`) for zero-copy construction.
+
 ### Complex Types
 
 ```ts
@@ -344,7 +347,7 @@ await insert(
 );
 ```
 
-Supports all ClickHouse types including integers (Int8-Int256, UInt8-UInt256), floats, decimals, strings, date/time, containers (Array, Tuple, Map, Nullable), Variant, Dynamic, JSON, and geo types.
+Supports all ClickHouse types.
 
 **Limitation**: `Dynamic` and `JSON` types require V3 flattened format. On ClickHouse 25.6+, set `output_format_native_use_flattened_dynamic_and_json_serialization=1`.
 
@@ -362,7 +365,7 @@ const allRows = batch.toArray({ bigIntAsString: true });
 
 ## TCP Client (Experimental)
 
-Direct TCP protocol for lower latency. Preferable for long-running queries and large inserts where you want real-time progress streaming. Single connection per client - use separate clients for concurrent operations.
+Direct TCP protocol. Single connection per client - use separate clients for concurrent operations.
 
 ### Basic Usage
 
@@ -453,11 +456,9 @@ for await (const packet of client.query(sql)) {
 }
 ```
 
-The percentage calculation uses `max(readRows, totalRowsToRead)` as denominator to handle cases where the server's estimate is low.
-
 ### ProfileEvents and Resource Metrics
 
-ProfileEvents packets provide detailed execution metrics (memory usage, CPU time, I/O stats). Memory and CPU stats are automatically merged into the accumulated progress:
+ProfileEvents provide execution metrics. Memory and CPU stats are merged into accumulated progress:
 
 ```ts
 for await (const packet of client.query(sql)) {
@@ -477,7 +478,7 @@ for await (const packet of client.query(sql)) {
 }
 ```
 
-`memoryUsage` reflects current memory (latest value), while `peakMemoryUsage` tracks the highest seen (max). CPU time is summed. The `cpuUsage` field shows equivalent CPUs utilized (1.0 = one full CPU, 4.0 = four CPUs busy).
+`memoryUsage` is the latest value; `peakMemoryUsage` is the max seen. `cpuUsage` shows equivalent CPUs utilized.
 
 ### Insert API
 
@@ -578,11 +579,11 @@ await using client = await TcpClient.connect(options);
 
 ## External Tables
 
-Send temporary in-memory tables with your query. Both HTTP and TCP support passing RecordBatches directly with automatic schema extraction.
+Send temporary in-memory tables with your query. Schema is auto-extracted from RecordBatch.
 
 ### Unified API (RecordBatch)
 
-Pass RecordBatches directly to either client. Schema is auto-extracted from the batch.
+Pass RecordBatches directly to either client:
 
 ```ts
 import { batchFromCols, getCodec, query, collectText } from "@maxjustus/chttp";
@@ -666,7 +667,7 @@ await insert(query, data, sessionId, {
 });
 ```
 
-Requires Node.js 20+ or modern browsers (Chrome 116+, Firefox 124+, Safari 17.4+) for `AbortSignal.any()`.
+Requires Node.js 20+, Bun, Deno, or modern browsers (Chrome 116+, Firefox 124+, Safari 17.4+) for `AbortSignal.any()`.
 
 ## Error Handling
 
@@ -724,25 +725,47 @@ try {
 }
 ```
 
-### Common Error Codes
-
-| Code | Name | Description |
-|------|------|-------------|
-| 60 | UNKNOWN_TABLE | Table does not exist |
-| 62 | SYNTAX_ERROR | SQL syntax error |
-| 27 | CANNOT_PARSE_INPUT_ASSERTION_FAILED | Data type mismatch |
-| 117 | UNKNOWN_COLUMN | Column does not exist |
-| 164 | READONLY | Cannot execute in readonly mode |
-
 ## Compression
 
 Set `compression` in options:
 
-- `"lz4"` - fast, native in Node.js with WASM fallback (default)
-- `"zstd"` - ~2x better compression, native in Node.js with WASM fallback
+- `"lz4"` - fast, uses native bindings when available with WASM fallback (default)
+- `"zstd"` - ~2x better compression, uses native bindings when available with WASM fallback
 - `false` - no compression
 
-ZSTD and LZ4 use native bindings in Node.js when available, falling back to WASM in browsers. Run `npm run bench` to see compression ratios and speeds for your data.
+ZSTD and LZ4 use native bindings in Node.js/Bun when available, falling back to WASM in browsers and Deno.
+
+## Performance
+
+Benchmarks on Apple M4 Max, 10k rows. Native format is ClickHouse's columnar wire format.
+
+### Format Comparison (encode + compress)
+
+| Scenario | JSON+LZ4 | Native+LZ4 | JSON+ZSTD | Native+ZSTD | JSON+gzip | Native+gzip |
+|----------|----------|------------|-----------|-------------|-----------|-------------|
+| Simple (6 cols) | 11.4ms | 2.0ms | 12.1ms | 2.2ms | 18.1ms | 7.5ms |
+| Escape-heavy strings | 3.3ms | 2.6ms | 3.2ms | 2.7ms | 5.7ms | 5.9ms |
+| Arrays (50 floats/row) | 29ms | 7.7ms | 65ms | 11ms | 269ms | 106ms |
+| Variant | 1.1ms | 0.8ms | 1.2ms | 0.9ms | 5.8ms | 4.6ms |
+| Dynamic | 1.0ms | 0.8ms | 1.1ms | 0.8ms | 3.9ms | 4.3ms |
+| JSON column | 2.5ms | 3.4ms | 3.0ms | 3.9ms | 9.9ms | 10.1ms |
+
+### Compressed Size (Native vs JSON)
+
+| Scenario | LZ4 | ZSTD | gzip |
+|----------|-----|------|------|
+| Simple (6 cols) | 65% | 68% | 71% |
+| Escape-heavy strings | 92% | 140%* | 84% |
+| Arrays (50 floats/row) | 48% | 82% | 85% |
+| Variant | 70% | 96% | 73% |
+| Dynamic | 72% | 98% | 65% |
+| JSON column | 56% | 67% | 67% |
+
+*Escape-heavy strings: JSON's escaping creates repetitive patterns that ZSTD compresses exceptionally well.
+
+**Summary**: LZ4 is fastest, ZSTD compresses best. Native format wins on both speed and size for most data shapes. Exception: highly repetitive escaped strings where JSON's redundancy helps ZSTD.
+
+Run `node --experimental-strip-types bench/formats.ts` to reproduce.
 
 ## Development
 
@@ -752,7 +775,7 @@ make test-tcp  # TCP client tests (requires local ClickHouse on port 9000)
 make fuzz-tcp  # TCP fuzz tests (FUZZ_ITERATIONS=10 FUZZ_ROWS=20000)
 ```
 
-Requires Node.js 24+ (uses `--experimental-strip-types` for direct TS execution).
+Requires Node.js 20+, Bun, or Deno.
 
 ## CLI
 
