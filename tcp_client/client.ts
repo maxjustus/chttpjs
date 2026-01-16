@@ -79,7 +79,16 @@ export type { ExternalTableData };
 export interface QueryOptions {
   /** Per-query settings (merged with client defaults, overrides them) */
   settings?: ClickHouseSettings;
-  /** Query parameters (substitution values) */
+  /**
+   * Query parameters (substitution values). Scalars only - all values are sent as strings.
+   * For container types (Array, Map, Tuple), pass ClickHouse literal syntax as a string:
+   * ```typescript
+   * { arr: "[1, 2, 3]" }              // Array(UInt32)
+   * { tags: "['foo', 'bar']" }        // Array(String)
+   * { m: "{'a': 1, 'b': 2}" }         // Map(String, UInt32)
+   * { t: "(1, 'hello')" }             // Tuple(UInt32, String)
+   * ```
+   */
   params?: Record<string, string | number | boolean | bigint>;
   signal?: AbortSignal;
   /** External tables to send with the query (available as temporary tables in the SQL) */

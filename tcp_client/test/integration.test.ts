@@ -480,4 +480,160 @@ describe("TCP Client Integration", () => {
       client.close();
     }
   });
+
+  test("row objects with Array(UInt32) column", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      const tableName = `test_array_uint32_${Date.now()}`;
+      await client.query(
+        `CREATE TABLE ${tableName} (id UInt32, arr Array(UInt32)) ENGINE = Memory`,
+      );
+
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [
+        { id: 1, arr: [10, 20, 30] },
+        { id: 2, arr: [100] },
+        { id: 3, arr: [] },
+      ])) {
+      }
+
+      const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`);
+      const allRows: any[] = [];
+      for await (const packet of stream) {
+        if (packet.type === "Data") {
+          for (const row of packet.batch) {
+            allRows.push(row.toObject());
+          }
+        }
+      }
+
+      assert.strictEqual(allRows.length, 3);
+      assert.deepStrictEqual(Array.from(allRows[0].arr), [10, 20, 30]);
+      assert.deepStrictEqual(Array.from(allRows[1].arr), [100]);
+      assert.deepStrictEqual(Array.from(allRows[2].arr), []);
+
+      await client.query(`DROP TABLE ${tableName}`);
+    } finally {
+      client.close();
+    }
+  });
+
+  test("row objects with Array(String) column", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      const tableName = `test_array_string_${Date.now()}`;
+      await client.query(
+        `CREATE TABLE ${tableName} (id UInt32, tags Array(String)) ENGINE = Memory`,
+      );
+
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [
+        { id: 1, tags: ["foo", "bar", "baz"] },
+        { id: 2, tags: ["single"] },
+        { id: 3, tags: [] },
+      ])) {
+      }
+
+      const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`);
+      const allRows: any[] = [];
+      for await (const packet of stream) {
+        if (packet.type === "Data") {
+          for (const row of packet.batch) {
+            allRows.push(row.toObject());
+          }
+        }
+      }
+
+      assert.strictEqual(allRows.length, 3);
+      assert.deepStrictEqual(allRows[0].tags, ["foo", "bar", "baz"]);
+      assert.deepStrictEqual(allRows[1].tags, ["single"]);
+      assert.deepStrictEqual(allRows[2].tags, []);
+
+      await client.query(`DROP TABLE ${tableName}`);
+    } finally {
+      client.close();
+    }
+  });
+
+  test("row objects with nested Array(Array(UInt32))", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      const tableName = `test_nested_array_${Date.now()}`;
+      await client.query(
+        `CREATE TABLE ${tableName} (id UInt32, matrix Array(Array(UInt32))) ENGINE = Memory`,
+      );
+
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [
+        {
+          id: 1,
+          matrix: [
+            [1, 2],
+            [3, 4, 5],
+          ],
+        },
+        { id: 2, matrix: [[100]] },
+        { id: 3, matrix: [] },
+      ])) {
+      }
+
+      const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`);
+      const allRows: any[] = [];
+      for await (const packet of stream) {
+        if (packet.type === "Data") {
+          for (const row of packet.batch) {
+            allRows.push(row.toObject());
+          }
+        }
+      }
+
+      assert.strictEqual(allRows.length, 3);
+      // Nested arrays come back as typed arrays
+      assert.strictEqual(allRows[0].matrix.length, 2);
+      assert.deepStrictEqual(Array.from(allRows[0].matrix[0]), [1, 2]);
+      assert.deepStrictEqual(Array.from(allRows[0].matrix[1]), [3, 4, 5]);
+
+      await client.query(`DROP TABLE ${tableName}`);
+    } finally {
+      client.close();
+    }
+  });
+
+  test("row objects with Array(Nullable(UInt32))", async () => {
+    // Note: ClickHouse doesn't allow Nullable(Array(...)), but does allow Array(Nullable(...))
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      const tableName = `test_array_nullable_${Date.now()}`;
+      await client.query(
+        `CREATE TABLE ${tableName} (id UInt32, arr Array(Nullable(UInt32))) ENGINE = Memory`,
+      );
+
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, [
+        { id: 1, arr: [1, null, 3] },
+        { id: 2, arr: [null, null] },
+        { id: 3, arr: [] },
+      ])) {
+      }
+
+      const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`);
+      const allRows: any[] = [];
+      for await (const packet of stream) {
+        if (packet.type === "Data") {
+          for (const row of packet.batch) {
+            allRows.push(row.toObject());
+          }
+        }
+      }
+
+      assert.strictEqual(allRows.length, 3);
+      assert.deepStrictEqual(allRows[0].arr, [1, null, 3]);
+      assert.deepStrictEqual(allRows[1].arr, [null, null]);
+      assert.deepStrictEqual(allRows[2].arr, []);
+
+      await client.query(`DROP TABLE ${tableName}`);
+    } finally {
+      client.close();
+    }
+  });
 });
