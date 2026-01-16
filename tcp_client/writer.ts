@@ -1,5 +1,6 @@
 import { BlockInfoField, BufferWriter } from "@maxjustus/chttp/native";
 import { encodeBlock, Method, type MethodCode } from "../compression.ts";
+import { serializeParams } from "../params.ts";
 import {
   CLIENT_VERSION,
   ClientPacketId,
@@ -165,11 +166,14 @@ export class StreamingWriter {
 
     if (revision >= REVISIONS.DBMS_MIN_PROTOCOL_VERSION_WITH_PARAMETERS) {
       const SETTING_FLAG_CUSTOM = 2;
-      for (const [key, val] of Object.entries(params)) {
+      // Use type-aware serialization based on query param types
+      const serialized = serializeParams(query, params);
+      for (const [key, val] of Object.entries(serialized)) {
         this.writeString(key);
         this.writeVarInt(SETTING_FLAG_CUSTOM);
-        // Parameters are sent as quoted strings for server-side parsing
-        const escaped = String(val).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        // TCP protocol requires Field dump format - strings are single-quoted
+        // ClickHouse parses the quoted string based on the declared param type
+        const escaped = val.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         this.writeString(`'${escaped}'`);
       }
       this.writeString(""); // end of params

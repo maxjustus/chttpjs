@@ -32,5 +32,5 @@
     }
   },
   "include": ["*.ts", "native/**/*.ts", "test/**/*.ts", "tcp_client/**/*.ts", "types.d.ts", "scripts/**/*.ts"],
-  "exclude": ["node_modules", "test/test-types.ts"]
+  "exclude": ["node_modules"]
 }

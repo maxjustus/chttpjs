@@ -174,6 +174,43 @@ export interface Codec {
   writePrefix?(writer: BufferWriter, col: Column): void;
   readPrefix?(reader: BufferReader): void;
   readKinds(reader: BufferReader): SerializationNode;
+  /**
+   * Serialize a single value to ClickHouse literal string syntax.
+   * @param value - The value to serialize
+   * @param insideContainer - If true, string values are quoted (for Array/Tuple/Map elements)
+   */
+  toLiteral(value: unknown, insideContainer?: boolean): string;
+}
+
+/**
+ * Escape a string for use in ClickHouse literal syntax.
+ * Escapes: backslash, single quote, tab, newline, carriage return
+ */
+export function escapeStringLiteral(s: string): string {
+  let result = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    switch (c) {
+      case 9: // tab
+        result += "\\t";
+        break;
+      case 10: // newline
+        result += "\\n";
+        break;
+      case 13: // carriage return
+        result += "\\r";
+        break;
+      case 39: // single quote
+        result += "\\'";
+        break;
+      case 92: // backslash
+        result += "\\\\";
+        break;
+      default:
+        result += s[i];
+    }
+  }
+  return result;
 }
 
 /**
@@ -308,6 +345,7 @@ export abstract class BaseCodec implements Codec {
   abstract zeroValue(): unknown;
   abstract estimateSize(rows: number): number;
   abstract decodeDense(reader: BufferReader, rows: number, state: DeserializerState): Column;
+  abstract toLiteral(value: unknown, insideContainer?: boolean): string;
 
   decode(reader: BufferReader, rows: number, state: DeserializerState): Column {
     if (state.serNode.kind === SerializationKind.Sparse) {
@@ -381,6 +419,16 @@ class NumericCodec<T extends TypedArray> extends BaseCodec {
   }
   estimateSize(rows: number) {
     return rows * this.Ctor.BYTES_PER_ELEMENT;
+  }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    // Bool type uses true/false literals
+    if (this.type === "Bool") {
+      return toBool(value) ? "true" : "false";
+    }
+    // All numeric types convert to string representation
+    const v = this.converter ? this.converter(value) : value;
+    return String(v);
   }
 }
 
@@ -477,6 +525,16 @@ class EnumCodec extends BaseCodec {
   estimateSize(rows: number): number {
     return rows * this.Ctor.BYTES_PER_ELEMENT;
   }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    // Enum literals are quoted strings
+    if (typeof value === "string") {
+      return `'${escapeStringLiteral(value)}'`;
+    }
+    // Numeric enum value - look up the name
+    const name = this.mapping.valueToName.get(this.toEnumValue(value));
+    return `'${escapeStringLiteral(name!)}'`;
+  }
 }
 
 class StringCodec extends BaseCodec {
@@ -506,6 +564,12 @@ class StringCodec extends BaseCodec {
   }
   estimateSize(rows: number) {
     return rows * 33;
+  }
+  toLiteral(value: unknown, insideContainer?: boolean): string {
+    if (value === null || value === undefined) return "NULL";
+    const escaped = escapeStringLiteral(coerceToString(value));
+    // Top-level strings are unquoted, inside containers they're quoted
+    return insideContainer ? `'${escaped}'` : escaped;
   }
 }
 
@@ -561,6 +625,10 @@ class UUIDCodec extends BaseCodec {
   }
   estimateSize(rows: number) {
     return rows * UUIDConst.BYTE_SIZE;
+  }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    return `'${toValidUUID(value)}'`;
   }
 }
 
@@ -643,6 +711,20 @@ class FixedStringCodec extends BaseCodec {
   estimateSize(rows: number) {
     return rows * this.len;
   }
+  toLiteral(value: unknown, insideContainer?: boolean): string {
+    if (value === null || value === undefined) return "NULL";
+    let str: string;
+    if (value instanceof Uint8Array) {
+      // Decode bytes to string, trimming trailing nulls
+      let end = value.length;
+      while (end > 0 && value[end - 1] === 0) end--;
+      str = new TextDecoder().decode(value.subarray(0, end));
+    } else {
+      str = coerceToString(value);
+    }
+    const escaped = escapeStringLiteral(str);
+    return insideContainer ? `'${escaped}'` : escaped;
+  }
 }
 
 class BigIntCodec extends BaseCodec {
@@ -704,6 +786,10 @@ class BigIntCodec extends BaseCodec {
   }
   estimateSize(rows: number) {
     return rows * this.byteSize;
+  }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    return String(this.coerce(value));
   }
 }
 
@@ -801,6 +887,14 @@ class DecimalCodec extends BaseCodec {
   }
   estimateSize(rows: number) {
     return rows * this.byteSize;
+  }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    // Decimal values are passed as unquoted numeric strings
+    if (typeof value === "bigint") {
+      return formatScaledBigInt(value, this.scale);
+    }
+    return toValidDecimal(value);
   }
 }
 
@@ -935,6 +1029,32 @@ class DateTime64Codec extends BaseCodec {
   estimateSize(rows: number) {
     return rows * 8;
   }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    // DateTime64 uses Unix timestamp with sub-second precision
+    if (value instanceof ClickHouseDateTime64) {
+      const scale = 10n ** BigInt(this.precision);
+      const seconds = value.ticks / scale;
+      const frac = value.ticks % scale;
+      if (frac === 0n) return String(seconds);
+      const fracStr = String(frac < 0n ? -frac : frac).padStart(this.precision, "0");
+      return `${seconds}.${fracStr}`;
+    }
+    if (value instanceof Date) {
+      // Convert Date to timestamp with proper precision
+      const ms = BigInt(value.getTime());
+      const scale = 10n ** BigInt(Math.abs(this.precision - 3));
+      const ticks = this.precision >= 3 ? ms * scale : ms / scale;
+      const fullScale = 10n ** BigInt(this.precision);
+      const seconds = ticks / fullScale;
+      const frac = ticks % fullScale;
+      if (frac === 0n) return String(seconds);
+      const fracStr = String(frac < 0n ? -frac : frac).padStart(this.precision, "0");
+      return `${seconds}.${fracStr}`;
+    }
+    // Numeric values are passed through
+    return String(value);
+  }
 }
 
 // handles Date, Date32, DateTime (ms since epoch / multiplier)
@@ -1025,6 +1145,20 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> extends BaseC
   estimateSize(rows: number) {
     return rows * this.Ctor.BYTES_PER_ELEMENT;
   }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    // Date/DateTime use Unix timestamp (seconds or days)
+    if (value instanceof Date) {
+      const units = Math.floor(value.getTime() / this.multiplier);
+      return String(units);
+    }
+    if (typeof value === "number") {
+      return String(Math.floor(value / this.multiplier));
+    }
+    // String dates - convert to timestamp
+    const d = toValidDate(value as string, this.type);
+    return String(Math.floor(d.getTime() / this.multiplier));
+  }
 }
 
 class IPv4Codec extends BaseCodec {
@@ -1068,6 +1202,10 @@ class IPv4Codec extends BaseCodec {
   estimateSize(rows: number) {
     return rows * 4;
   }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    return `'${toValidIPv4(value)}'`;
+  }
 }
 
 class IPv6Codec extends BaseCodec {
@@ -1102,6 +1240,10 @@ class IPv6Codec extends BaseCodec {
   }
   estimateSize(rows: number) {
     return rows * IPv6Const.BYTE_SIZE;
+  }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    return `'${toValidIPv6(value)}'`;
   }
 }
 
@@ -1237,6 +1379,18 @@ class ArrayCodec extends BaseCodec {
   readKinds(reader: BufferReader): SerializationNode {
     return readKinds1(reader, this.inner);
   }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    if (!isArrayLike(value)) {
+      throw new TypeError(`Expected array for ${this.type}, got ${typeof value}`);
+    }
+    const arr = value as ArrayLike<unknown> & Iterable<unknown>;
+    const elements: string[] = [];
+    for (const item of arr) {
+      elements.push(this.inner.toLiteral(item, true));
+    }
+    return `[${elements.join(", ")}]`;
+  }
 }
 
 // Delegates prefix handling to inner codec
@@ -1305,6 +1459,10 @@ class NullableCodec extends BaseCodec {
 
   readKinds(reader: BufferReader): SerializationNode {
     return readKinds1(reader, this.inner);
+  }
+  toLiteral(value: unknown, insideContainer?: boolean): string {
+    if (value === null || value === undefined) return "NULL";
+    return this.inner.toLiteral(value, insideContainer);
   }
 }
 
@@ -1461,6 +1619,10 @@ class LowCardinalityCodec extends BaseCodec {
   readKinds(reader: BufferReader): SerializationNode {
     return readKinds1(reader, this.inner);
   }
+  toLiteral(value: unknown, insideContainer?: boolean): string {
+    // LowCardinality is transparent - delegate to inner codec
+    return this.inner.toLiteral(value, insideContainer);
+  }
 }
 
 // Map is serialized as Array(Tuple(K, V))
@@ -1575,6 +1737,17 @@ class MapCodec extends BaseCodec {
   readKinds(reader: BufferReader): SerializationNode {
     return readKinds2(reader, this.keyCodec, this.valCodec);
   }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    // Maps can be Map objects or plain objects
+    const entries: [unknown, unknown][] =
+      value instanceof Map ? Array.from(value.entries()) : Object.entries(value as object);
+    const parts: string[] = [];
+    for (const [k, v] of entries) {
+      parts.push(`${this.keyCodec.toLiteral(k, true)}: ${this.valCodec.toLiteral(v, true)}`);
+    }
+    return `{${parts.join(", ")}}`;
+  }
 }
 
 class TupleCodec extends BaseCodec {
@@ -1667,6 +1840,25 @@ class TupleCodec extends BaseCodec {
       reader,
       this.elements.map((e) => e.codec),
     );
+  }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    // Tuples can be arrays or objects (for named tuples)
+    const parts: string[] = [];
+    if (Array.isArray(value)) {
+      for (let i = 0; i < this.elements.length; i++) {
+        parts.push(this.elements[i].codec.toLiteral(value[i], true));
+      }
+    } else if (typeof value === "object") {
+      // Named tuple as object - look up by name
+      for (const elem of this.elements) {
+        const v = elem.name ? (value as Record<string, unknown>)[elem.name] : undefined;
+        parts.push(elem.codec.toLiteral(v, true));
+      }
+    } else {
+      throw new TypeError(`Expected array or object for ${this.type}, got ${typeof value}`);
+    }
+    return `(${parts.join(", ")})`;
   }
 }
 
@@ -1812,6 +2004,12 @@ class VariantCodec implements Codec {
 
   readKinds(reader: BufferReader): SerializationNode {
     return readKindsMany(reader, this.codecs);
+  }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    // Find the matching variant and delegate to its codec
+    const idx = this.findVariantIndex(value, this.typeStrings);
+    return this.codecs[idx].toLiteral(value);
   }
 }
 
@@ -1960,6 +2158,13 @@ class DynamicCodec implements Codec {
 
   readKinds(reader: BufferReader): SerializationNode {
     return readKindsMany(reader, this.codecs);
+  }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    // Dynamic infers type at runtime
+    const vType = this.guessType(value);
+    const codec = getCodec(vType);
+    return codec.toLiteral(value);
   }
 }
 
@@ -2115,6 +2320,11 @@ export class JsonCodec implements Codec {
     // Combine typed paths (from schema) and dynamic paths (from readPrefix)
     const allCodecs = [...this.typedPaths.map((tp) => tp.codec), ...this.dynamicCodecs.values()];
     return readKindsMany(reader, allCodecs);
+  }
+  toLiteral(value: unknown): string {
+    if (value === null || value === undefined) return "NULL";
+    // JSON values are serialized as JSON strings
+    return `'${escapeStringLiteral(JSON.stringify(value))}'`;
   }
 }
 

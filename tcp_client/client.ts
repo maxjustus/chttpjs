@@ -76,20 +76,31 @@ export interface InsertOptions {
 
 export type { ExternalTableData };
 
+/** Query parameter value - supports primitives and complex types */
+export type QueryParamValue =
+  | string
+  | number
+  | boolean
+  | bigint
+  | null
+  | Date
+  | QueryParamValue[]
+  | { [key: string]: QueryParamValue };
+
 export interface QueryOptions {
   /** Per-query settings (merged with client defaults, overrides them) */
   settings?: ClickHouseSettings;
   /**
-   * Query parameters (substitution values). Scalars only - all values are sent as strings.
-   * For container types (Array, Map, Tuple), pass ClickHouse literal syntax as a string:
+   * Query parameters (substitution values). Supports scalars and complex types.
+   * Type is inferred from the query's {name: Type} syntax.
    * ```typescript
-   * { arr: "[1, 2, 3]" }              // Array(UInt32)
-   * { tags: "['foo', 'bar']" }        // Array(String)
-   * { m: "{'a': 1, 'b': 2}" }         // Map(String, UInt32)
-   * { t: "(1, 'hello')" }             // Tuple(UInt32, String)
+   * { arr: [1, 2, 3] }                // Array(UInt32)
+   * { tags: ['foo', 'bar'] }          // Array(String)
+   * { m: { a: 1, b: 2 } }             // Map(String, UInt32)
+   * { t: [1, 'hello'] }               // Tuple(UInt32, String) - arrays work for tuples
    * ```
    */
-  params?: Record<string, string | number | boolean | bigint>;
+  params?: Record<string, QueryParamValue>;
   signal?: AbortSignal;
   /** External tables to send with the query (available as temporary tables in the SQL) */
   externalTables?: Record<string, ExternalTableData>;

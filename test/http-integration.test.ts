@@ -579,5 +579,105 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       const parsed = JSON.parse(result.trim());
       assert.strictEqual(parsed.v, "9007199254740993");
     });
+
+    it("should use query parameters with Array", async () => {
+      const result = await collectText(
+        query("SELECT arraySum({ids: Array(UInt64)}) as sum FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { ids: [1, 2, 3, 4, 5] },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(Number(parsed.data[0].sum), 15);
+    });
+
+    it("should use query parameters with Tuple", async () => {
+      const result = await collectText(
+        query(
+          "SELECT tupleElement({point: Tuple(Int32, Int32)}, 1) as x, tupleElement({point: Tuple(Int32, Int32)}, 2) as y FORMAT JSON",
+          sessionId,
+          {
+            baseUrl,
+            auth,
+            params: { point: [10, 20] },
+          },
+        ),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(Number(parsed.data[0].x), 10);
+      assert.strictEqual(Number(parsed.data[0].y), 20);
+    });
+
+    it("should use query parameters with Map", async () => {
+      const result = await collectText(
+        query(
+          "SELECT {m: Map(String, UInt32)}['a'] as a, {m: Map(String, UInt32)}['b'] as b FORMAT JSON",
+          sessionId,
+          {
+            baseUrl,
+            auth,
+            params: { m: { a: 1, b: 2 } },
+          },
+        ),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(Number(parsed.data[0].a), 1);
+      assert.strictEqual(Number(parsed.data[0].b), 2);
+    });
+
+    it("should use query parameters with nested Array(Tuple)", async () => {
+      const result = await collectText(
+        query(
+          "SELECT arrayMap(t -> tupleElement(t, 1) + tupleElement(t, 2), {points: Array(Tuple(Int32, Int32))}) as sums FORMAT JSON",
+          sessionId,
+          {
+            baseUrl,
+            auth,
+            params: {
+              points: [
+                [1, 2],
+                [3, 4],
+                [5, 6],
+              ],
+            },
+          },
+        ),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.deepStrictEqual(parsed.data[0].sums, [3, 7, 11]);
+    });
+
+    it("should use query parameters with DateTime64", async () => {
+      const testDate = new Date("2024-06-15T10:30:45.123Z");
+      const result = await collectText(
+        query("SELECT toUnixTimestamp64Milli({ts: DateTime64(3)}) as ms FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { ts: testDate },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(Number(parsed.data[0].ms), testDate.getTime());
+    });
+
+    it("should use the same param multiple times", async () => {
+      const result = await collectText(
+        query("SELECT {id: UInt64} as a, {id: UInt64} + 1 as b FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { id: 42 },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(Number(parsed.data[0].a), 42);
+      assert.strictEqual(Number(parsed.data[0].b), 43);
+    });
   });
 });

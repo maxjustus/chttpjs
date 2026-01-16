@@ -25,13 +25,25 @@ export {
 import { encodeNative, type ExternalTableData, RecordBatch } from "@maxjustus/chttp/native";
 import { StreamBuffer } from "./native/io.ts";
 import { type CollectableAsyncGenerator, collectable } from "./util.ts";
+import { serializeParams } from "./params.ts";
 
 export type { CollectableAsyncGenerator } from "./util.ts";
 
 export type Compression = "lz4" | "zstd" | false;
 
+/** Query parameter value - supports primitives and complex types */
+export type QueryParamValue =
+  | string
+  | number
+  | boolean
+  | bigint
+  | null
+  | Date
+  | QueryParamValue[]
+  | { [key: string]: QueryParamValue };
+
 /** Query parameters for parameterized queries like SELECT {x:UInt64} */
-export type QueryParams = Record<string, string | number | boolean | bigint>;
+export type QueryParams = Record<string, QueryParamValue>;
 
 // AbortSignal.any() added in Node 20+, ES2024
 const AbortSignalAny = AbortSignal as typeof AbortSignal & {
@@ -179,10 +191,15 @@ function mergeParams(target: Record<string, string>, source?: Record<string, unk
 }
 
 /** Merge query parameters with param_ prefix for ClickHouse parameterized queries */
-function mergeQueryParams(target: Record<string, string>, source?: QueryParams): void {
+function mergeQueryParams(
+  target: Record<string, string>,
+  query: string,
+  source?: QueryParams,
+): void {
   if (!source) return;
-  for (const [key, value] of Object.entries(source)) {
-    target[`param_${key}`] = String(value);
+  const serialized = serializeParams(query, source);
+  for (const [key, value] of Object.entries(serialized)) {
+    target[`param_${key}`] = value;
   }
 }
 
@@ -335,7 +352,7 @@ async function insert(
     params.query_id = options.queryId;
   }
   mergeParams(params, options.settings);
-  mergeQueryParams(params, options.params);
+  mergeQueryParams(params, query, options.params);
 
   // Normalize all input types to Iterable<Uint8Array>
   // This ensures consistent chunking behavior (1MB threshold) for all inputs
@@ -677,7 +694,7 @@ async function* queryImpl(
     "queryId",
   ];
   mergeParams(params, options.settings);
-  mergeQueryParams(params, options.params);
+  mergeQueryParams(params, sql, options.params);
   for (const [key, value] of Object.entries(options)) {
     if (!reserved.includes(key) && value !== undefined) {
       params[key] = String(value);
