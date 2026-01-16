@@ -356,7 +356,16 @@ export class TcpClient {
     data: Iterable<RecordBatch> | AsyncIterable<RecordBatch>,
     options?: InsertOptions,
   ): CollectableAsyncGenerator<Packet>;
-  /** Insert row objects with auto-coercion using server schema (must contain all columns, no extras). */
+  /**
+   * Insert row objects with auto-coercion using server schema.
+   *
+   * By default with `INSERT INTO table VALUES`, all columns must be provided.
+   * To omit columns and use server DEFAULT expressions, specify an explicit column list:
+   * ```typescript
+   * client.insert("INSERT INTO table (col1, col2) VALUES", rows)
+   * ```
+   * Only the specified columns will be sent; omitted columns use their server-side defaults.
+   */
   insert(
     sql: string,
     data: Iterable<Record<string, unknown>> | AsyncIterable<Record<string, unknown>>,

@@ -284,6 +284,95 @@ describe("TCP Client Integration", () => {
     cleanupClient.close();
   });
 
+  test("explicit column list in INSERT uses server DEFAULT for omitted columns", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      const tableName = `test_defaults_${Date.now()}`;
+      await client.query(`
+        CREATE TABLE ${tableName} (
+          id UInt32,
+          name String DEFAULT 'anonymous',
+          counter UInt64 DEFAULT 42,
+          created DateTime DEFAULT now()
+        ) ENGINE = Memory
+      `);
+
+      // Insert only 'id' column - others should get server DEFAULTs
+      for await (const _ of client.insert(`INSERT INTO ${tableName} (id) VALUES`, [
+        { id: 1 },
+        { id: 2 },
+        { id: 3 },
+      ])) {
+      }
+
+      // Verify server DEFAULTs were applied
+      const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`);
+      const allRows: any[] = [];
+      for await (const packet of stream) {
+        if (packet.type === "Data") {
+          for (const row of packet.batch) {
+            allRows.push(row.toObject());
+          }
+        }
+      }
+
+      assert.strictEqual(allRows.length, 3);
+      // Verify DEFAULT values applied
+      assert.strictEqual(allRows[0].name, "anonymous");
+      assert.strictEqual(allRows[0].counter, 42n);
+      assert.ok(allRows[0].created instanceof Date, "created should be a Date");
+      assert.strictEqual(allRows[1].name, "anonymous");
+      assert.strictEqual(allRows[2].name, "anonymous");
+
+      await client.query(`DROP TABLE ${tableName}`);
+    } finally {
+      client.close();
+    }
+  });
+
+  test("explicit column list allows inserting subset of columns", async () => {
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      const tableName = `test_subset_cols_${Date.now()}`;
+      await client.query(`
+        CREATE TABLE ${tableName} (
+          id UInt32,
+          a String DEFAULT 'a_default',
+          b String DEFAULT 'b_default',
+          c String DEFAULT 'c_default'
+        ) ENGINE = Memory
+      `);
+
+      // Insert only 'id' and 'b' columns
+      for await (const _ of client.insert(`INSERT INTO ${tableName} (id, b) VALUES`, [
+        { id: 1, b: "custom_b" },
+      ])) {
+      }
+
+      const stream = client.query(`SELECT * FROM ${tableName}`);
+      const allRows: any[] = [];
+      for await (const packet of stream) {
+        if (packet.type === "Data") {
+          for (const row of packet.batch) {
+            allRows.push(row.toObject());
+          }
+        }
+      }
+
+      assert.strictEqual(allRows.length, 1);
+      assert.strictEqual(allRows[0].id, 1);
+      assert.strictEqual(allRows[0].a, "a_default"); // DEFAULT
+      assert.strictEqual(allRows[0].b, "custom_b"); // Provided
+      assert.strictEqual(allRows[0].c, "c_default"); // DEFAULT
+
+      await client.query(`DROP TABLE ${tableName}`);
+    } finally {
+      client.close();
+    }
+  });
+
   test("should read JSON columns with typed paths", async () => {
     const client = new TcpClient(options);
     await client.connect();

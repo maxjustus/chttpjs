@@ -9,20 +9,24 @@
   },
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/chttp.js",
       "require": "./dist/chttp.cjs"
     },
     "./lz4": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/chttp-lz4.js",
       "require": "./dist/chttp-lz4.cjs"
     },
     "./native": {
+      "types": "./dist/native/index.d.ts",
       "development": "./native/index.ts",
       "import": "./dist/native.js",
       "require": "./dist/native.cjs"
     },
     "./source": "./index.ts",
     "./tcp": {
+      "types": "./dist/tcp_client/index.d.ts",
       "development": "./tcp_client/index.ts",
       "import": "./dist/tcp.js",
       "require": "./dist/tcp.cjs"
@@ -39,7 +43,8 @@
   "scripts": {
     "prepare": "cp .hooks/* .git/hooks/ 2>/dev/null || true",
     "prepublishOnly": "npm run build",
-    "build": "npm run build:native && npm run build:native:cjs && npm run build:full && npm run build:full:cjs && npm run build:lz4 && npm run build:lz4:cjs && npm run build:tcp && npm run build:tcp:cjs && npm run build:cli && npm run build:copy-wasm",
+    "build": "npm run build:native && npm run build:native:cjs && npm run build:full && npm run build:full:cjs && npm run build:lz4 && npm run build:lz4:cjs && npm run build:tcp && npm run build:tcp:cjs && npm run build:cli && npm run build:copy-wasm && npm run build:types",
+    "build:types": "tsc -p tsconfig.build.json",
     "build:cli": "esbuild tcp_client/cli.ts --bundle --format=esm --outfile=dist/cli.js --platform=node --target=es2022 --external:lz4-napi --external:zstd-napi",
     "build:copy-wasm": "cp node_modules/@bokuweb/zstd-wasm/dist/common/zstd.wasm dist/",
     "build:native": "esbuild native/index.ts --bundle --format=esm --outfile=dist/native.js --platform=neutral --target=es2022 --minify --external:lz4-napi --external:zstd-napi",
@@ -55,6 +60,7 @@
     "test:integration": "NODE_OPTIONS=--conditions=development tsx --test test/integration.test.ts",
     "test:native": "NODE_OPTIONS=--conditions=development tsx --test test/native/*.test.ts",
     "test:dist": "npm run build && node test/test-dist.mjs",
+    "test:types": "npm run build && tsc -p test/tsconfig.types.json",
     "test:fuzz": "node --experimental-strip-types fuzz/parallel.ts --all",
     "test:fuzz:quick": "node --experimental-strip-types fuzz/parallel.ts --all --level=quick",
     "test:fuzz:verbose": "node --experimental-strip-types fuzz/parallel.ts --all --verbose",
