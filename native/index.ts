@@ -81,15 +81,30 @@ export interface PartialBlockState {
 }
 
 /**
+ * Thrown when block decode runs out of data mid-parse.
+ * Contains partial state to enable resumable decoding.
+ */
+export class BlockUnderflowError extends BufferUnderflowError {
+  readonly partial: PartialBlockState;
+
+  constructor(message: string, partial: PartialBlockState) {
+    super(message);
+    this.name = "BlockUnderflowError";
+    this.partial = partial;
+  }
+}
+
+/**
  * Decode a single Native format block using an existing BufferReader.
  * Supports resumable decoding: pass partial state from previous underflow to continue.
- * On BufferUnderflowError, reader.offset points to last successful column boundary.
+ * Throws BlockUnderflowError with partial state if more data is needed.
  */
 export function decodeNativeBlockWithReader(
   reader: BufferReader,
   options?: DecodeOptions,
   partial?: PartialBlockState,
-): BlockResult & { partial?: PartialBlockState } {
+): BlockResult {
+  const clientVersion = options?.clientVersion ?? 0;
   const startOffset = partial?.startOffset ?? reader.offset;
   let numCols: number;
   let numRows: number;
@@ -107,7 +122,6 @@ export function decodeNativeBlockWithReader(
     reader.offset = partial.resumeOffset;
   } else {
     // Fresh decode - parse header
-    const clientVersion = options?.clientVersion ?? 0;
     if (clientVersion > 0) {
       while (true) {
         const fieldId = reader.readVarint();
@@ -136,8 +150,6 @@ export function decodeNativeBlockWithReader(
     columnData = [];
     startColIndex = 0;
   }
-
-  const clientVersion = options?.clientVersion ?? 0;
 
   // Native format: per-column [name, type, [has_custom, [kinds...]], prefix, data]
   for (let i = startColIndex; i < numCols; i++) {
@@ -170,21 +182,17 @@ export function decodeNativeBlockWithReader(
       }
     } catch (err) {
       if (err instanceof BufferUnderflowError) {
-        // Return partial state for resumable retry
-        const partialState: PartialBlockState = {
-          columns: columns.slice(0, i), // Only fully parsed columns
+        // Reset reader to column boundary and throw with partial state
+        reader.offset = colStartOffset;
+        throw new BlockUnderflowError(err.message, {
+          columns: columns.slice(0, i),
           columnData: columnData.slice(0, i),
           numCols,
           numRows,
           nextColIndex: i,
           resumeOffset: colStartOffset,
           startOffset,
-        };
-        // Reset reader to column boundary for caller
-        reader.offset = colStartOffset;
-        // Attach partial state to error for caller to use
-        (err as BufferUnderflowError & { partial?: PartialBlockState }).partial = partialState;
-        throw err;
+        });
       }
       throw err;
     }

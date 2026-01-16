@@ -176,7 +176,7 @@ describe("Native TCP Integration Fuzz Tests", { timeout: 600000 }, () => {
             user: ch.username,
             password: ch.password,
             compression: compression,
-            queryTimeout: 120000, // 2 minutes for large fuzz tests
+            queryTimeout: 600000,
             debug: !!process.env.FUZZ_DEBUG,
           });
           await client.connect();

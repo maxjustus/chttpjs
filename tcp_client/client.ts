@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as net from "node:net";
 import * as tls from "node:tls";
 import {
+  BlockUnderflowError,
   BufferReader,
   BufferUnderflowError,
   BufferWriter,
@@ -853,7 +854,8 @@ export class TcpClient {
       // Native format blocks can span multiple compressed chunks (~1MiB each).
       // Uses column-level checkpointing: on underflow, saves completed columns
       // so retry resumes from last column boundary instead of re-parsing everything.
-      const start = performance.now();
+      const debug = this.options.debug;
+      const start = debug ? performance.now() : 0;
       let chunksRead = 0;
       let readTimeMs = 0;
       let decodeTimeMs = 0;
@@ -866,12 +868,13 @@ export class TcpClient {
       // Persistent reader and partial decode state for resumable decoding
       const reader = new BufferReader(buffer.subarray(0, 0), 0, options);
       let partial: PartialBlockState | undefined;
+      let resumedFromCol = -1;
 
       while (true) {
         // Read first chunk or more data after underflow
-        const readStart = performance.now();
+        const readStart = debug ? performance.now() : 0;
         const chunk = await this.reader!.readCompressedBlock();
-        readTimeMs += performance.now() - readStart;
+        if (debug) readTimeMs += performance.now() - readStart;
         chunksRead++;
 
         // Grow buffer if needed (double capacity)
@@ -887,25 +890,26 @@ export class TcpClient {
         // Update reader's buffer
         reader.replaceBuffer(buffer.subarray(0, bufferLen));
 
-        const decodeStart = performance.now();
+        const decodeStart = debug ? performance.now() : 0;
         try {
           const result = decodeNativeBlockWithReader(reader, options, partial);
-          decodeTimeMs += performance.now() - decodeStart;
-          result.decodeTimeMs = performance.now() - start;
-
-          if (this.options.debug && chunksRead > 1) {
-            const resumeInfo = partial ? ` resumed@col${partial.nextColIndex}` : "";
-            this.log(
-              `block: ${chunksRead} chunks, ${bufferLen} bytes, ` +
-                `read=${readTimeMs.toFixed(1)}ms decode=${decodeTimeMs.toFixed(1)}ms${resumeInfo}`,
-            );
+          if (debug) {
+            decodeTimeMs += performance.now() - decodeStart;
+            result.decodeTimeMs = performance.now() - start;
+            if (chunksRead > 1) {
+              const resumeInfo = resumedFromCol >= 0 ? ` resumed@col${resumedFromCol}` : "";
+              this.log(
+                `block: ${chunksRead} chunks, ${bufferLen} bytes, ` +
+                  `read=${readTimeMs.toFixed(1)}ms decode=${decodeTimeMs.toFixed(1)}ms${resumeInfo}`,
+              );
+            }
           }
           return RecordBatch.from(result);
         } catch (err) {
-          decodeTimeMs += performance.now() - decodeStart;
-          if (err instanceof BufferUnderflowError) {
-            // Extract partial state for resumable retry
-            partial = (err as BufferUnderflowError & { partial?: PartialBlockState }).partial;
+          if (debug) decodeTimeMs += performance.now() - decodeStart;
+          if (err instanceof BlockUnderflowError) {
+            partial = err.partial;
+            resumedFromCol = partial.nextColIndex;
             continue;
           }
           throw err;
