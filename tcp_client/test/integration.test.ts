@@ -373,6 +373,63 @@ describe("TCP Client Integration", () => {
     }
   });
 
+  test("Nullable column to non-nullable target: NULL becomes type default (not column DEFAULT)", async () => {
+    // NOTE: Native format does NOT support column DEFAULT expressions for NULL values.
+    // NULLs are coerced to TYPE defaults (0, "", etc.), not column DEFAULTs.
+    // See: https://github.com/ClickHouse/ClickHouse/issues/58662
+    // To use column DEFAULTs, omit the column entirely via explicit column list in INSERT.
+    const client = new TcpClient(options);
+    await client.connect();
+    try {
+      const tableName = `test_null_coerce_${Date.now()}`;
+      await client.query(`
+        CREATE TABLE ${tableName} (
+          id UInt32,
+          name String DEFAULT 'default_name',
+          counter UInt64 DEFAULT 999
+        ) ENGINE = Memory
+      `);
+
+      // Send Nullable columns to non-nullable targets
+      const batch = batchFromRows(
+        [
+          { name: "id", type: "Nullable(UInt32)" },
+          { name: "name", type: "Nullable(String)" },
+          { name: "counter", type: "Nullable(UInt64)" },
+        ],
+        [
+          [1, "alice", 100n],
+          [2, null, null], // NULLs become type defaults: "" and 0n
+        ],
+      );
+
+      for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, batch)) {
+      }
+
+      const stream = client.query(`SELECT * FROM ${tableName} ORDER BY id`);
+      const allRows: any[] = [];
+      for await (const packet of stream) {
+        if (packet.type === "Data") {
+          for (const row of packet.batch) {
+            allRows.push(row.toObject());
+          }
+        }
+      }
+
+      assert.strictEqual(allRows.length, 2);
+      // Row 1: all provided values
+      assert.strictEqual(allRows[0].name, "alice");
+      assert.strictEqual(allRows[0].counter, 100n);
+      // Row 2: NULL → TYPE defaults (not column DEFAULTs!)
+      assert.strictEqual(allRows[1].name, ""); // Type default, NOT 'default_name'
+      assert.strictEqual(allRows[1].counter, 0n); // Type default, NOT 999n
+
+      await client.query(`DROP TABLE ${tableName}`);
+    } finally {
+      client.close();
+    }
+  });
+
   test("should read JSON columns with typed paths", async () => {
     const client = new TcpClient(options);
     await client.connect();
