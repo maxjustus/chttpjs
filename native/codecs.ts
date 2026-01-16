@@ -3,15 +3,6 @@
  * Each codec handles a specific ClickHouse type.
  */
 
-interface NumericLikeCodec extends Codec {
-  readonly Ctor: TypedArrayConstructor<any>;
-  readonly converter?: (v: unknown) => number | bigint;
-}
-
-function isNumericLikeCodec(codec: Codec): codec is NumericLikeCodec {
-  return typeof (codec as any)?.Ctor === "function";
-}
-
 import {
   ArrayColumn,
   type Column,
@@ -62,6 +53,62 @@ import {
   writeBigInt128,
   writeBigInt256,
 } from "./types.ts";
+import {
+  coerceToString,
+  INT128_MAX,
+  INT128_MIN,
+  INT256_MAX,
+  INT256_MIN,
+  INT32_MAX,
+  INT32_MIN,
+  INT64_MAX,
+  INT64_MIN,
+  IPV4_REGEX,
+  isArrayLike,
+  toBigIntInRange,
+  toBool,
+  toInt16,
+  toInt32,
+  toInt64,
+  toInt8,
+  toNumber,
+  toUInt16,
+  toUInt32,
+  toUInt64,
+  toUInt8,
+  toValidDate,
+  toValidDecimal,
+  toValidIPv4,
+  toValidIPv6,
+  toValidUUID,
+  UINT128_MAX,
+  UINT16_MAX,
+  UINT32_MAX,
+  UINT256_MAX,
+} from "./coercion.ts";
+
+// Re-export for public API
+export {
+  toBigInt,
+  toInt16,
+  toInt32,
+  toInt64,
+  toInt8,
+  toNumber,
+  toUInt16,
+  toUInt32,
+  toUInt64,
+  toUInt8,
+} from "./coercion.ts";
+
+interface NumericLikeCodec extends Codec {
+  readonly Ctor: TypedArrayConstructor<any>;
+  readonly converter?: (v: unknown) => number | bigint;
+}
+
+function isNumericLikeCodec(codec: Codec): codec is NumericLikeCodec {
+  return typeof (codec as any)?.Ctor === "function";
+}
 
 export function defaultDeserializerState(): DeserializerState {
   return {
@@ -116,231 +163,6 @@ function readKindsMany(reader: BufferReader, children: readonly Codec[]): Serial
 // Alias for brevity
 const { MS_PER_DAY, MS_PER_SECOND } = Time;
 
-// Coercion helpers for type conversion during insert.
-// Note: TypedArrays wrap/truncate on overflow; validate ranges to avoid silent corruption.
-// Throws TypeError/RangeError for values that cannot be safely coerced.
-export function toNumber(v: unknown): number {
-  if (typeof v === "number") return v;
-  if (typeof v === "boolean") return v ? 1 : 0;
-  if (typeof v === "bigint") return Number(v);
-  if (v == null) return 0;
-  if (typeof v === "string") {
-    const trimmed = v.trim();
-    if (trimmed.length === 0) {
-      throw new TypeError(`Cannot coerce string "${v}" to number`);
-    }
-    const n = Number(trimmed);
-    if (Number.isNaN(n)) {
-      throw new TypeError(`Cannot coerce string "${v}" to number`);
-    }
-    return n;
-  }
-  const n = +(v as any);
-  if (Number.isNaN(n)) {
-    throw new TypeError(`Cannot coerce ${typeof v} "${v}" to number`);
-  }
-  return n;
-}
-
-function stringifyReplacer(_key: string, value: unknown): unknown {
-  if (typeof value === "bigint") return value.toString();
-  if (value instanceof Map) return Object.fromEntries(value);
-  if (value instanceof Set) return Array.from(value);
-  if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
-    return Array.from(value as unknown as ArrayLike<number>);
-  }
-  return value;
-}
-
-function coerceToString(v: unknown): string {
-  if (v == null) return "";
-  if (v instanceof Date) return v.toJSON();
-  if (v instanceof ClickHouseDateTime64) return v.toJSON();
-  switch (typeof v) {
-    case "string":
-    case "number":
-    case "boolean":
-    case "bigint":
-      return String(v);
-    case "object": {
-      const s = JSON.stringify(v, stringifyReplacer);
-      return typeof s === "string" ? s : "";
-    }
-    default:
-      return String(v);
-  }
-}
-
-export function toBigInt(v: unknown): bigint {
-  if (typeof v === "bigint") return v;
-  if (typeof v === "boolean") return v ? 1n : 0n;
-  if (typeof v === "number") return BigInt(Math.trunc(v));
-  if (v == null) return 0n;
-  try {
-    return BigInt(v as any);
-  } catch {
-    throw new TypeError(`Cannot coerce ${typeof v} "${v}" to bigint`);
-  }
-}
-
-const INT8_MIN = -0x80;
-const INT8_MAX = 0x7f;
-const UINT8_MAX = 0xff;
-const INT16_MIN = -0x8000;
-const INT16_MAX = 0x7fff;
-const UINT16_MAX = 0xffff;
-const INT32_MIN = -0x80000000;
-const INT32_MAX = 0x7fffffff;
-const UINT32_MAX = 0xffffffff;
-
-const INT64_MIN = -(1n << 63n);
-const INT64_MAX = (1n << 63n) - 1n;
-const UINT64_MAX = (1n << 64n) - 1n;
-const INT128_MIN = -(1n << 127n);
-const INT128_MAX = (1n << 127n) - 1n;
-const UINT128_MAX = (1n << 128n) - 1n;
-const INT256_MIN = -(1n << 255n);
-const INT256_MAX = (1n << 255n) - 1n;
-const UINT256_MAX = (1n << 256n) - 1n;
-
-function toIntInRange(v: unknown, typeName: string, min: number, max: number): number {
-  const n = toNumber(v);
-  if (!Number.isFinite(n)) {
-    throw new TypeError(`Cannot coerce ${typeof v} "${v}" to ${typeName}`);
-  }
-  if (!Number.isInteger(n)) {
-    throw new TypeError(`Cannot coerce ${typeof v} "${v}" to ${typeName} (expected integer)`);
-  }
-  if (n < min || n > max) {
-    throw new RangeError(`${typeName} out of range: ${n} not in [${min}, ${max}]`);
-  }
-  return n;
-}
-
-function toBigIntInRange(v: unknown, typeName: string, min: bigint, max: bigint): bigint {
-  const b =
-    typeof v === "number"
-      ? (() => {
-          if (!Number.isFinite(v)) {
-            throw new TypeError(`Cannot coerce number "${v}" to ${typeName}`);
-          }
-          if (!Number.isInteger(v)) {
-            throw new TypeError(`Cannot coerce number "${v}" to ${typeName} (expected integer)`);
-          }
-          if (!Number.isSafeInteger(v)) {
-            throw new RangeError(
-              `${typeName} cannot safely represent number "${v}". Use bigint or string.`,
-            );
-          }
-          return BigInt(v);
-        })()
-      : toBigInt(v);
-
-  if (b < min || b > max) {
-    throw new RangeError(`${typeName} out of range: ${b} not in [${min}, ${max}]`);
-  }
-  return b;
-}
-
-export const toUInt8 = (v: unknown) => toIntInRange(v, "UInt8", 0, UINT8_MAX);
-export const toInt8 = (v: unknown) => toIntInRange(v, "Int8", INT8_MIN, INT8_MAX);
-export const toUInt16 = (v: unknown) => toIntInRange(v, "UInt16", 0, UINT16_MAX);
-export const toInt16 = (v: unknown) => toIntInRange(v, "Int16", INT16_MIN, INT16_MAX);
-export const toUInt32 = (v: unknown) => toIntInRange(v, "UInt32", 0, UINT32_MAX);
-export const toInt32 = (v: unknown) => toIntInRange(v, "Int32", INT32_MIN, INT32_MAX);
-export const toUInt64 = (v: unknown) => toBigIntInRange(v, "UInt64", 0n, UINT64_MAX);
-export const toInt64 = (v: unknown) => toBigIntInRange(v, "Int64", INT64_MIN, INT64_MAX);
-
-function toBool(v: unknown): number {
-  if (typeof v === "boolean") return v ? 1 : 0;
-  if (typeof v === "number") return v !== 0 ? 1 : 0;
-  if (v == null) return 0;
-  if (typeof v === "string") {
-    const lower = v.toLowerCase();
-    if (lower === "true" || lower === "1") return 1;
-    if (lower === "false" || lower === "0") return 0;
-    throw new TypeError(`Cannot coerce string "${v}" to Bool`);
-  }
-  throw new TypeError(`Cannot coerce ${typeof v} to Bool`);
-}
-
-function toValidDate(v: unknown, typeName: string): Date {
-  const d = new Date(v as any);
-  if (Number.isNaN(d.getTime())) {
-    throw new TypeError(`Cannot coerce "${v}" to ${typeName}`);
-  }
-  return d;
-}
-
-const IPV4_REGEX = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-
-function toValidIPv4(v: unknown): string {
-  if (v == null) return "0.0.0.0";
-  const s = String(v);
-  const m = IPV4_REGEX.exec(s);
-  if (!m) {
-    throw new TypeError(`Invalid IPv4 address: "${s}"`);
-  }
-  for (let i = 1; i <= 4; i++) {
-    const octet = parseInt(m[i], 10);
-    if (octet > 255) {
-      throw new TypeError(`Invalid IPv4 address: "${s}" (octet ${octet} > 255)`);
-    }
-  }
-  return s;
-}
-
-function toValidIPv6(v: unknown): string {
-  if (v == null) return "::";
-  return String(v);
-}
-
-const UUID_REGEX =
-  /^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$/;
-
-function toValidUUID(v: unknown): string {
-  if (v == null) return "00000000-0000-0000-0000-000000000000";
-  const s = String(v);
-  if (!UUID_REGEX.test(s)) {
-    throw new TypeError(`Invalid UUID: "${s}"`);
-  }
-  return s;
-}
-
-function toValidDecimal(v: unknown): string {
-  if (v == null) return "0";
-  if (typeof v === "bigint") return String(v);
-  const s = String(v);
-  // Basic validation: optional sign, digits, optional decimal point with digits
-  if (!/^-?\d+(\.\d+)?$/.test(s)) {
-    throw new TypeError(`Invalid Decimal: "${s}"`);
-  }
-  return s;
-}
-
-/** Check if value is an array-like (regular array or TypedArray) */
-function isArrayLike(v: unknown): v is unknown[] | TypedArray {
-  return Array.isArray(v) || (ArrayBuffer.isView(v) && !(v instanceof DataView));
-}
-
-/**
- * Decode groups from reader based on discriminator counts.
- */
-function decodeGroups(
-  reader: BufferReader,
-  codecs: Codec[],
-  counts: Map<number, number>,
-  state: DeserializerState,
-): Map<number, Column> {
-  const groups = new Map<number, Column>();
-  for (let i = 0; i < codecs.length; i++) {
-    if (counts.has(i)) {
-      groups.set(i, codecs[i].decode(reader, counts.get(i)!, childState(state, i)));
-    }
-  }
-  return groups;
-}
-
 export interface Codec {
   /** ClickHouse type string this codec handles */
   readonly type: string;
@@ -352,31 +174,6 @@ export interface Codec {
   writePrefix?(writer: BufferWriter, col: Column): void;
   readPrefix?(reader: BufferReader): void;
   readKinds(reader: BufferReader): SerializationNode;
-}
-
-/**
- * Base class for codecs that support sparse serialization.
- * Centralizes the sparse check pattern - subclasses implement decodeDense().
- */
-export abstract class BaseCodec implements Codec {
-  abstract readonly type: string;
-  abstract encode(col: Column, sizeHint?: number): Uint8Array;
-  abstract fromValues(values: unknown[] | TypedArray): Column;
-  abstract zeroValue(): unknown;
-  abstract estimateSize(rows: number): number;
-  abstract decodeDense(reader: BufferReader, rows: number, state: DeserializerState): Column;
-
-  decode(reader: BufferReader, rows: number, state: DeserializerState): Column {
-    if (state.serNode.kind === SerializationKind.Sparse) {
-      return readSparse(this, reader, rows, state);
-    }
-    return this.decodeDense(reader, rows, state);
-  }
-
-  readKinds(reader: BufferReader): SerializationNode {
-    const kind = reader.readU8();
-    return { kind, children: [] };
-  }
 }
 
 /**
@@ -498,6 +295,31 @@ function readSparse(
   }
 
   return codec.fromValues(resultValues);
+}
+
+/**
+ * Base class for codecs that support sparse serialization.
+ * Centralizes the sparse check pattern - subclasses implement decodeDense().
+ */
+export abstract class BaseCodec implements Codec {
+  abstract readonly type: string;
+  abstract encode(col: Column, sizeHint?: number): Uint8Array;
+  abstract fromValues(values: unknown[] | TypedArray): Column;
+  abstract zeroValue(): unknown;
+  abstract estimateSize(rows: number): number;
+  abstract decodeDense(reader: BufferReader, rows: number, state: DeserializerState): Column;
+
+  decode(reader: BufferReader, rows: number, state: DeserializerState): Column {
+    if (state.serNode.kind === SerializationKind.Sparse) {
+      return readSparse(this, reader, rows, state);
+    }
+    return this.decodeDense(reader, rows, state);
+  }
+
+  readKinds(reader: BufferReader): SerializationNode {
+    const kind = reader.readU8();
+    return { kind, children: [] };
+  }
 }
 
 class NumericCodec<T extends TypedArray> extends BaseCodec {
@@ -1849,6 +1671,24 @@ class TupleCodec extends BaseCodec {
 }
 
 /**
+ * Decode groups from reader based on discriminator counts. used by VariantCodec and DynamicCodec
+ */
+function decodeGroups(
+  reader: BufferReader,
+  codecs: Codec[],
+  counts: Map<number, number>,
+  state: DeserializerState,
+): Map<number, Column> {
+  const groups = new Map<number, Column>();
+  for (let i = 0; i < codecs.length; i++) {
+    if (counts.has(i)) {
+      groups.set(i, codecs[i].decode(reader, counts.get(i)!, childState(state, i)));
+    }
+  }
+  return groups;
+}
+
+/**
  * VariantCodec handles Variant(T1, T2, ...) types.
  *
  * Does NOT extend BaseCodec because:
@@ -2278,27 +2118,30 @@ export class JsonCodec implements Codec {
   }
 }
 
-// LRU codec cache. JS Maps iterate in insertion order, so deleting and
-// re-inserting moves a key to the end. Evicting map.keys().next() drops oldest.
-const CODEC_CACHE = new Map<string, Codec>();
-const CODEC_CACHE_LIMIT = 131072;
+// Extracts the content between the outermost parentheses: "Array(Int32)" → "Int32"
+function extractTypeArgs(type: string): string {
+  return type.substring(type.indexOf("(") + 1, type.lastIndexOf(")"));
+}
 
-export function getCodec(type: string): Codec {
-  const cached = CODEC_CACHE.get(type);
-  if (cached !== undefined) {
-    CODEC_CACHE.delete(type);
-    CODEC_CACHE.set(type, cached);
-    return cached;
-  }
+/**
+ * Parse typed paths from a JSON type string.
+ * Reuses parseTupleElements for the "name Type" parsing, filters out config params.
+ */
+function parseJsonTypedPaths(type: string): { name: string; type: string }[] {
+  if (type === "JSON" || !type.includes("(")) return [];
+  const inner = extractTypeArgs(type);
+  if (!inner) return [];
 
-  const codec = createCodec(type);
-  CODEC_CACHE.set(type, codec);
+  // Reuse parseTupleElements which handles "name Type" format
+  const elements = parseTupleElements(inner);
 
-  if (CODEC_CACHE.size > CODEC_CACHE_LIMIT) {
-    CODEC_CACHE.delete(CODEC_CACHE.keys().next().value!);
-  }
-
-  return codec;
+  // Filter to only named elements, excluding config params and SKIP directives
+  return elements
+    .filter(
+      (el): el is { name: string; type: string } =>
+        el.name !== null && !el.type.includes("=") && !el.name.toUpperCase().startsWith("SKIP"),
+    )
+    .map((el) => ({ name: el.name, type: el.type }));
 }
 
 function createCodec(type: string): Codec {
@@ -2419,28 +2262,25 @@ function createCodec(type: string): Codec {
   throw new Error(`Unknown type: ${type}`);
 }
 
-// Extracts the content between the outermost parentheses: "Array(Int32)" → "Int32"
-function extractTypeArgs(type: string): string {
-  return type.substring(type.indexOf("(") + 1, type.lastIndexOf(")"));
-}
+// LRU codec cache. JS Maps iterate in insertion order, so deleting and
+// re-inserting moves a key to the end. Evicting map.keys().next() drops oldest.
+const CODEC_CACHE = new Map<string, Codec>();
+const CODEC_CACHE_LIMIT = 131072;
 
-/**
- * Parse typed paths from a JSON type string.
- * Reuses parseTupleElements for the "name Type" parsing, filters out config params.
- */
-function parseJsonTypedPaths(type: string): { name: string; type: string }[] {
-  if (type === "JSON" || !type.includes("(")) return [];
-  const inner = extractTypeArgs(type);
-  if (!inner) return [];
+export function getCodec(type: string): Codec {
+  const cached = CODEC_CACHE.get(type);
+  if (cached !== undefined) {
+    CODEC_CACHE.delete(type);
+    CODEC_CACHE.set(type, cached);
+    return cached;
+  }
 
-  // Reuse parseTupleElements which handles "name Type" format
-  const elements = parseTupleElements(inner);
+  const codec = createCodec(type);
+  CODEC_CACHE.set(type, codec);
 
-  // Filter to only named elements, excluding config params and SKIP directives
-  return elements
-    .filter(
-      (el): el is { name: string; type: string } =>
-        el.name !== null && !el.type.includes("=") && !el.name.toUpperCase().startsWith("SKIP"),
-    )
-    .map((el) => ({ name: el.name, type: el.type }));
+  if (CODEC_CACHE.size > CODEC_CACHE_LIMIT) {
+    CODEC_CACHE.delete(CODEC_CACHE.keys().next().value!);
+  }
+
+  return codec;
 }
