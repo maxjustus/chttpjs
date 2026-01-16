@@ -2,14 +2,17 @@ import { randomUUID } from "node:crypto";
 import * as net from "node:net";
 import * as tls from "node:tls";
 import {
+  BufferReader,
   BufferUnderflowError,
   BufferWriter,
   type ColumnDef,
   decodeNativeBlock,
+  decodeNativeBlockWithReader,
   type ExternalTableData,
   getCodec,
+  type PartialBlockState,
   RecordBatch,
-} from "@maxjustus/chttp/native";
+} from "../native/index.ts";
 import { init as initCompression, Method, type MethodCode } from "../compression.ts";
 import type { ClickHouseSettings } from "../settings.ts";
 import { type CollectableAsyncGenerator, collectable } from "../util.ts";
@@ -847,11 +850,67 @@ export class TcpClient {
     const options = { clientVersion: Number(this.serverHello!.revision) };
 
     if (compressed) {
-      const decompressed = await this.reader!.readCompressedBlock();
+      // Native format blocks can span multiple compressed chunks (~1MiB each).
+      // Uses column-level checkpointing: on underflow, saves completed columns
+      // so retry resumes from last column boundary instead of re-parsing everything.
       const start = performance.now();
-      const result = decodeNativeBlock(decompressed, 0, options);
-      result.decodeTimeMs = performance.now() - start;
-      return RecordBatch.from(result);
+      let chunksRead = 0;
+      let readTimeMs = 0;
+      let decodeTimeMs = 0;
+
+      // Start with 2MB buffer, grow as needed (chunks are ~1MB each)
+      let bufferCapacity = 2 * 1024 * 1024;
+      let buffer = new Uint8Array(bufferCapacity);
+      let bufferLen = 0;
+
+      // Persistent reader and partial decode state for resumable decoding
+      const reader = new BufferReader(buffer.subarray(0, 0), 0, options);
+      let partial: PartialBlockState | undefined;
+
+      while (true) {
+        // Read first chunk or more data after underflow
+        const readStart = performance.now();
+        const chunk = await this.reader!.readCompressedBlock();
+        readTimeMs += performance.now() - readStart;
+        chunksRead++;
+
+        // Grow buffer if needed (double capacity)
+        if (bufferLen + chunk.length > bufferCapacity) {
+          bufferCapacity = Math.max(bufferCapacity * 2, bufferLen + chunk.length);
+          const newBuffer = new Uint8Array(bufferCapacity);
+          newBuffer.set(buffer.subarray(0, bufferLen));
+          buffer = newBuffer;
+        }
+        buffer.set(chunk, bufferLen);
+        bufferLen += chunk.length;
+
+        // Update reader's buffer
+        reader.replaceBuffer(buffer.subarray(0, bufferLen));
+
+        const decodeStart = performance.now();
+        try {
+          const result = decodeNativeBlockWithReader(reader, options, partial);
+          decodeTimeMs += performance.now() - decodeStart;
+          result.decodeTimeMs = performance.now() - start;
+
+          if (this.options.debug && chunksRead > 1) {
+            const resumeInfo = partial ? ` resumed@col${partial.nextColIndex}` : "";
+            this.log(
+              `block: ${chunksRead} chunks, ${bufferLen} bytes, ` +
+                `read=${readTimeMs.toFixed(1)}ms decode=${decodeTimeMs.toFixed(1)}ms${resumeInfo}`,
+            );
+          }
+          return RecordBatch.from(result);
+        } catch (err) {
+          decodeTimeMs += performance.now() - decodeStart;
+          if (err instanceof BufferUnderflowError) {
+            // Extract partial state for resumable retry
+            partial = (err as BufferUnderflowError & { partial?: PartialBlockState }).partial;
+            continue;
+          }
+          throw err;
+        }
+      }
     }
 
     // For uncompressed, we need to handle streaming reads which might span multiple chunks.

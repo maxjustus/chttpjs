@@ -66,70 +66,127 @@ interface BlockResult extends Block {
 }
 
 /**
- * Decode a single Native format block from a buffer.
- * Returns the decoded data and the number of bytes consumed.
- * Use this for streaming scenarios where you need to track buffer position.
+ * Partial decode state for resumable decoding.
+ * When underflow occurs mid-block, this captures completed columns
+ * so retry can resume without re-parsing them.
  */
-export function decodeNativeBlock(
-  data: Uint8Array,
-  offset: number,
+export interface PartialBlockState {
+  columns: ColumnDef[];
+  columnData: Column[];
+  numCols: number;
+  numRows: number;
+  nextColIndex: number;
+  resumeOffset: number;
+  startOffset: number;
+}
+
+/**
+ * Decode a single Native format block using an existing BufferReader.
+ * Supports resumable decoding: pass partial state from previous underflow to continue.
+ * On BufferUnderflowError, reader.offset points to last successful column boundary.
+ */
+export function decodeNativeBlockWithReader(
+  reader: BufferReader,
   options?: DecodeOptions,
-): BlockResult {
-  const reader = new BufferReader(data, offset, options);
-  const startOffset = reader.offset;
+  partial?: PartialBlockState,
+): BlockResult & { partial?: PartialBlockState } {
+  const startOffset = partial?.startOffset ?? reader.offset;
+  let numCols: number;
+  let numRows: number;
+  let columns: ColumnDef[];
+  let columnData: Column[];
+  let startColIndex: number;
 
-  const clientVersion = options?.clientVersion ?? 0;
-  if (clientVersion > 0) {
-    while (true) {
-      const fieldId = reader.readVarint();
-      if (fieldId === BlockInfoField.End) break;
-      if (fieldId === BlockInfoField.IsOverflows)
-        reader.offset += 1; // is_overflows
-      else if (fieldId === BlockInfoField.BucketNum) reader.offset += 4; // bucket_num
-    }
-  }
-
-  const numCols = reader.readVarint();
-  const numRows = reader.readVarint();
-
-  // Empty block signals end of data
-  if (numCols === 0 && numRows === 0) {
-    return {
-      columns: [],
-      columnData: [],
-      rowCount: 0,
-      bytesConsumed: reader.offset - startOffset,
-      isEndMarker: true,
-    };
-  }
-
-  const columns: ColumnDef[] = [];
-  const columnData: Column[] = [];
-
-  // Native format: per-column [name, type, [has_custom, [kinds...]], prefix, data]
-  for (let i = 0; i < numCols; i++) {
-    const name = reader.readString();
-    const type = reader.readString();
-    columns.push({ name, type });
-
-    const codec = getCodec(type);
-
-    let serNode: SerializationNode = DEFAULT_DENSE_NODE;
-    if (clientVersion >= 54454) {
-      const hasCustomSerialization = reader.readU8() !== 0;
-      if (hasCustomSerialization) {
-        serNode = codec.readKinds(reader);
+  if (partial) {
+    // Resume from checkpoint
+    numCols = partial.numCols;
+    numRows = partial.numRows;
+    columns = partial.columns;
+    columnData = partial.columnData;
+    startColIndex = partial.nextColIndex;
+    reader.offset = partial.resumeOffset;
+  } else {
+    // Fresh decode - parse header
+    const clientVersion = options?.clientVersion ?? 0;
+    if (clientVersion > 0) {
+      while (true) {
+        const fieldId = reader.readVarint();
+        if (fieldId === BlockInfoField.End) break;
+        if (fieldId === BlockInfoField.IsOverflows)
+          reader.offset += 1; // is_overflows
+        else if (fieldId === BlockInfoField.BucketNum) reader.offset += 4; // bucket_num
       }
     }
 
-    const state: DeserializerState = { serNode, sparseRuntime: new Map() };
-    // Only read prefix and decode when there are rows - empty blocks are schema-only
-    if (numRows > 0) {
-      codec.readPrefix?.(reader);
-      columnData.push(codec.decode(reader, numRows, state));
-    } else {
-      // Schema-only block: no prefix or data, create empty column
-      columnData.push(new DataColumn(type, []));
+    numCols = reader.readVarint();
+    numRows = reader.readVarint();
+
+    // Empty block signals end of data
+    if (numCols === 0 && numRows === 0) {
+      return {
+        columns: [],
+        columnData: [],
+        rowCount: 0,
+        bytesConsumed: reader.offset - startOffset,
+        isEndMarker: true,
+      };
+    }
+
+    columns = [];
+    columnData = [];
+    startColIndex = 0;
+  }
+
+  const clientVersion = options?.clientVersion ?? 0;
+
+  // Native format: per-column [name, type, [has_custom, [kinds...]], prefix, data]
+  for (let i = startColIndex; i < numCols; i++) {
+    // Checkpoint: offset before parsing this column
+    const colStartOffset = reader.offset;
+
+    try {
+      const name = reader.readString();
+      const type = reader.readString();
+      columns.push({ name, type });
+
+      const codec = getCodec(type);
+
+      let serNode: SerializationNode = DEFAULT_DENSE_NODE;
+      if (clientVersion >= 54454) {
+        const hasCustomSerialization = reader.readU8() !== 0;
+        if (hasCustomSerialization) {
+          serNode = codec.readKinds(reader);
+        }
+      }
+
+      const state: DeserializerState = { serNode, sparseRuntime: new Map() };
+      // Only read prefix and decode when there are rows - empty blocks are schema-only
+      if (numRows > 0) {
+        codec.readPrefix?.(reader);
+        columnData.push(codec.decode(reader, numRows, state));
+      } else {
+        // Schema-only block: no prefix or data, create empty column
+        columnData.push(new DataColumn(type, []));
+      }
+    } catch (err) {
+      if (err instanceof BufferUnderflowError) {
+        // Return partial state for resumable retry
+        const partialState: PartialBlockState = {
+          columns: columns.slice(0, i), // Only fully parsed columns
+          columnData: columnData.slice(0, i),
+          numCols,
+          numRows,
+          nextColIndex: i,
+          resumeOffset: colStartOffset,
+          startOffset,
+        };
+        // Reset reader to column boundary for caller
+        reader.offset = colStartOffset;
+        // Attach partial state to error for caller to use
+        (err as BufferUnderflowError & { partial?: PartialBlockState }).partial = partialState;
+        throw err;
+      }
+      throw err;
     }
   }
 
@@ -140,6 +197,20 @@ export function decodeNativeBlock(
     bytesConsumed: reader.offset - startOffset,
     isEndMarker: false,
   };
+}
+
+/**
+ * Decode a single Native format block from a buffer.
+ * Returns the decoded data and the number of bytes consumed.
+ * Use this for streaming scenarios where you need to track buffer position.
+ */
+export function decodeNativeBlock(
+  data: Uint8Array,
+  offset: number,
+  options?: DecodeOptions,
+): BlockResult {
+  const reader = new BufferReader(data, offset, options);
+  return decodeNativeBlockWithReader(reader, options);
 }
 
 /**

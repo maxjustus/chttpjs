@@ -358,4 +358,15 @@ export class BufferReader {
     this.offset += 8;
     return val;
   }
+
+  /**
+   * Replace the underlying buffer while preserving read offset.
+   * Used for progressive decoding: when more data arrives, swap in
+   * the larger buffer and continue reading from where we left off.
+   */
+  replaceBuffer(newBuffer: Uint8Array): void {
+    this.buffer = newBuffer;
+    this.view = new DataView(newBuffer.buffer, newBuffer.byteOffset, newBuffer.byteLength);
+    // offset is intentionally preserved
+  }
 }
