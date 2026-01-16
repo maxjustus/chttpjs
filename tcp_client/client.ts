@@ -13,7 +13,7 @@ import {
   getCodec,
   type PartialBlockState,
   RecordBatch,
-} from "../native/index.ts";
+} from "@maxjustus/chttp/native";
 import { init as initCompression, Method, type MethodCode } from "../compression.ts";
 import type { ClickHouseSettings } from "../settings.ts";
 import { type CollectableAsyncGenerator, collectable } from "../util.ts";
