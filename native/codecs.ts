@@ -2129,7 +2129,6 @@ export class JsonCodec implements Codec {
   private typedPathNames: Set<string>;
   private dynamicPaths: string[] = [];
   private dynamicCodecs = new Map<string, DynamicCodec>();
-  private cachedDynamicPaths?: string[];
 
   constructor(typedPaths: { name: string; type: string }[] = []) {
     this.typedPaths = typedPaths.map((p) => ({
@@ -2251,10 +2250,7 @@ export class JsonCodec implements Codec {
   }
 
   private discoverDynamicPaths(values: unknown[]): string[] {
-    if (this.cachedDynamicPaths && this.matchesCachedSchema(values[0])) {
-      return this.cachedDynamicPaths;
-    }
-
+    // Must scan all rows - different rows can have different dynamic keys
     const paths = new Set<string>();
     for (const v of values) {
       if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -2263,17 +2259,7 @@ export class JsonCodec implements Codec {
         }
       }
     }
-    this.cachedDynamicPaths = [...paths].sort();
-    return this.cachedDynamicPaths;
-  }
-
-  private matchesCachedSchema(row: unknown): boolean {
-    if (!row || typeof row !== "object" || Array.isArray(row)) return false;
-    const cached = new Set(this.cachedDynamicPaths!);
-    for (const key of Object.keys(row)) {
-      if (!this.typedPathNames.has(key) && !cached.has(key)) return false;
-    }
-    return true;
+    return [...paths].sort();
   }
 
   zeroValue() {
