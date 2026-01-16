@@ -1,4 +1,4 @@
-.PHONY: build test test-tcp fuzz fuzz-tcp bench bench-formats bench-profile profile-complex profile-variant profile-dynamic profile-json publish update-settings
+.PHONY: build test test-tcp fuzz fuzz-quick bench bench-formats bench-profile profile-complex profile-variant profile-dynamic profile-json publish update-settings
 
 build:
 	npm run build
@@ -12,9 +12,8 @@ test-tcp: build
 fuzz: build
 	npm run test:fuzz
 
-# TCP fuzz: FUZZ_ITERATIONS=10 FUZZ_ROWS=50000 make fuzz-tcp
-fuzz-tcp: build
-	npm run test:tcp-fuzz
+fuzz-quick: build
+	npm run test:fuzz:quick
 
 format:
 	npm run format
