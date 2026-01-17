@@ -523,7 +523,12 @@ class EnumCodec extends BaseCodec {
   }
   toLiteral(value: unknown): string {
     if (value == null) return "NULL";
-    if (typeof value === "string") return `'${escapeStringLiteral(value)}'`;
+    if (typeof value === "string") {
+      if (!this.mapping.nameToValue.has(value)) {
+        throw new Error(`Invalid enum value "${value}" for ${this.type}`);
+      }
+      return `'${escapeStringLiteral(value)}'`;
+    }
     const name = this.mapping.valueToName.get(this.toEnumValue(value));
     return `'${escapeStringLiteral(name!)}'`;
   }

@@ -175,4 +175,31 @@ describe("serializeParams", () => {
     // Top-level strings are unquoted
     assert.strictEqual(result.s, "line1\\nline2\\ttab\\\\backslash\\'quote");
   });
+
+  it("serializes valid enum string value", () => {
+    const result = serializeParams("SELECT {status: Enum8('active' = 1, 'inactive' = 2)}", {
+      status: "active",
+    });
+    assert.strictEqual(result.status, "'active'");
+  });
+
+  it("throws on invalid enum string value", () => {
+    assert.throws(
+      () =>
+        serializeParams("SELECT {status: Enum8('active' = 1, 'inactive' = 2)}", {
+          status: "bogus",
+        }),
+      /Invalid enum value "bogus"/,
+    );
+  });
+
+  it("throws on invalid enum numeric value", () => {
+    assert.throws(
+      () =>
+        serializeParams("SELECT {status: Enum8('active' = 1, 'inactive' = 2)}", {
+          status: 3,
+        }),
+      /Invalid enum value: 3/,
+    );
+  });
 });
