@@ -31,8 +31,10 @@ import {
   ServerPacketId,
 } from "./types.ts";
 import { StreamingWriter } from "./writer.ts";
+import type { QueryParamValue } from "../types.ts";
 
 export type { CollectableAsyncGenerator } from "../util.ts";
+export type { QueryParamValue } from "../types.ts";
 
 export interface TcpClientOptions {
   host: string;
@@ -75,17 +77,6 @@ export interface InsertOptions {
 }
 
 export type { ExternalTableData };
-
-/** Query parameter value - supports primitives and complex types */
-export type QueryParamValue =
-  | string
-  | number
-  | boolean
-  | bigint
-  | null
-  | Date
-  | QueryParamValue[]
-  | { [key: string]: QueryParamValue };
 
 export interface QueryOptions {
   /** Per-query settings (merged with client defaults, overrides them) */

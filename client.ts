@@ -28,22 +28,11 @@ import { type CollectableAsyncGenerator, collectable } from "./util.ts";
 import { serializeParams } from "./params.ts";
 
 export type { CollectableAsyncGenerator } from "./util.ts";
+export type { QueryParamValue, QueryParams } from "./types.ts";
+
+import type { QueryParams } from "./types.ts";
 
 export type Compression = "lz4" | "zstd" | false;
-
-/** Query parameter value - supports primitives and complex types */
-export type QueryParamValue =
-  | string
-  | number
-  | boolean
-  | bigint
-  | null
-  | Date
-  | QueryParamValue[]
-  | { [key: string]: QueryParamValue };
-
-/** Query parameters for parameterized queries like SELECT {x:UInt64} */
-export type QueryParams = Record<string, QueryParamValue>;
 
 // AbortSignal.any() added in Node 20+, ES2024
 const AbortSignalAny = AbortSignal as typeof AbortSignal & {
