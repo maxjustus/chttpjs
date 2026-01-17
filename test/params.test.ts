@@ -108,12 +108,12 @@ describe("serializeParams", () => {
     assert.strictEqual(result.id, "42");
   });
 
-  it("serializes strings with escaping (top-level unquoted)", () => {
+  it("serializes strings raw (top-level unquoted)", () => {
     const result = serializeParams("SELECT {name: String}", {
       name: "it's a test",
     });
-    // Top-level strings are unquoted, escaping still applies
-    assert.strictEqual(result.name, "it\\'s a test");
+    // Top-level strings are raw for HTTP params - no escaping
+    assert.strictEqual(result.name, "it's a test");
   });
 
   it("serializes booleans", () => {
@@ -209,8 +209,8 @@ describe("serializeParams", () => {
     const result = serializeParams("SELECT {s: String}", {
       s: "line1\nline2\ttab\\backslash'quote",
     });
-    // Top-level strings are unquoted
-    assert.strictEqual(result.s, "line1\\nline2\\ttab\\\\backslash\\'quote");
+    // Control chars escaped, but quotes NOT escaped (for HTTP params)
+    assert.strictEqual(result.s, "line1\\nline2\\ttab\\\\backslash'quote");
   });
 
   it("serializes valid enum string value", () => {

@@ -46,6 +46,12 @@ describe("TCP Query Parameters", { timeout: 60000 }, () => {
     assert.strictEqual(result, "hello world");
   });
 
+  it("handles String param with special chars", async () => {
+    const testString = "it's 5 o'clock\nnewline\ttab\\backslash";
+    const result = await queryScalar("SELECT {s: String}", { s: testString });
+    assert.strictEqual(result, testString);
+  });
+
   it("handles Array(UInt64) param", async () => {
     const result = await queryScalar("SELECT arraySum({ids: Array(UInt64)})", {
       ids: [1, 2, 3, 4, 5],

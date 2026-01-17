@@ -183,6 +183,34 @@ export interface Codec {
 }
 
 /**
+ * Escape control characters for HTTP param values.
+ * Escapes: backslash, tab, newline, carriage return (NOT single quotes)
+ */
+function escapeControlChars(s: string): string {
+  let result = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    switch (c) {
+      case 9:
+        result += "\\t";
+        break;
+      case 10:
+        result += "\\n";
+        break;
+      case 13:
+        result += "\\r";
+        break;
+      case 92:
+        result += "\\\\";
+        break;
+      default:
+        result += s[i];
+    }
+  }
+  return result;
+}
+
+/**
  * Escape a string for use in ClickHouse literal syntax.
  * Escapes: backslash, single quote, tab, newline, carriage return
  */
@@ -191,19 +219,19 @@ export function escapeStringLiteral(s: string): string {
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
     switch (c) {
-      case 9: // tab
+      case 9:
         result += "\\t";
         break;
-      case 10: // newline
+      case 10:
         result += "\\n";
         break;
-      case 13: // carriage return
+      case 13:
         result += "\\r";
         break;
-      case 39: // single quote
+      case 39:
         result += "\\'";
         break;
-      case 92: // backslash
+      case 92:
         result += "\\\\";
         break;
       default:
@@ -564,8 +592,9 @@ class StringCodec extends BaseCodec {
   }
   toLiteral(value: unknown, quoted?: boolean): string {
     if (value == null) return "NULL";
-    const escaped = escapeStringLiteral(coerceToString(value));
-    return quoted ? `'${escaped}'` : escaped;
+    const str = coerceToString(value);
+    if (quoted) return `'${escapeStringLiteral(str)}'`;
+    return escapeControlChars(str);
   }
 }
 
@@ -717,8 +746,8 @@ class FixedStringCodec extends BaseCodec {
     } else {
       str = coerceToString(value);
     }
-    const escaped = escapeStringLiteral(str);
-    return quoted ? `'${escaped}'` : escaped;
+    if (quoted) return `'${escapeStringLiteral(str)}'`;
+    return escapeControlChars(str);
   }
 }
 

@@ -552,6 +552,20 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(parsed.data[0].s, "hello world");
     });
 
+    it("should use query parameters with String containing special chars", async () => {
+      const testString = "it's 5 o'clock\nnewline\ttab\\backslash";
+      const result = await collectText(
+        query("SELECT {s:String} as s FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { s: testString },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data[0].s, testString);
+    });
+
     it("should use query parameters with multiple values", async () => {
       const result = await collectText(
         query("SELECT {a:UInt32} + {b:UInt32} as sum, {msg:String} as msg FORMAT JSON", sessionId, {
