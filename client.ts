@@ -25,7 +25,7 @@ export {
 import { encodeNative, type ExternalTableData, RecordBatch } from "@maxjustus/chttp/native";
 import { StreamBuffer } from "./native/io.ts";
 import { type CollectableAsyncGenerator, collectable } from "./util.ts";
-import { serializeParams } from "./params.ts";
+import { serializeParams, extractParamTypes } from "./params.ts";
 
 export type { CollectableAsyncGenerator } from "./util.ts";
 export type { QueryParamValue, QueryParams } from "./types.ts";
@@ -185,6 +185,10 @@ function mergeQueryParams(
   query: string,
   source?: QueryParams,
 ): void {
+  const types = extractParamTypes(query);
+  if (types.size > 0 && !source) {
+    throw new Error(`Missing parameters: ${[...types.keys()].join(", ")}`);
+  }
   if (!source) return;
   const serialized = serializeParams(query, source);
   for (const [key, value] of Object.entries(serialized)) {
