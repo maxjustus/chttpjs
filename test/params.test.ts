@@ -59,8 +59,20 @@ describe("extractParamTypes", () => {
     assert.strictEqual(types.get("real"), "UInt64");
   });
 
+  it("skips single-quoted strings with doubled-quote escaping", () => {
+    const types = extractParamTypes("SELECT 'it''s {not: a_param}', {real: UInt64}");
+    assert.strictEqual(types.size, 1);
+    assert.strictEqual(types.get("real"), "UInt64");
+  });
+
   it("skips double-quoted string literals", () => {
     const types = extractParamTypes('SELECT "{not: a_param}", {real: UInt64}');
+    assert.strictEqual(types.size, 1);
+    assert.strictEqual(types.get("real"), "UInt64");
+  });
+
+  it("skips double-quoted strings with doubled-quote escaping", () => {
+    const types = extractParamTypes('SELECT "it""s {not: a_param}", {real: UInt64}');
     assert.strictEqual(types.size, 1);
     assert.strictEqual(types.get("real"), "UInt64");
   });
@@ -87,6 +99,12 @@ describe("extractParamTypes", () => {
       /* {fake: String} this is commented out */
       WHERE 1=1
     `);
+    assert.strictEqual(types.size, 1);
+    assert.strictEqual(types.get("real"), "UInt64");
+  });
+
+  it("does not treat {a: 1} as a param", () => {
+    const types = extractParamTypes("SELECT {a: 1}, {real: UInt64}");
     assert.strictEqual(types.size, 1);
     assert.strictEqual(types.get("real"), "UInt64");
   });
@@ -217,7 +235,8 @@ describe("serializeParams", () => {
     const result = serializeParams("SELECT {status: Enum8('active' = 1, 'inactive' = 2)}", {
       status: "active",
     });
-    assert.strictEqual(result.status, "'active'");
+    // HTTP params: unquoted value
+    assert.strictEqual(result.status, "active");
   });
 
   it("throws on invalid enum string value", () => {

@@ -12,6 +12,11 @@ function skipQuotedString(query: string, i: number, quote: string): number {
     if (query[i] === "\\") {
       i += 2;
     } else if (query[i] === quote) {
+      // Support doubled-quote escaping: '' or "" or ``
+      if (query[i + 1] === quote) {
+        i += 2;
+        continue;
+      }
       return i + 1;
     } else {
       i++;
@@ -99,6 +104,14 @@ function parseParam(query: string, i: number): [string, string, number] | null {
 
   const [type, typeEnd] = parseType(query, i);
   if (!type) return null;
+  // Basic sanity check: ClickHouse type names start with a letter or underscore.
+  // This avoids accidentally treating unrelated "{a: 1}" patterns as params.
+  const firstTypeChar = type[0];
+  const isTypeStart =
+    firstTypeChar === "_" ||
+    (firstTypeChar >= "a" && firstTypeChar <= "z") ||
+    (firstTypeChar >= "A" && firstTypeChar <= "Z");
+  if (!isTypeStart) return null;
 
   i = typeEnd;
   while (i < query.length && query[i] !== "}") {
