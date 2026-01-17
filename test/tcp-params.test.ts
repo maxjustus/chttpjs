@@ -100,4 +100,76 @@ describe("TCP Query Parameters", { timeout: 60000 }, () => {
     const result = await queryScalar("SELECT {id: UInt64} + {id: UInt64}", { id: 21 });
     assert.strictEqual(Number(result), 42);
   });
+
+  it("handles Enum param", async () => {
+    const result = await queryScalar("SELECT {status: Enum8('active' = 1, 'inactive' = 2)}", {
+      status: "active",
+    });
+    assert.strictEqual(result, "active");
+  });
+
+  it("handles UUID param", async () => {
+    const testUUID = "550e8400-e29b-41d4-a716-446655440000";
+    const result = await queryScalar("SELECT {id: UUID}", { id: testUUID });
+    assert.strictEqual(result, testUUID);
+  });
+
+  it("handles IPv4 param", async () => {
+    const result = await queryScalar("SELECT {ip: IPv4}", { ip: "192.168.1.1" });
+    assert.strictEqual(result, "192.168.1.1");
+  });
+
+  it("handles IPv6 param", async () => {
+    const result = await queryScalar("SELECT {ip: IPv6}", { ip: "2001:db8::1" });
+    assert.ok(String(result).includes("2001:db8"));
+  });
+
+  it("handles Date param", async () => {
+    const result = await queryScalar("SELECT {d: Date}", { d: new Date("2024-06-15") });
+    assert.ok(result instanceof Date);
+    assert.strictEqual((result as Date).toISOString().slice(0, 10), "2024-06-15");
+  });
+
+  it("handles Decimal param", async () => {
+    const result = await queryScalar("SELECT {d: Decimal(10, 2)}", { d: "123.45" });
+    assert.strictEqual(Number(result), 123.45);
+  });
+
+  // Verifies that IPv4 encoding/decoding via native format works correctly.
+  // This test was added after fixing an endianness bug where IPv4 addresses
+  // were decoded with reversed octets (192.168.1.1 became 1.1.168.192).
+  it("round-trips IPv4 through insert and select", async () => {
+    const tableName = `test_ipv4_${Date.now()}`;
+    const testIPs = ["192.168.1.1", "10.0.0.1", "172.16.254.99", "255.255.255.0"];
+
+    // Create table
+    for await (const _ of client.query(`CREATE TABLE ${tableName} (ip IPv4) ENGINE = Memory`)) {
+    }
+
+    // Insert using native format
+    const rows = testIPs.map((ip) => ({ ip }));
+    for await (const _ of client.insert(`INSERT INTO ${tableName} VALUES`, rows)) {
+    }
+
+    // Read back via native format
+    const results: string[] = [];
+    const stream = client.query(`SELECT ip FROM ${tableName} ORDER BY ip`);
+    for await (const packet of stream) {
+      if (packet.type === "Data") {
+        for (let i = 0; i < packet.batch.rowCount; i++) {
+          results.push(packet.batch.getAt(i, 0) as string);
+        }
+      }
+    }
+
+    // Sort both arrays for comparison (ORDER BY ip gives numeric order, not string order)
+    const sortedExpected = [...testIPs].sort();
+    const sortedResults = [...results].sort();
+
+    assert.deepStrictEqual(sortedResults, sortedExpected);
+
+    // Cleanup (Memory tables are dropped automatically when server restarts anyway)
+    for await (const _ of client.query(`DROP TABLE IF EXISTS ${tableName}`)) {
+    }
+  });
 });

@@ -693,5 +693,84 @@ describe("ClickHouse Integration Tests", { timeout: 60000 }, () => {
       assert.strictEqual(Number(parsed.data[0].a), 42);
       assert.strictEqual(Number(parsed.data[0].b), 43);
     });
+
+    it("should use query parameters with Enum", async () => {
+      const result = await collectText(
+        query("SELECT {status: Enum8('active' = 1, 'inactive' = 2)} as s FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { status: "active" },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data[0].s, "active");
+    });
+
+    it("should use query parameters with UUID", async () => {
+      const testUUID = "550e8400-e29b-41d4-a716-446655440000";
+      const result = await collectText(
+        query("SELECT {id: UUID} as u FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { id: testUUID },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data[0].u, testUUID);
+    });
+
+    it("should use query parameters with IPv4", async () => {
+      const result = await collectText(
+        query("SELECT {ip: IPv4} as ip FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { ip: "192.168.1.1" },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data[0].ip, "192.168.1.1");
+    });
+
+    it("should use query parameters with IPv6", async () => {
+      const result = await collectText(
+        query("SELECT {ip: IPv6} as ip FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { ip: "2001:db8::1" },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.ok(parsed.data[0].ip.includes("2001:db8"));
+    });
+
+    it("should use query parameters with Date", async () => {
+      const result = await collectText(
+        query("SELECT {d: Date} as d FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { d: new Date("2024-06-15") },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(parsed.data[0].d, "2024-06-15");
+    });
+
+    it("should use query parameters with Decimal", async () => {
+      const result = await collectText(
+        query("SELECT {d: Decimal(10, 2)} as d FORMAT JSON", sessionId, {
+          baseUrl,
+          auth,
+          params: { d: "123.45" },
+        }),
+      );
+
+      const parsed = JSON.parse(result);
+      assert.strictEqual(Number(parsed.data[0].d), 123.45);
+    });
   });
 });
