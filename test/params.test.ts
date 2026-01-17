@@ -53,10 +53,47 @@ describe("extractParamTypes", () => {
     );
   });
 
-  it("skips string literals containing brace patterns", () => {
+  it("skips single-quoted string literals", () => {
     const types = extractParamTypes("SELECT '{not: a_param}', {real: UInt64}");
     assert.strictEqual(types.size, 1);
     assert.strictEqual(types.get("real"), "UInt64");
+  });
+
+  it("skips double-quoted string literals", () => {
+    const types = extractParamTypes('SELECT "{not: a_param}", {real: UInt64}');
+    assert.strictEqual(types.size, 1);
+    assert.strictEqual(types.get("real"), "UInt64");
+  });
+
+  it("skips backtick-quoted identifiers", () => {
+    const types = extractParamTypes("SELECT `{not: a_param}`, {real: UInt64}");
+    assert.strictEqual(types.size, 1);
+    assert.strictEqual(types.get("real"), "UInt64");
+  });
+
+  it("skips line comments", () => {
+    const types = extractParamTypes(`
+      SELECT {real: UInt64}
+      -- {fake: String} this is commented out
+      WHERE 1=1
+    `);
+    assert.strictEqual(types.size, 1);
+    assert.strictEqual(types.get("real"), "UInt64");
+  });
+
+  it("skips block comments", () => {
+    const types = extractParamTypes(`
+      SELECT {real: UInt64}
+      /* {fake: String} this is commented out */
+      WHERE 1=1
+    `);
+    assert.strictEqual(types.size, 1);
+    assert.strictEqual(types.get("real"), "UInt64");
+  });
+
+  it("handles Enum types with parens in string values", () => {
+    const types = extractParamTypes("SELECT {status: Enum8('active(' = 1, 'inactive)' = 2)}");
+    assert.strictEqual(types.get("status"), "Enum8('active(' = 1, 'inactive)' = 2)");
   });
 
   it("handles empty query", () => {

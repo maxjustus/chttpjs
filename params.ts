@@ -7,107 +7,128 @@
 
 import { getCodec } from "./native/codecs.ts";
 
+function skipQuotedString(query: string, i: number, quote: string): number {
+  while (i < query.length) {
+    if (query[i] === "\\") {
+      i += 2;
+    } else if (query[i] === quote) {
+      return i + 1;
+    } else {
+      i++;
+    }
+  }
+  return i;
+}
+
+function skipLineComment(query: string, i: number): number {
+  while (i < query.length && query[i] !== "\n") {
+    i++;
+  }
+  return i + 1;
+}
+
+function skipBlockComment(query: string, i: number): number {
+  while (i < query.length - 1) {
+    if (query[i] === "*" && query[i + 1] === "/") {
+      return i + 2;
+    }
+    i++;
+  }
+  return query.length;
+}
+
+function isWhitespace(ch: string): boolean {
+  return ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
+}
+
+function isWordChar(ch: string): boolean {
+  return (
+    (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9") || ch === "_"
+  );
+}
+
+function skipWhitespace(query: string, i: number): number {
+  while (i < query.length && isWhitespace(query[i])) {
+    i++;
+  }
+  return i;
+}
+
+/** Handles quoted strings inside type (for Enum definitions like Enum8('foo(' = 1)) */
+function parseType(query: string, start: number): [string, number] {
+  let i = start;
+  let depth = 0;
+
+  while (i < query.length) {
+    const ch = query[i];
+    if (ch === "'" || ch === '"') {
+      i = skipQuotedString(query, i + 1, ch);
+    } else if (ch === "(") {
+      depth++;
+      i++;
+    } else if (ch === ")") {
+      if (depth === 0) break;
+      depth--;
+      i++;
+    } else if (ch === "}" && depth === 0) {
+      break;
+    } else {
+      i++;
+    }
+  }
+
+  return [query.slice(start, i).trim(), i];
+}
+
+/** Returns [name, type, endIndex] or null if not a valid {name: Type} pattern */
+function parseParam(query: string, i: number): [string, string, number] | null {
+  i = skipWhitespace(query, i);
+
+  const nameStart = i;
+  while (i < query.length && isWordChar(query[i])) {
+    i++;
+  }
+  if (i === nameStart) return null;
+
+  const name = query.slice(nameStart, i);
+  i = skipWhitespace(query, i);
+
+  if (query[i] !== ":") return null;
+  i++;
+  i = skipWhitespace(query, i);
+
+  const [type, typeEnd] = parseType(query, i);
+  if (!type) return null;
+
+  i = typeEnd;
+  while (i < query.length && query[i] !== "}") {
+    i++;
+  }
+
+  return [name, type, i + 1];
+}
+
 /**
  * Extract parameter types from a query string.
- * Matches {name: Type} patterns, handling nested parentheses.
- *
- * @example
- * extractParamTypes("SELECT {ids: Array(UInt64)}, {name: String}")
- * // => Map { 'ids' => 'Array(UInt64)', 'name' => 'String' }
+ * Matches {name: Type} patterns, skipping strings and comments.
  */
 export function extractParamTypes(query: string): Map<string, string> {
   const result = new Map<string, string>();
-
-  // State machine to track:
-  // - Whether we're inside a string literal (skip matching there)
-  // - Brace depth for nested types like Array(Tuple(Int32, String))
   let i = 0;
-  const len = query.length;
 
-  while (i < len) {
+  while (i < query.length) {
     const ch = query[i];
 
-    // Skip single-quoted string literals
-    if (ch === "'") {
-      i++;
-      while (i < len) {
-        if (query[i] === "\\") {
-          i += 2; // Skip escaped char
-        } else if (query[i] === "'") {
-          i++;
-          break;
-        } else {
-          i++;
-        }
-      }
-      continue;
-    }
-
-    // Look for opening brace
-    if (ch === "{") {
-      let start = i + 1;
-
-      // Skip leading whitespace after {
-      while (start < len && /\s/.test(query[start])) {
-        start++;
-      }
-
-      // Find parameter name (alphanumeric + underscore)
-      let nameEnd = start;
-      while (nameEnd < len && /[\w]/.test(query[nameEnd])) {
-        nameEnd++;
-      }
-
-      if (nameEnd === start) {
-        // No name found, skip this brace
-        i++;
-        continue;
-      }
-
-      const name = query.slice(start, nameEnd);
-
-      // Skip whitespace
-      let typeStart = nameEnd;
-      while (typeStart < len && /\s/.test(query[typeStart])) {
-        typeStart++;
-      }
-
-      // Expect colon
-      if (query[typeStart] !== ":") {
-        i++;
-        continue;
-      }
-      typeStart++;
-
-      // Skip whitespace after colon
-      while (typeStart < len && /\s/.test(query[typeStart])) {
-        typeStart++;
-      }
-
-      // Parse type with nested parentheses
-      let typeEnd = typeStart;
-      let parenDepth = 0;
-
-      while (typeEnd < len) {
-        const c = query[typeEnd];
-        if (c === "(") {
-          parenDepth++;
-          typeEnd++;
-        } else if (c === ")") {
-          if (parenDepth === 0) break;
-          parenDepth--;
-          typeEnd++;
-        } else if (c === "}" && parenDepth === 0) {
-          break;
-        } else {
-          typeEnd++;
-        }
-      }
-
-      const type = query.slice(typeStart, typeEnd).trim();
-
-      if (type) {
-        // Check for conflicting type declarations
+    if (ch === "'" || ch === '"' || ch === "`") {
+      i = skipQuotedString(query, i + 1, ch);
+    } else if (ch === "-" && query[i + 1] === "-") {
+      i = skipLineComment(query, i + 2);
+    } else if (ch === "/" && query[i + 1] === "*") {
+      i = skipBlockComment(query, i + 2);
+    } else if (ch === "{") {
+      const parsed = parseParam(query, i + 1);
+      if (parsed) {
+        const [name, type, end] = parsed;
         const existing = result.get(name);
         if (existing !== undefined && existing !== type) {
           throw new Error(
@@ -115,16 +136,13 @@ export function extractParamTypes(query: string): Map<string, string> {
           );
         }
         result.set(name, type);
+        i = end;
+      } else {
+        i++;
       }
-
-      // Move past the closing brace
-      i = typeEnd;
-      while (i < len && query[i] !== "}") i++;
+    } else {
       i++;
-      continue;
     }
-
-    i++;
   }
 
   return result;
