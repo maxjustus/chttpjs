@@ -176,8 +176,11 @@ export interface Codec {
   readKinds(reader: BufferReader): SerializationNode;
   /**
    * Serialize a single value to ClickHouse literal string syntax.
+   *
    * @param value - The value to serialize
-   * @param quoted - If true, string values are quoted (for Array/Tuple/Map elements)
+   * @param quoted - Controls string formatting:
+   *   - false (default): For HTTP query params. Control chars escaped, no quotes.
+   *   - true: For nested values in Array/Tuple/Map. Fully escaped and single-quoted.
    */
   toLiteral(value: unknown, quoted?: boolean): string;
 }
@@ -549,16 +552,19 @@ class EnumCodec extends BaseCodec {
   estimateSize(rows: number): number {
     return rows * this.Ctor.BYTES_PER_ELEMENT;
   }
-  toLiteral(value: unknown): string {
+  toLiteral(value: unknown, quoted?: boolean): string {
     if (value == null) return "NULL";
+    let name: string;
     if (typeof value === "string") {
       if (!this.mapping.nameToValue.has(value)) {
         throw new Error(`Invalid enum value "${value}" for ${this.type}`);
       }
-      return `'${escapeStringLiteral(value)}'`;
+      name = value;
+    } else {
+      name = this.mapping.valueToName.get(this.toEnumValue(value))!;
     }
-    const name = this.mapping.valueToName.get(this.toEnumValue(value));
-    return `'${escapeStringLiteral(name!)}'`;
+    if (quoted) return `'${escapeStringLiteral(name)}'`;
+    return escapeControlChars(name);
   }
 }
 
@@ -651,9 +657,10 @@ class UUIDCodec extends BaseCodec {
   estimateSize(rows: number) {
     return rows * UUIDConst.BYTE_SIZE;
   }
-  toLiteral(value: unknown): string {
+  toLiteral(value: unknown, quoted?: boolean): string {
     if (value == null) return "NULL";
-    return `'${toValidUUID(value)}'`;
+    const s = toValidUUID(value);
+    return quoted ? `'${s}'` : s;
   }
 }
 
@@ -1165,10 +1172,23 @@ class EpochCodec<T extends Uint16Array | Int32Array | Uint32Array> extends BaseC
   }
   toLiteral(value: unknown): string {
     if (value == null) return "NULL";
-    if (value instanceof Date) return String(Math.floor(value.getTime() / this.multiplier));
-    if (typeof value === "number") return String(Math.floor(value / this.multiplier));
-    const d = toValidDate(value as string, this.type);
-    return String(Math.floor(d.getTime() / this.multiplier));
+    let d: Date;
+    if (value instanceof Date) {
+      d = value;
+    } else if (typeof value === "number") {
+      d = new Date(value);
+    } else if (typeof value === "string") {
+      // If already a date string, return as-is
+      return value;
+    } else {
+      throw new TypeError(`Cannot serialize ${typeof value} to ${this.type}`);
+    }
+    // Format as ISO date string (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
+    if (this.type === "Date" || this.type === "Date32") {
+      return d.toISOString().slice(0, 10);
+    }
+    // DateTime: YYYY-MM-DD HH:MM:SS
+    return d.toISOString().slice(0, 19).replace("T", " ");
   }
 }
 
@@ -1188,7 +1208,8 @@ class IPv4Codec extends BaseCodec {
         parseInt(m[3], 10),
         parseInt(m[4], 10),
       ];
-      arr[i] = (parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24)) >>> 0;
+      // ClickHouse stores IPv4 as big-endian UInt32 (network order): first octet in high bits
+      arr[i] = ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
     }
     return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
   }
@@ -1198,7 +1219,9 @@ class IPv4Codec extends BaseCodec {
     const values: string[] = new Array(rows);
     for (let i = 0; i < rows; i++) {
       const v = arr[i];
-      values[i] = `${v & 0xff}.${(v >> 8) & 0xff}.${(v >> 16) & 0xff}.${(v >> 24) & 0xff}`;
+      // ClickHouse stores IPv4 in native format as little-endian UInt32.
+      // The numeric value represents the IP in big-endian order (first octet in high bits).
+      values[i] = `${(v >> 24) & 0xff}.${(v >> 16) & 0xff}.${(v >> 8) & 0xff}.${v & 0xff}`;
     }
     return new DataColumn(this.type, values);
   }
@@ -1213,9 +1236,10 @@ class IPv4Codec extends BaseCodec {
   estimateSize(rows: number) {
     return rows * 4;
   }
-  toLiteral(value: unknown): string {
+  toLiteral(value: unknown, quoted?: boolean): string {
     if (value == null) return "NULL";
-    return `'${toValidIPv4(value)}'`;
+    const s = toValidIPv4(value);
+    return quoted ? `'${s}'` : s;
   }
 }
 
@@ -1252,9 +1276,10 @@ class IPv6Codec extends BaseCodec {
   estimateSize(rows: number) {
     return rows * IPv6Const.BYTE_SIZE;
   }
-  toLiteral(value: unknown): string {
+  toLiteral(value: unknown, quoted?: boolean): string {
     if (value == null) return "NULL";
-    return `'${toValidIPv6(value)}'`;
+    const s = toValidIPv6(value);
+    return quoted ? `'${s}'` : s;
   }
 }
 
@@ -1750,8 +1775,14 @@ class MapCodec extends BaseCodec {
   }
   toLiteral(value: unknown): string {
     if (value == null) return "NULL";
-    const entries: [unknown, unknown][] =
-      value instanceof Map ? Array.from(value.entries()) : Object.entries(value as object);
+    let entries: [unknown, unknown][];
+    if (value instanceof Map) {
+      entries = Array.from(value.entries());
+    } else if (Array.isArray(value)) {
+      entries = value as [unknown, unknown][];
+    } else {
+      entries = Object.entries(value as object);
+    }
     const parts: string[] = [];
     for (const [k, v] of entries) {
       parts.push(`${this.keyCodec.toLiteral(k, true)}: ${this.valCodec.toLiteral(v, true)}`);
@@ -1853,6 +1884,9 @@ class TupleCodec extends BaseCodec {
   }
   toLiteral(value: unknown): string {
     if (value == null) return "NULL";
+    if (!this.isNamed && !Array.isArray(value)) {
+      throw new TypeError(`Expected array for tuple ${this.type}, got ${typeof value}`);
+    }
     const parts: string[] = [];
     if (Array.isArray(value)) {
       for (let i = 0; i < this.elements.length; i++) {
@@ -1860,7 +1894,7 @@ class TupleCodec extends BaseCodec {
       }
     } else if (typeof value === "object") {
       for (const elem of this.elements) {
-        const v = elem.name ? (value as Record<string, unknown>)[elem.name] : undefined;
+        const v = (value as Record<string, unknown>)[elem.name!];
         parts.push(elem.codec.toLiteral(v, true));
       }
     } else {
