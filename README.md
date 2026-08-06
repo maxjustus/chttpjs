@@ -779,6 +779,25 @@ LZ4 and ZSTD use native Node addons (`lz4-napi`, `zstd-napi`) installed automati
 
 `compressQuery` compresses the HTTP request body (your SQL and any external table data) using HTTP `Content-Encoding`. This is independent of `compression`, which controls ClickHouse block compression on responses — they apply to different directions and don't double-compress. Set `compressQuery` to `"zstd"`, `"lz4"`, or `{ method: "zstd", level }`; requires the server setting `enable_http_compression=1`.
 
+### Incremental delivery (`httpCompression`)
+
+With the default `compression`, ClickHouse buffers the whole response and sends it once the query finishes. Rows and in-band progress only arrive at the end. Set `httpCompression` to get compression that the server flushes per block instead:
+
+```ts
+for await (const packet of query(sql, { httpCompression: "zstd" })) {
+  // Data packets arrive as the server produces them.
+}
+```
+
+Accepts `"zstd"` or `"lz4"`. It replaces `compression` for that request, rather than stacking with it. Measured on a query with 200 ms per row, the default returns all 15 packets at 1679 ms, while `httpCompression` returns the first at 225 ms.
+
+Only `zstd` and `lz4` behave this way. `gzip` and `br` buffer inside the codec and deliver the whole body at the end, so they are not offered.
+
+This path uses `node:http`, for a reason worth knowing: `fetch` decompresses inside its own pipeline, and a mid-stream server error tears that pipeline down before the buffered tail is delivered. The tail holds ClickHouse's error trailer, so the failure surfaces as `TypeError: terminated` instead of the real message, between 23% and 100% of the time. Decoding in-process avoids this. Two consequences:
+
+- Not available in browsers or Deno, which cannot set `Accept-Encoding` in any case.
+- `"zstd"` needs the optional `zstd-napi` dependency. `"lz4"` needs nothing extra.
+
 ## Performance
 
 Benchmarks on Apple M4 Max / Node v25.9.0, 1M rows.

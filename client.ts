@@ -25,6 +25,7 @@ export {
   streamEncodeNative,
 } from "./native/index.ts";
 
+import { type HttpEncoding, nodeHttpRequest } from "./http_transport.ts";
 import { mapAsync, prepend, readChunks, toAsyncIterable } from "./iter.ts";
 import { type ExternalTableData, encodeNative, RecordBatch } from "./native/index.ts";
 import { BlockBuffer } from "./native/io.ts";
@@ -589,6 +590,7 @@ const HTTP_QUERY_OPTION_RESERVED = new Set([
   "auth",
   "compression",
   "compressQuery",
+  "httpCompression",
   "signal",
   "timeout",
   "clientVersion",
@@ -634,6 +636,15 @@ export interface QueryOptions {
    * Requires server setting: enable_http_compression=1
    */
   compressQuery?: "lz4" | "zstd" | { method: "zstd"; level?: number };
+  /**
+   * Compress the response with an HTTP content coding instead of ClickHouse
+   * block compression, which the server flushes per block. Rows and progress
+   * then arrive as the server produces them, rather than at the end.
+   *
+   * Overrides `compression`. Requires `node:http`, so it is unavailable in
+   * browsers, and "zstd" needs the optional `zstd-napi` dependency.
+   */
+  httpCompression?: HttpEncoding;
   /** AbortSignal for manual cancellation */
   signal?: AbortSignal;
   /** Request timeout in milliseconds */
@@ -710,7 +721,10 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
   await init();
   const baseUrl = options.url || "http://localhost:8123/";
   const compression = options.compression ?? "lz4";
-  const compressed = compression !== false;
+  // Block compression and HTTP content coding are alternatives, not layers.
+  // Only the latter makes the server flush each block as it is produced.
+  const httpCompression = options.httpCompression;
+  const compressed = compression !== false && !httpCompression;
   const params: Record<string, string> = {
     default_format: "JSONEachRowWithProgress",
   };
@@ -723,7 +737,7 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
     params.compress = "1";
   }
 
-  if (options.compressQuery) {
+  if (options.compressQuery || httpCompression) {
     params.enable_http_compression = "1";
   }
 
@@ -763,25 +777,37 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
     // coding on top only adds CPU - and it breaks against 26.x: with
     // compress=1 plus a non-identity Accept-Encoding the server sends empty
     // error bodies, and gzip framing perturbs mid-stream exception delivery.
-    "Accept-Encoding": "identity",
+    "Accept-Encoding": httpCompression ?? "identity",
   };
 
-  let response: Response;
-  if (hasExternalTables) {
-    const { body, boundary } = buildMultipartBody(normalizedTables!);
-    headers["Content-Type"] = `multipart/form-data; boundary=${boundary}`;
+  const requestSignal = createSignal(options.signal, options.timeout) ?? null;
 
+  function send(body: string | Uint8Array | ReadableStream<Uint8Array>): Promise<Response> {
+    if (httpCompression) {
+      return nodeHttpRequest(
+        url.toString(),
+        { method: "POST", headers, body, signal: requestSignal },
+        httpCompression,
+      );
+    }
     // Need duplex: "half" for streaming body
     const fetchOptions: RequestInit & { duplex?: string } = {
       method: "POST",
       body,
       headers,
-      signal: createSignal(options.signal, options.timeout) ?? null,
+      signal: requestSignal,
     };
     if (body instanceof ReadableStream) {
       fetchOptions.duplex = "half";
     }
-    response = await fetch(url.toString(), fetchOptions);
+    return fetch(url.toString(), fetchOptions);
+  }
+
+  let response: Response;
+  if (hasExternalTables) {
+    const { body, boundary } = buildMultipartBody(normalizedTables!);
+    headers["Content-Type"] = `multipart/form-data; boundary=${boundary}`;
+    response = await send(body);
   } else {
     let body: string | Uint8Array = sql;
     if (options.compressQuery) {
@@ -796,12 +822,7 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
           : zstdCompressRaw(queryBytes, compressionLevel(options.compressQuery));
       headers["Content-Encoding"] = method;
     }
-    response = await fetch(url.toString(), {
-      method: "POST",
-      body,
-      headers,
-      signal: createSignal(options.signal, options.timeout) ?? null,
-    });
+    response = await send(body);
   }
 
   if (!response.ok) {

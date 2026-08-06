@@ -2,6 +2,10 @@
 
 ## 1.1.2
 
+### Added
+
+- `httpCompression: "zstd" | "lz4"` requests the response with an HTTP content coding that ClickHouse flushes per block, so rows and in-band progress arrive during the query instead of after it finishes. Replaces `compression` for that request. Decodes over `node:http`, so it is unavailable in browsers, and `"zstd"` needs the optional `zstd-napi` dependency.
+
 ### Fixed
 
 - `{name: Identifier}` query parameters (table/column/database names) no longer throw `Unknown type: Identifier`. The value is sent verbatim so the server escapes it into a quoted identifier; pre-quoting is not applied.
