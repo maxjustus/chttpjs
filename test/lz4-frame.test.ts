@@ -62,3 +62,31 @@ test("decodes a frame whose blocks each carry a checksum", () => {
 test("rejects input that is not an LZ4 frame", () => {
   assert.throws(() => createLz4FrameDecoder().push(new Uint8Array(8)), /magic/i);
 });
+
+test("decodes a frame carrying a content checksum", () => {
+  // `lz4 -BD -B4`: independent blocks, content checksum, no block checksums.
+  const frame = new Uint8Array(
+    readFileSync(new URL("fixtures/lz4-content-checksum.bin", import.meta.url)),
+  );
+  const expected =
+    Array.from({ length: 500 }, (_, i) => `content checksum test line ${i}`).join("\n") + "\n";
+  assert.equal(new TextDecoder().decode(decodeAll(frame, 300)), expected);
+});
+
+test("rejects a frame whose content checksum does not match", () => {
+  const frame = new Uint8Array(
+    readFileSync(new URL("fixtures/lz4-content-checksum.bin", import.meta.url)),
+  );
+  const corrupted = frame.slice();
+  corrupted[corrupted.length - 1]! ^= 0xff;
+  assert.throws(() => decodeAll(corrupted, corrupted.length), /content checksum mismatch/);
+});
+
+test("rejects a frame whose block checksum does not match", () => {
+  const frame = new Uint8Array(
+    readFileSync(new URL("fixtures/lz4-block-checksum.bin", import.meta.url)),
+  );
+  const corrupted = frame.slice();
+  corrupted[20]! ^= 0xff; // inside the first compressed block's payload
+  assert.throws(() => decodeAll(corrupted, corrupted.length), /block checksum mismatch/);
+});

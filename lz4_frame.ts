@@ -1,4 +1,5 @@
 import { concat, readUInt32LE } from "./compression.ts";
+import { Xxhash32Stream, xxhash32 } from "./xxhash32.ts";
 
 const MAGIC = 0x184d2204;
 const UNCOMPRESSED_BLOCK = 0x80000000;
@@ -71,8 +72,11 @@ export function createLz4FrameDecoder(): Lz4FrameDecoder {
   let history: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
   let blockMaxSize = 0;
   let blockChecksum = false;
+  let contentChecksum = false;
   let headerRead = false;
+  let awaitingContentChecksum = false;
   let finished = false;
+  const contentHash = new Xxhash32Stream();
 
   function readHeader(): boolean {
     if (pending.length < 7) return false;
@@ -84,7 +88,9 @@ export function createLz4FrameDecoder(): Lz4FrameDecoder {
     if (flg >> 6 !== 1) throw new Error(`Unsupported LZ4 frame version ${flg >> 6}`);
     if (flg & 0x01) throw new Error("LZ4 frame dictionaries are not supported");
 
-    const headerLength = 7 + (flg & 0x08 ? 8 : 0) + (flg & 0x02 ? 4 : 0);
+    // Header: magic(4) FLG(1) BD(1) [content size(8)] HC(1). Dict ID (rejected above)
+    // is the only optional field that shifts HC; content checksum lives after the frame.
+    const headerLength = 7 + (flg & 0x08 ? 8 : 0);
     if (pending.length < headerLength) return false;
 
     const sizeCode = (pending[5]! >> 4) & 7;
@@ -93,6 +99,7 @@ export function createLz4FrameDecoder(): Lz4FrameDecoder {
     blockMaxSize = maxSize;
 
     blockChecksum = (flg & 0x10) !== 0;
+    contentChecksum = (flg & 0x04) !== 0;
     pending = pending.subarray(headerLength);
     headerRead = true;
     return true;
@@ -117,17 +124,40 @@ export function createLz4FrameDecoder(): Lz4FrameDecoder {
     return scratch.slice(start, end);
   }
 
+  function verifyContentChecksum(): void {
+    if (pending.length < 4) return;
+    const expected = readUInt32LE(pending, 0);
+    const actual = contentHash.digest();
+    if (actual !== expected) {
+      throw new Error(`LZ4 content checksum mismatch: got ${actual}, expected ${expected}`);
+    }
+    pending = pending.subarray(4);
+    awaitingContentChecksum = false;
+    finished = true;
+  }
+
   return {
     push(chunk: Uint8Array): Uint8Array {
       if (finished || chunk.length === 0) return new Uint8Array(0);
       pending = pending.length === 0 ? chunk : concat([pending, chunk]);
+
+      if (awaitingContentChecksum) {
+        verifyContentChecksum();
+        return new Uint8Array(0);
+      }
       if (!headerRead && !readHeader()) return new Uint8Array(0);
 
       const produced: Uint8Array[] = [];
       while (pending.length >= 4) {
         const marker = readUInt32LE(pending, 0);
         if (marker === 0) {
-          finished = true;
+          pending = pending.subarray(4);
+          if (contentChecksum) {
+            awaitingContentChecksum = true;
+            verifyContentChecksum();
+          } else {
+            finished = true;
+          }
           break;
         }
 
@@ -135,9 +165,18 @@ export function createLz4FrameDecoder(): Lz4FrameDecoder {
         const total = 4 + size + (blockChecksum ? 4 : 0);
         if (pending.length < total) break;
 
-        produced.push(
-          decodeBlock(pending.subarray(4, 4 + size), (marker & UNCOMPRESSED_BLOCK) !== 0),
-        );
+        const block = pending.subarray(4, 4 + size);
+        if (blockChecksum) {
+          const expected = readUInt32LE(pending, 4 + size);
+          const actual = xxhash32(block);
+          if (actual !== expected) {
+            throw new Error(`LZ4 block checksum mismatch: got ${actual}, expected ${expected}`);
+          }
+        }
+
+        const decoded = decodeBlock(block, (marker & UNCOMPRESSED_BLOCK) !== 0);
+        contentHash.update(decoded);
+        produced.push(decoded);
         pending = pending.subarray(total);
       }
 
