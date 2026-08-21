@@ -28,7 +28,10 @@ const base = {
   bundle: true,
   target: "es2022",
   minify: true,
-  external: ["lz4-napi", "zstd-napi"],
+  // http_transport.ts reaches node:http through a dynamic import that esbuild
+  // cannot statically resolve, so the browser builds fail without this. Only
+  // the Node-only httpCompression path ever evaluates it.
+  external: ["lz4-napi", "zstd-napi", "node:http", "node:https"],
   absWorkingDir: root,
 };
 
