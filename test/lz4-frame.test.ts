@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { concat } from "../compression.ts";
 import { createLz4FrameDecoder } from "../lz4_frame.ts";
 
 // Captured from ClickHouse: `Accept-Encoding: lz4` with enable_http_compression=1.
@@ -15,14 +16,7 @@ function decodeAll(frame: Uint8Array, chunkSize: number): Uint8Array {
   for (let i = 0; i < frame.length; i += chunkSize) {
     out.push(decoder.push(frame.subarray(i, i + chunkSize)));
   }
-  const total = out.reduce((n, c) => n + c.length, 0);
-  const joined = new Uint8Array(total);
-  let off = 0;
-  for (const c of out) {
-    joined.set(c, off);
-    off += c.length;
-  }
-  return joined;
+  return concat(out);
 }
 
 test("decodes a ClickHouse frame whose matches span block boundaries", () => {

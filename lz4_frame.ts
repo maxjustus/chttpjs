@@ -175,12 +175,12 @@ export function createLz4FrameDecoder(): Lz4FrameDecoder {
         }
 
         const decoded = decodeBlock(block, (marker & UNCOMPRESSED_BLOCK) !== 0);
-        contentHash.update(decoded);
+        if (contentChecksum) contentHash.update(decoded);
         produced.push(decoded);
         pending = pending.subarray(total);
       }
 
-      return produced.length === 1 ? produced[0]! : concat(produced);
+      return concat(produced);
     },
   };
 }

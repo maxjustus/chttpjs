@@ -17,6 +17,7 @@
 
 import assert from "node:assert";
 import { describe, it } from "node:test";
+import { concat } from "../compression.ts";
 import { createLz4FrameDecoder } from "../lz4_frame.ts";
 import type { Rng } from "../native/codecs/base.ts";
 import { config, getIterationIndex, logConfig } from "./config.ts";
@@ -124,14 +125,7 @@ function decodeAll(rng: Rng, frame: Uint8Array): Uint8Array {
     for (let i = 0; i < frame.length; i++) push(frame.subarray(i, i + 1));
   }
 
-  const total = parts.reduce((n, c) => n + c.length, 0);
-  const joined = new Uint8Array(total);
-  let off = 0;
-  for (const c of parts) {
-    joined.set(c, off);
-    off += c.length;
-  }
-  return joined;
+  return concat(parts);
 }
 
 describe("LZ4 frame decoder oracle", { timeout: 120000 }, () => {
