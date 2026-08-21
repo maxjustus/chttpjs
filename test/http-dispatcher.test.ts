@@ -69,6 +69,20 @@ describe("dispatcher option", () => {
     }
   });
 
+  it("rejects a dispatcher combined with httpCompression", async () => {
+    // That path uses node:http, which cannot honor an undici dispatcher. A
+    // silent no-op would send a proxied or mocked request to the real host.
+    const dispatcher = new Agent();
+    try {
+      await assert.rejects(
+        Promise.resolve(query("SELECT 1", { url, httpCompression: "lz4", dispatcher })),
+        /httpCompression/,
+      );
+    } finally {
+      await dispatcher.close();
+    }
+  });
+
   it("does not send the dispatcher as a ClickHouse setting", async () => {
     delayMs = 0;
     const dispatcher = new Agent();

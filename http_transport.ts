@@ -10,9 +10,7 @@ export interface NodeRequestInit {
   signal?: AbortSignal | null;
 }
 
-type ByteSource = AsyncIterable<Uint8Array>;
-
-async function* decodeLz4(source: ByteSource): AsyncGenerator<Uint8Array> {
+async function* decodeLz4(source: AsyncIterable<Uint8Array>): AsyncGenerator<Uint8Array> {
   const decoder = createLz4FrameDecoder();
   for await (const chunk of source) {
     const out = decoder.push(chunk);
@@ -20,7 +18,7 @@ async function* decodeLz4(source: ByteSource): AsyncGenerator<Uint8Array> {
   }
 }
 
-async function* decodeZstd(source: ByteSource): AsyncGenerator<Uint8Array> {
+async function* decodeZstd(source: AsyncIterable<Uint8Array>): AsyncGenerator<Uint8Array> {
   const { DecompressStream } = await import("zstd-napi");
   const stream = new DecompressStream();
   const ready: Uint8Array[] = [];
@@ -44,11 +42,6 @@ async function* decodeZstd(source: ByteSource): AsyncGenerator<Uint8Array> {
   while (ready.length > 0) yield ready.shift() as Uint8Array;
 }
 
-const DECODERS: Record<HttpEncoding, (source: ByteSource) => AsyncGenerator<Uint8Array>> = {
-  lz4: decodeLz4,
-  zstd: decodeZstd,
-};
-
 /**
  * Request over `node:http`, which applies no content decoding of its own.
  *
@@ -56,11 +49,7 @@ const DECODERS: Record<HttpEncoding, (source: ByteSource) => AsyncGenerator<Uint
  * decoder and discards buffered output — including the framed exception trailer
  * that reports why the query failed. Decoding here keeps those bytes.
  */
-export async function nodeHttpRequest(
-  url: string,
-  init: NodeRequestInit,
-  encoding: HttpEncoding,
-): Promise<Response> {
+export async function nodeHttpRequest(url: string, init: NodeRequestInit): Promise<Response> {
   const target = new URL(url);
   const isHttps = target.protocol === "https:";
   const { request } = await import(isHttps ? "node:https" : "node:http");
@@ -99,17 +88,26 @@ export async function nodeHttpRequest(
   // exactly the loss that makes `fetch` unusable for this.
   async function* rawBody(): AsyncGenerator<Uint8Array> {
     try {
-      for await (const chunk of incoming) yield new Uint8Array(chunk as Buffer);
+      for await (const chunk of incoming) yield chunk as Uint8Array;
     } catch (err) {
       truncation = err as Error;
     }
   }
 
+  // Decode by the coding the server actually used, not the one requested. An
+  // early failure (auth, parse) arrives uncompressed, and assuming the request
+  // coding would replace ClickHouse's message with a codec error.
+  const coding = incoming.headers["content-encoding"];
+
   async function* body(): AsyncGenerator<Uint8Array> {
     // Yield every decoded byte before reporting the failure. The consumer scans
     // for the exception trailer and throws the real server error first.
-    yield* DECODERS[encoding](rawBody());
+    if (coding === "lz4") yield* decodeLz4(rawBody());
+    else if (coding === "zstd") yield* decodeZstd(rawBody());
+    else yield* rawBody();
+
     if (truncation) {
+      if (init.signal?.aborted) throw init.signal.reason;
       throw new Error(
         `Server closed the connection mid-response (${truncation.message}) without an ` +
           "exception trailer; the query may have been killed - check the server query log",
@@ -118,12 +116,10 @@ export async function nodeHttpRequest(
   }
 
   const headers = new Headers();
-  for (const [name, value] of Object.entries(incoming.headers)) {
-    if (typeof value === "string") headers.set(name, value);
-    else if (Array.isArray(value)) for (const v of value) headers.append(name, v);
-  }
-  // Content-Encoding is dropped: the body this Response carries is already decoded.
-  headers.delete("content-encoding");
+  const raw = incoming.rawHeaders;
+  for (let i = 0; i < raw.length; i += 2) headers.append(raw[i]!, raw[i + 1]!);
+  // Content-Encoding is dropped only when this Response carries decoded bytes.
+  if (coding === "lz4" || coding === "zstd") headers.delete("content-encoding");
 
   return new Response(ReadableStream.from(body()), {
     status: incoming.statusCode ?? 0,

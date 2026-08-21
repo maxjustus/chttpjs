@@ -4,6 +4,7 @@
  */
 
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { after, before, describe, it } from "node:test";
 import { ClickHouseException, init, query } from "../client.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
@@ -54,6 +55,27 @@ describe("httpCompression", () => {
       reported: error instanceof ClickHouseException || inBody,
     };
   }
+
+  it("reports the server error when the response comes back uncompressed", async () => {
+    // ClickHouse answers an early failure (auth, parse) without the requested
+    // coding. Decoding it anyway replaced the message with a codec error.
+    const server = createServer((_request, response) => {
+      response.writeHead(403, { "Content-Type": "text/plain" });
+      response.end("Code: 516. DB::Exception: default: Authentication failed\n");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const port = (server.address() as { port: number }).port;
+    try {
+      await assert.rejects(
+        Promise.resolve(
+          query("SELECT 1", { url: `http://127.0.0.1:${port}/`, httpCompression: "lz4" }),
+        ),
+        /Authentication failed/,
+      );
+    } finally {
+      server.close();
+    }
+  });
 
   for (const encoding of ENCODINGS) {
     it(`${encoding} yields the same rows as an uncompressed response`, async () => {

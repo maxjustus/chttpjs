@@ -29,6 +29,9 @@ import { type HttpEncoding, nodeHttpRequest } from "./http_transport.ts";
 import { mapAsync, prepend, readChunks, toAsyncIterable } from "./iter.ts";
 import { type ExternalTableData, encodeNative, RecordBatch } from "./native/index.ts";
 import { BlockBuffer } from "./native/io.ts";
+
+/** Structural stand-in for undici's Dispatcher, so the public option stays `unknown`. */
+type Dispatcher = NonNullable<RequestInit["dispatcher"]>;
 import { SQL_NULL, serializeParams } from "./params.ts";
 import { type CollectableAsyncGenerator, collectable } from "./util.ts";
 
@@ -415,10 +418,7 @@ export interface InsertOptions {
   signal?: AbortSignal;
   /** Request timeout in milliseconds */
   timeout?: number;
-  /**
-   * undici Dispatcher (Agent, ProxyAgent, RetryAgent, MockAgent) passed to
-   * fetch, which controls connection timeouts, pooling, proxies, and retries.
-   */
+  /** undici Dispatcher passed to fetch: connection timeouts, proxies, retries. */
   dispatcher?: unknown;
   /** ClickHouse settings applied to this insert */
   settings?: ClickHouseSettings;
@@ -524,7 +524,7 @@ async function insert(
     body: stream,
     duplex: "half",
     signal: createSignal(options.signal, options.timeout),
-    ...(options.dispatcher ? { dispatcher: options.dispatcher as RequestInit["dispatcher"] } : {}),
+    ...(options.dispatcher ? { dispatcher: options.dispatcher as Dispatcher } : {}),
   } as RequestInit);
 
   if (!response.ok) {
@@ -657,9 +657,8 @@ export interface QueryOptions {
   /** Request timeout in milliseconds */
   timeout?: number;
   /**
-   * undici Dispatcher (Agent, ProxyAgent, RetryAgent, MockAgent) passed to
-   * fetch, which controls connection timeouts, pooling, proxies, and retries.
-   * `httpCompression` requests go over `node:http` and ignore it.
+   * undici Dispatcher passed to fetch: connection timeouts, proxies, retries.
+   * Rejected with `httpCompression`, which goes over `node:http` instead.
    */
   dispatcher?: unknown;
   /** Client version string (e.g. "24.8") or numeric revision */
@@ -797,11 +796,17 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
 
   function send(body: string | Uint8Array | ReadableStream<Uint8Array>): Promise<Response> {
     if (httpCompression) {
-      return nodeHttpRequest(
-        url.toString(),
-        { method: "POST", headers, body, signal: requestSignal },
-        httpCompression,
-      );
+      if (options.dispatcher) {
+        throw new Error(
+          "dispatcher does not apply to httpCompression requests, which use node:http",
+        );
+      }
+      return nodeHttpRequest(url.toString(), {
+        method: "POST",
+        headers,
+        body,
+        signal: requestSignal,
+      });
     }
     // Need duplex: "half" for streaming body
     const fetchOptions: RequestInit & { duplex?: string } = {
@@ -809,12 +814,10 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
       body,
       headers,
       signal: requestSignal,
+      ...(options.dispatcher ? { dispatcher: options.dispatcher as Dispatcher } : {}),
     };
     if (body instanceof ReadableStream) {
       fetchOptions.duplex = "half";
-    }
-    if (options.dispatcher) {
-      fetchOptions.dispatcher = options.dispatcher as NonNullable<RequestInit["dispatcher"]>;
     }
     return fetch(url.toString(), fetchOptions);
   }
