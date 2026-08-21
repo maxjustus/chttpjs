@@ -17,7 +17,7 @@ export interface Lz4FrameDecoder {
   push(chunk: Uint8Array): Uint8Array;
 }
 
-function decodeSequences(src: Uint8Array, dst: Uint8Array, start: number): number {
+function decodeSequences(src: Uint8Array, dst: Uint8Array, start: number, limit: number): number {
   let pos = start;
   let i = 0;
 
@@ -35,7 +35,7 @@ function decodeSequences(src: Uint8Array, dst: Uint8Array, start: number): numbe
     }
 
     if (i + literalLength > src.length) throw new Error("LZ4 literal run past end of block");
-    if (pos + literalLength > dst.length) throw new Error("LZ4 block exceeds max block size");
+    if (pos + literalLength > limit) throw new Error("LZ4 block exceeds max block size");
     dst.set(src.subarray(i, i + literalLength), pos);
     i += literalLength;
     pos += literalLength;
@@ -59,7 +59,7 @@ function decodeSequences(src: Uint8Array, dst: Uint8Array, start: number): numbe
 
     let from = pos - offset;
     if (offset === 0 || from < 0) throw new Error(`LZ4 match offset ${offset} out of range`);
-    if (pos + matchLength > dst.length) throw new Error("LZ4 block exceeds max block size");
+    if (pos + matchLength > limit) throw new Error("LZ4 block exceeds max block size");
     // Overlapping matches are legal and encode runs, so copy one byte at a time.
     for (let k = 0; k < matchLength; k++) dst[pos++] = dst[from++]!;
   }
@@ -69,7 +69,11 @@ function decodeSequences(src: Uint8Array, dst: Uint8Array, start: number): numbe
 
 export function createLz4FrameDecoder(): Lz4FrameDecoder {
   let pending: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
-  let history: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+  // One buffer for the whole frame: retained history at the front, the block
+  // under decode behind it. Reallocating per block moved history + blockMaxSize
+  // bytes each time, which dominates when the server flushes small blocks.
+  let scratch: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+  let historyLen = 0;
   let blockMaxSize = 0;
   let blockChecksum = false;
   let contentChecksum = false;
@@ -100,6 +104,7 @@ export function createLz4FrameDecoder(): Lz4FrameDecoder {
 
     blockChecksum = (flg & 0x10) !== 0;
     contentChecksum = (flg & 0x04) !== 0;
+    scratch = new Uint8Array(WINDOW_SIZE + blockMaxSize);
     pending = pending.subarray(headerLength);
     headerRead = true;
     return true;
@@ -107,21 +112,22 @@ export function createLz4FrameDecoder(): Lz4FrameDecoder {
 
   function decodeBlock(block: Uint8Array, uncompressed: boolean): Uint8Array {
     // Decode behind the retained history so cross-block matches resolve inline.
-    const scratch = new Uint8Array(history.length + blockMaxSize);
-    scratch.set(history, 0);
-    const start = history.length;
+    const start = historyLen;
+    const limit = start + blockMaxSize;
 
     let end: number;
     if (uncompressed) {
-      if (start + block.length > scratch.length) throw new Error("LZ4 block exceeds max size");
+      if (start + block.length > limit) throw new Error("LZ4 block exceeds max size");
       scratch.set(block, start);
       end = start + block.length;
     } else {
-      end = decodeSequences(block, scratch, start);
+      end = decodeSequences(block, scratch, start, limit);
     }
 
-    history = scratch.slice(Math.max(0, end - WINDOW_SIZE), end);
-    return scratch.slice(start, end);
+    const decoded = scratch.slice(start, end);
+    historyLen = Math.min(end, WINDOW_SIZE);
+    scratch.copyWithin(0, end - historyLen, end);
+    return decoded;
   }
 
   function verifyContentChecksum(): void {

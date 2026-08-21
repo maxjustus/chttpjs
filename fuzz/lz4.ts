@@ -26,6 +26,7 @@ import { pick, randomString } from "./util.ts";
 
 logConfig("lz4");
 
+const ENCODER = new TextEncoder();
 const SMALL_FRAME_LEN = 1024; // 1-byte chunk cap; pending copies per push
 const TINY_STEP_FRAME_LEN = 8192; // fixed 2-8 byte step chunk cap
 
@@ -59,7 +60,7 @@ function textLines(rng: Rng, len: number): Uint8Array {
   let off = 0;
   for (let i = 0; off < len; i++) {
     const line = `{"row":${i},"s":"${randomString(rng, 12)}"}\n`;
-    const bytes = new TextEncoder().encode(line);
+    const bytes = ENCODER.encode(line);
     const n = Math.min(bytes.length, len - off);
     out.set(bytes.subarray(0, n), off);
     off += n;
