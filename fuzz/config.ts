@@ -110,7 +110,7 @@ export function logFuzzError(ctx: FuzzErrorContext, err: unknown): void {
 }
 
 export function logConfig(
-  testType: "unit" | "http" | "tcp" | "generated" | "corruption" | "insert",
+  testType: "unit" | "http" | "tcp" | "generated" | "corruption" | "insert" | "lz4",
 ): void {
   let mode = `iterations=${config.iterations}`;
   const iterIdx = getIterationIndex();
@@ -118,7 +118,8 @@ export function logConfig(
     mode = `iteration=${iterIdx + 1}/${config.iterations}`;
   }
 
-  const local = testType === "unit" || testType === "corruption" || testType === "insert";
+  const local =
+    testType === "unit" || testType === "corruption" || testType === "insert" || testType === "lz4";
   const compressions = local ? "n/a" : JSON.stringify(config.compressions);
   console.log(`[fuzz ${testType}] ${mode}, compressions=${compressions}, rows=${config.rows}`);
 }

@@ -9,6 +9,7 @@
  *   --unit       Run unit tests
  *   --corruption Run byte-mutation decode tests
  *   --insert     Run insert() option tests
+ *   --lz4        Run LZ4 frame decoder oracle tests
  *   --http       Run HTTP integration tests
  *   --tcp        Run TCP integration tests
  *   --generated  Run client-generated CH-anchored tests
@@ -48,10 +49,10 @@ interface JobResult {
   peakRssBytes: number | null;
 }
 
-type Suite = "unit" | "corruption" | "insert" | "http" | "tcp" | "generated";
+type Suite = "unit" | "corruption" | "insert" | "lz4" | "http" | "tcp" | "generated";
 
 /** Suites that run offline — no ClickHouse server, no compression matrix. */
-const LOCAL_SUITES: ReadonlySet<Suite> = new Set(["unit", "corruption", "insert"]);
+const LOCAL_SUITES: ReadonlySet<Suite> = new Set(["unit", "corruption", "insert", "lz4"]);
 
 const memoryPollMs = readPositiveIntEnv("FUZZ_MEMORY_POLL_MS", 250);
 const memoryWarnBytes = readPositiveIntEnv("FUZZ_MEMORY_WARN_MB", 0) * 1024 * 1024;
@@ -94,6 +95,8 @@ function parseArgs(): {
       suites.push("corruption");
     } else if (arg === "--insert") {
       suites.push("insert");
+    } else if (arg === "--lz4") {
+      suites.push("lz4");
     } else if (arg === "--http") {
       suites.push("http");
     } else if (arg === "--tcp") {
@@ -101,14 +104,14 @@ function parseArgs(): {
     } else if (arg === "--generated") {
       suites.push("generated");
     } else if (arg === "--all") {
-      suites.push("unit", "corruption", "insert", "http", "tcp", "generated");
+      suites.push("unit", "corruption", "insert", "lz4", "http", "tcp", "generated");
     } else if (arg === "--verbose" || arg === "-v") {
       verbose = true;
     }
   }
 
   if (suites.length === 0) {
-    suites.push("unit", "corruption", "insert", "http", "tcp", "generated");
+    suites.push("unit", "corruption", "insert", "lz4", "http", "tcp", "generated");
   }
 
   return { suites: [...new Set(suites)], verbose };
