@@ -6,6 +6,8 @@
 
 - `httpCompression: "zstd" | "lz4"` requests the response with an HTTP content coding that ClickHouse flushes per block, so rows and in-band progress arrive during the query instead of after it finishes. Replaces `compression` for that request. Decodes over `node:http`, so it is unavailable in browsers, and `"zstd"` needs the optional `zstd-napi` dependency.
 
+- `dispatcher` on `query()` and `insert()` takes an undici `Dispatcher` (`Agent`, `ProxyAgent`, `RetryAgent`, `MockAgent`) and hands it to fetch, which controls connection timeouts, pooling, proxies, and retries. Node's built-in fetch honors it, so the client keeps its runtime dependencies unchanged. `httpCompression` requests go over `node:http` and ignore it.
+
 ### Fixed
 
 - `{name: Identifier}` query parameters (table/column/database names) no longer throw `Unknown type: Identifier`. The value is sent verbatim so the server escapes it into a quoted identifier; pre-quoting is not applied.

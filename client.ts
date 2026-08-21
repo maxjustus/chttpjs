@@ -415,6 +415,11 @@ export interface InsertOptions {
   signal?: AbortSignal;
   /** Request timeout in milliseconds */
   timeout?: number;
+  /**
+   * undici Dispatcher (Agent, ProxyAgent, RetryAgent, MockAgent) passed to
+   * fetch, which controls connection timeouts, pooling, proxies, and retries.
+   */
+  dispatcher?: unknown;
   /** ClickHouse settings applied to this insert */
   settings?: ClickHouseSettings;
   /** Query parameters for parameterized queries like SELECT {x:UInt64} */
@@ -519,6 +524,7 @@ async function insert(
     body: stream,
     duplex: "half",
     signal: createSignal(options.signal, options.timeout),
+    ...(options.dispatcher ? { dispatcher: options.dispatcher as RequestInit["dispatcher"] } : {}),
   } as RequestInit);
 
   if (!response.ok) {
@@ -593,6 +599,7 @@ const HTTP_QUERY_OPTION_RESERVED = new Set([
   "httpCompression",
   "signal",
   "timeout",
+  "dispatcher",
   "clientVersion",
   "settings",
   "params",
@@ -649,6 +656,12 @@ export interface QueryOptions {
   signal?: AbortSignal;
   /** Request timeout in milliseconds */
   timeout?: number;
+  /**
+   * undici Dispatcher (Agent, ProxyAgent, RetryAgent, MockAgent) passed to
+   * fetch, which controls connection timeouts, pooling, proxies, and retries.
+   * `httpCompression` requests go over `node:http` and ignore it.
+   */
+  dispatcher?: unknown;
   /** Client version string (e.g. "24.8") or numeric revision */
   clientVersion?: string | number;
   /** ClickHouse settings applied to this query */
@@ -799,6 +812,9 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
     };
     if (body instanceof ReadableStream) {
       fetchOptions.duplex = "half";
+    }
+    if (options.dispatcher) {
+      fetchOptions.dispatcher = options.dispatcher as NonNullable<RequestInit["dispatcher"]>;
     }
     return fetch(url.toString(), fetchOptions);
   }

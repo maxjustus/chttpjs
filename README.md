@@ -779,6 +779,24 @@ LZ4 and ZSTD use native Node addons (`lz4-napi`, `zstd-napi`) installed automati
 
 `compressQuery` compresses the HTTP request body (your SQL and any external table data) using HTTP `Content-Encoding`. This is independent of `compression`, which controls ClickHouse block compression on responses — they apply to different directions and don't double-compress. Set `compressQuery` to `"zstd"`, `"lz4"`, or `{ method: "zstd", level }`; requires the server setting `enable_http_compression=1`.
 
+### Connection control (`dispatcher`)
+
+`timeout` sets an overall deadline per request, and `signal` cancels one manually. For connection-level behavior — per-phase timeouts, pooling, proxies, retries — pass an undici `Dispatcher`. Node's built-in `fetch` honors it, so the client needs no extra dependency:
+
+```ts
+import { Agent } from "undici";
+
+const dispatcher = new Agent({ headersTimeout: 3_000, bodyTimeout: 30_000 });
+
+for await (const packet of query(sql, { dispatcher })) {
+  // Fails fast if the server sends no headers within 3 seconds.
+}
+```
+
+Any undici dispatcher works, including `ProxyAgent`, `RetryAgent`, and `MockAgent` for tests. `httpCompression` requests go over `node:http` and ignore it.
+
+For long queries, prefer ClickHouse's own limits over transport timeouts. `settings: { max_execution_time: 60 }` bounds the query on the server, while an aborted socket does not necessarily stop it.
+
 ### Incremental delivery (`httpCompression`)
 
 With the default `compression`, ClickHouse buffers the whole response and sends it once the query finishes. Rows and in-band progress only arrive at the end. Set `httpCompression` to get compression that the server flushes per block instead:
