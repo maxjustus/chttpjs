@@ -18,10 +18,9 @@ import {
   init,
   query,
   streamDecodeNative,
-  type QueryPacket,
 } from "../client.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
-import { generateSessionId } from "./test_utils.ts";
+import { collect, generateSessionId } from "./test_utils.ts";
 
 // Framing formats land in 26.8, newer than the pinned suite default, so this
 // file starts its own container. Override with CH_FRAMING_VERSION.
@@ -44,13 +43,8 @@ describe("HTTP framing formats", { timeout: 120000 }, () => {
     await stopClickHouse();
   });
 
-  async function collectPackets(sql: string, options: Parameters<typeof query>[1]) {
-    const packets: QueryPacket[] = [];
-    for await (const packet of query(sql, options)) {
-      packets.push(packet);
-    }
-    return packets;
-  }
+  const collectPackets = (sql: string, options: Parameters<typeof query>[1]) =>
+    collect(query(sql, options));
 
   describe("Auxiliary packets", () => {
     for (const framing of [

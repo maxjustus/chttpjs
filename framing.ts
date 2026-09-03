@@ -7,6 +7,8 @@
  * without framing.
  */
 
+import { concat } from "./compression.ts";
+
 export type FramingFormat = "EventStream" | "JSONEachPacketBase64" | "JSONEachPacketString";
 
 /** One row of a `log` packet; all fields are strings on the wire. */
@@ -39,18 +41,6 @@ export type FramedPacket =
   | { kind: "exception"; message: string };
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-function concat(chunks: Uint8Array[]): Uint8Array {
-  const total = chunks.reduce((n, c) => n + c.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return out;
-}
 
 function base64Decode(s: string): Uint8Array {
   if (typeof Buffer !== "undefined") return new Uint8Array(Buffer.from(s, "base64"));
@@ -97,6 +87,7 @@ function framedPacketFromJson(kind: string, body: string): FramedPacket | undefi
  * one data field); auxiliary packets are JSON.
  */
 async function* parseEventStream(chunks: AsyncIterable<Uint8Array>): AsyncGenerator<FramedPacket> {
+  const decoder = new TextDecoder();
   const delimiter = new Uint8Array([10, 10]);
   let pending: Uint8Array = new Uint8Array(0);
   let start = 0; // start of the incomplete event
