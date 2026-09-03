@@ -796,7 +796,7 @@ for await (const packet of query("SELECT number FROM numbers(1000) FORMAT JSONEa
 - Data, totals, and extremes packets surface as `Data` chunks whose concatenation equals the unframed format output, so `collectText`, `streamText`, and `FORMAT Native` decoding work unchanged — including binary formats, which the base64 and EventStream framings carry byte-exactly.
 - Progress arrives as `Progress` packets instead of `X-ClickHouse-Progress` headers.
 - A failed query throws `ClickHouseException` from the terminal exception packet, even when the server already committed a 200 response.
-- Log and profile-events packets are dropped.
+- Log rows surface as `Log` packets (requires the `send_logs_level` setting) and profile events as `ProfileEvents` packets, mirroring the TCP client packet names.
 - The server flushes each packet as it is produced, including under `compression` block compression, so results and progress stream instead of arriving at the end.
 
 ## Performance

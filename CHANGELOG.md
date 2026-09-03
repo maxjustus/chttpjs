@@ -4,7 +4,7 @@
 
 ### Added
 
-- `framing` query option enables ClickHouse 26.8+ framed HTTP responses (`framing_output_format`): data, totals, and extremes packets surface as `Data` chunks reproducing the unframed format output byte for byte, progress arrives as `Progress` packets, and errors throw from the terminal exception packet even after a committed 200. Supported framings: `EventStream`, `JSONEachPacketBase64`, `JSONEachPacketString`. Log and profile-events packets are dropped.
+- `framing` query option enables ClickHouse 26.8+ framed HTTP responses (`framing_output_format`): data, totals, and extremes packets surface as `Data` chunks reproducing the unframed format output byte for byte, progress arrives as `Progress` packets, log rows as `Log` packets, profile events as `ProfileEvents` packets, and errors throw from the terminal exception packet even after a committed 200. Supported framings: `EventStream`, `JSONEachPacketBase64`, `JSONEachPacketString`.
 
 ## 1.1.2
 

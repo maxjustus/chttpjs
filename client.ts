@@ -11,7 +11,12 @@ import {
   zstdCompressRaw,
 } from "./compression.ts";
 import { ClickHouseException } from "./errors.ts";
-import { parseFramedStream, type FramingFormat } from "./framing.ts";
+import {
+  parseFramedStream,
+  type FramingFormat,
+  type HttpLogEntry,
+  type HttpProfileEvent,
+} from "./framing.ts";
 import type { ClickHouseSettings } from "./settings.generated.ts";
 
 export {
@@ -197,6 +202,8 @@ export interface HttpProgress {
 export type QueryPacket =
   | { type: "Progress"; progress: HttpProgress }
   | { type: "Data"; chunk: Uint8Array }
+  | { type: "Log"; entries: HttpLogEntry[] }
+  | { type: "ProfileEvents"; events: HttpProfileEvent[] }
   | { type: "Summary"; summary: QuerySummary; queryId: string };
 
 /** Result from insert() with metadata */
@@ -642,10 +649,11 @@ export interface QueryOptions {
    *
    * Data, totals, and extremes packets surface as Data chunks whose
    * concatenation equals the unframed format output; progress arrives as
-   * Progress packets; a failed query throws from the exception packet even
-   * after the server committed a 200. Log and profile-events packets are
-   * dropped. The server flushes each packet as it is produced, including
-   * under `compress=1` block compression.
+   * Progress packets; log rows as Log packets (needs `send_logs_level`);
+   * profile events as ProfileEvents packets; a failed query throws from the
+   * exception packet even after the server committed a 200. The server flushes
+   * each packet as it is produced, including under `compress=1` block
+   * compression.
    */
   framing?: FramingFormat;
   /** AbortSignal for manual cancellation */
@@ -977,6 +985,10 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
       if (packet.kind === "exception") throw exceptionFromText(packet.message);
       if (packet.kind === "progress") {
         yield { type: "Progress", progress: packet.progress as unknown as HttpProgress };
+      } else if (packet.kind === "log") {
+        yield { type: "Log", entries: [packet.entry] };
+      } else if (packet.kind === "profile_events") {
+        yield { type: "ProfileEvents", events: packet.events };
       } else {
         yield { type: "Data", chunk: packet.payload };
       }
@@ -1094,6 +1106,7 @@ async function collectJsonEachRow<T = unknown>(input: QueryInput): Promise<T[]> 
 }
 
 export { ClickHouseException } from "./errors.ts";
+export type { HttpLogEntry, HttpProfileEvent } from "./framing.ts";
 export {
   init,
   insert,

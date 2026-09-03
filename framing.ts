@@ -9,9 +9,33 @@
 
 export type FramingFormat = "EventStream" | "JSONEachPacketBase64" | "JSONEachPacketString";
 
+/** One row of a `log` packet; all fields are strings on the wire. */
+export interface HttpLogEntry {
+  event_time: string;
+  event_time_microseconds: string;
+  host_name: string;
+  query_id: string;
+  thread_id: string;
+  priority: string;
+  source: string;
+  text: string;
+}
+
+/** One row of a `profile_events` packet; all fields are strings on the wire. */
+export interface HttpProfileEvent {
+  host_name: string;
+  current_time: string;
+  thread_id: string;
+  type: "gauge" | "increment";
+  name: string;
+  value: string;
+}
+
 export type FramedPacket =
   | { kind: "data" | "totals" | "extremes"; payload: Uint8Array }
   | { kind: "progress"; progress: Record<string, string> }
+  | { kind: "log"; entry: HttpLogEntry }
+  | { kind: "profile_events"; events: HttpProfileEvent[] }
   | { kind: "exception"; message: string };
 
 const encoder = new TextEncoder();
@@ -55,9 +79,13 @@ function framedPacketFromJson(kind: string, body: string): FramedPacket | undefi
       return { kind, payload: base64Decode(body) };
     case "progress":
       return { kind: "progress", progress: JSON.parse(body) };
+    case "log":
+      return { kind: "log", entry: JSON.parse(body) };
+    case "profile_events":
+      return { kind: "profile_events", events: JSON.parse(body) };
     case "exception":
       return { kind: "exception", message: JSON.parse(body).exception };
-    // log and profile_events packets have no QueryPacket representation
+    // unknown packet kinds are ignored for forward compatibility
     default:
       return undefined;
   }
@@ -148,9 +176,13 @@ function jsonPacketLine(line: string, base64: boolean): FramedPacket | undefined
       };
     case "progress":
       return { kind: "progress", progress: obj.progress as Record<string, string> };
+    case "log":
+      return { kind: "log", entry: obj.log as HttpLogEntry };
+    case "profile_events":
+      return { kind: "profile_events", events: obj.profile_events as HttpProfileEvent[] };
     case "exception":
       return { kind: "exception", message: obj.exception as string };
-    // log and profile_events packets have no QueryPacket representation
+    // unknown packet kinds are ignored for forward compatibility
     default:
       return undefined;
   }

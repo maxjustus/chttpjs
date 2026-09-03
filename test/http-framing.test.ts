@@ -52,6 +52,45 @@ describe("HTTP framing formats", { timeout: 120000 }, () => {
     return packets;
   }
 
+  describe("Auxiliary packets", () => {
+    for (const framing of [
+      "EventStream",
+      "JSONEachPacketBase64",
+      "JSONEachPacketString",
+    ] as const) {
+      it(`surfaces log and profile-events packets under ${framing}`, async () => {
+        const packets = await collectPackets("SELECT number FROM numbers(10) FORMAT JSONEachRow", {
+          url,
+          auth,
+          sessionId,
+          framing,
+          compression: false,
+          settings: { send_logs_level: "trace" },
+        });
+
+        const logs = packets.filter((p) => p.type === "Log");
+        assert.ok(logs.length > 0, "should surface log packets");
+        for (const l of logs) {
+          assert.ok(l.entries.length > 0);
+          for (const entry of l.entries) {
+            assert.strictEqual(typeof entry.text, "string");
+            assert.strictEqual(typeof entry.source, "string");
+            assert.strictEqual(typeof entry.priority, "string");
+          }
+        }
+
+        const profileEvents = packets.filter((p) => p.type === "ProfileEvents");
+        assert.ok(profileEvents.length > 0, "should surface profile-events packets");
+        const selected = profileEvents
+          .flatMap((p) => p.events)
+          .find((e) => e.name === "SelectedRows");
+        assert.ok(selected, "should report SelectedRows");
+        assert.strictEqual(selected.value, "10");
+        assert.ok(selected.type === "gauge" || selected.type === "increment");
+      });
+    }
+  });
+
   describe("EventStream", () => {
     it("multiplexes data and progress packets in order", async () => {
       const packets = await collectPackets("SELECT number FROM numbers(1000) FORMAT JSONEachRow", {
