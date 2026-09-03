@@ -23,23 +23,25 @@ async function* decodeZstd(source: AsyncIterable<Uint8Array>): AsyncGenerator<Ui
   const stream = new DecompressStream();
   const ready: Uint8Array[] = [];
   stream.on("data", (chunk: Buffer) => ready.push(new Uint8Array(chunk)));
-  stream.on("error", () => {});
+  // A failed flush is expected when the server dies mid-frame: the bytes decoded
+  // so far carry the exception trailer. Any other error is corruption, recorded
+  // here and raised after the drain below so no decoded byte is lost.
+  let decodeError: Error | undefined;
+  stream.on("error", (err: Error) => (decodeError ??= err));
 
   for await (const chunk of source) {
-    await new Promise<void>((resolve, reject) => {
-      stream.write(chunk, (err) => (err ? reject(err) : resolve()));
-    });
+    await new Promise<void>((resolve) => stream.write(chunk, () => resolve()));
     while (ready.length > 0) yield ready.shift() as Uint8Array;
   }
 
-  // A mid-stream server error leaves the frame unterminated. Every byte already
-  // decoded still counts, including the exception trailer, so a failed flush is
-  // not fatal - but it must still settle, or the response never ends.
+  // The end must settle even on an unterminated frame, or the response never
+  // ends.
   await new Promise<void>((resolve) => {
     stream.once("error", () => resolve());
     stream.end(() => resolve());
   });
   while (ready.length > 0) yield ready.shift() as Uint8Array;
+  if (decodeError) throw decodeError;
 }
 
 /**
@@ -73,8 +75,14 @@ export async function nodeHttpRequest(url: string, init: NodeRequestInit): Promi
 
     if (init.body instanceof ReadableStream) {
       (async () => {
-        for await (const chunk of init.body as ReadableStream<Uint8Array>) req.write(chunk);
-        req.end();
+        // pipeline applies backpressure; req.write ignores it, which would
+        // buffer a large body in memory.
+        const { pipeline } = await import("node:stream/promises");
+        const { Readable } = await import("node:stream");
+        await pipeline(
+          Readable.fromWeb(init.body as import("node:stream/web").ReadableStream),
+          req,
+        );
       })().catch(reject);
     } else {
       req.end(init.body);
@@ -99,20 +107,28 @@ export async function nodeHttpRequest(url: string, init: NodeRequestInit): Promi
   // coding would replace ClickHouse's message with a codec error.
   const coding = incoming.headers["content-encoding"];
 
+  function truncationError(): unknown {
+    if (init.signal?.aborted) return init.signal.reason;
+    return new Error(
+      `Server closed the connection mid-response (${truncation!.message}) without an ` +
+        "exception trailer; the query may have been killed - check the server query log",
+    );
+  }
+
   async function* body(): AsyncGenerator<Uint8Array> {
     // Yield every decoded byte before reporting the failure. The consumer scans
     // for the exception trailer and throws the real server error first.
-    if (coding === "lz4") yield* decodeLz4(rawBody());
-    else if (coding === "zstd") yield* decodeZstd(rawBody());
-    else yield* rawBody();
-
-    if (truncation) {
-      if (init.signal?.aborted) throw init.signal.reason;
-      throw new Error(
-        `Server closed the connection mid-response (${truncation.message}) without an ` +
-          "exception trailer; the query may have been killed - check the server query log",
-      );
+    try {
+      if (coding === "lz4") yield* decodeLz4(rawBody());
+      else if (coding === "zstd") yield* decodeZstd(rawBody());
+      else yield* rawBody();
+    } catch (err) {
+      // A decode failure alongside a transport failure is the expected
+      // unterminated frame; the transport error says what actually happened.
+      if (truncation) throw truncationError();
+      throw err;
     }
+    if (truncation) throw truncationError();
   }
 
   const headers = new Headers();

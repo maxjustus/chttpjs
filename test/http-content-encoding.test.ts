@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { after, before, describe, it } from "node:test";
 import { ClickHouseException, init, query } from "../client.ts";
+import { zstdCompressRaw } from "../compression.ts";
 import { startClickHouse, stopClickHouse } from "./setup.ts";
 
 const ENCODINGS = ["zstd", "lz4"] as const;
@@ -74,6 +75,49 @@ describe("httpCompression", () => {
       );
     } finally {
       server.close();
+    }
+  });
+
+  it("raises zstd corruption instead of returning a short body", async () => {
+    // A byte flipped inside the frame header descriptor fails the decode with
+    // the transport still intact, so the error must surface.
+    const payload = new Uint8Array(4096);
+    for (let i = 0; i < payload.length; i++) payload[i] = i & 0xff;
+    const frame = zstdCompressRaw(payload);
+    frame[6]! ^= 0xff;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "Content-Encoding": "zstd" });
+      response.end(frame);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const port = (server.address() as { port: number }).port;
+    try {
+      await assert.rejects(
+        Promise.resolve(
+          query("SELECT 1", { url: `http://127.0.0.1:${port}/`, httpCompression: "zstd" }),
+        ),
+        (err: unknown) => err instanceof Error && !/Server closed/.test(err.message),
+      );
+    } finally {
+      server.close();
+    }
+  });
+
+  it("rejects an explicit compression combined with httpCompression", async () => {
+    await assert.rejects(
+      Promise.resolve(
+        query("SELECT 1", { url, auth, compression: "zstd", httpCompression: "lz4" }),
+      ),
+      /set only one/,
+    );
+    // compression: false is coherent with httpCompression: no block compression.
+    for await (const _ of query("SELECT 1", {
+      url,
+      auth,
+      compression: false,
+      httpCompression: "lz4",
+    })) {
+      // drain
     }
   });
 

@@ -32,6 +32,7 @@ import { BlockBuffer } from "./native/io.ts";
 
 /** Structural stand-in for undici's Dispatcher, so the public option stays `unknown`. */
 type Dispatcher = NonNullable<RequestInit["dispatcher"]>;
+
 import { SQL_NULL, serializeParams } from "./params.ts";
 import { type CollectableAsyncGenerator, collectable } from "./util.ts";
 
@@ -736,6 +737,11 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
   // Block compression and HTTP content coding are alternatives, not layers.
   // Only the latter makes the server flush each block as it is produced.
   const httpCompression = options.httpCompression;
+  if (httpCompression && options.compression !== undefined && options.compression !== false) {
+    throw new Error(
+      "compression and httpCompression are alternative response codings; set only one",
+    );
+  }
   const compressed = compression !== false && !httpCompression;
   const params: Record<string, string> = {
     default_format: "JSONEachRowWithProgress",
