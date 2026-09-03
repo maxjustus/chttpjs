@@ -11,6 +11,7 @@ import {
   zstdCompressRaw,
 } from "./compression.ts";
 import { ClickHouseException } from "./errors.ts";
+import { parseFramedStream, type FramingFormat } from "./framing.ts";
 import type { ClickHouseSettings } from "./settings.generated.ts";
 
 export {
@@ -589,6 +590,7 @@ const HTTP_QUERY_OPTION_RESERVED = new Set([
   "auth",
   "compression",
   "compressQuery",
+  "framing",
   "signal",
   "timeout",
   "clientVersion",
@@ -614,8 +616,8 @@ function mergeRawHttpQueryOptions(target: Record<string, string>, options: Query
  * and `params` for typed `{name: Type}` query parameters.
  *
  * Reserved transport keys are not forwarded: `url`, `auth`, `compression`,
- * `compressQuery`, `signal`, `timeout`, `clientVersion`, `settings`, `params`,
- * `externalTables`, `queryId`, and `sessionId`.
+ * `compressQuery`, `framing`, `signal`, `timeout`, `clientVersion`, `settings`,
+ * `params`, `externalTables`, `queryId`, and `sessionId`.
  */
 export interface QueryOptions {
   [key: string]: unknown;
@@ -634,6 +636,18 @@ export interface QueryOptions {
    * Requires server setting: enable_http_compression=1
    */
   compressQuery?: "lz4" | "zstd" | { method: "zstd"; level?: number };
+  /**
+   * Parse the response as a framed stream (server setting
+   * `framing_output_format`, ClickHouse 26.8+).
+   *
+   * Data, totals, and extremes packets surface as Data chunks whose
+   * concatenation equals the unframed format output; progress arrives as
+   * Progress packets; a failed query throws from the exception packet even
+   * after the server committed a 200. Log and profile-events packets are
+   * dropped. The server flushes each packet as it is produced, including
+   * under `compress=1` block compression.
+   */
+  framing?: FramingFormat;
   /** AbortSignal for manual cancellation */
   signal?: AbortSignal;
   /** Request timeout in milliseconds */
@@ -711,6 +725,7 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
   const baseUrl = options.url || "http://localhost:8123/";
   const compression = options.compression ?? "lz4";
   const compressed = compression !== false;
+  const framing = options.framing;
   const params: Record<string, string> = {
     default_format: "JSONEachRowWithProgress",
   };
@@ -725,6 +740,10 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
 
   if (options.compressQuery) {
     params.enable_http_compression = "1";
+  }
+
+  if (framing) {
+    params.framing_output_format = framing;
   }
 
   if (options.clientVersion) {
@@ -953,8 +972,19 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
   }
 
   // Yield Data packets from body stream
-  for await (const chunk of createStream()) {
-    yield { type: "Data", chunk };
+  if (framing) {
+    for await (const packet of parseFramedStream(createStream(), framing)) {
+      if (packet.kind === "exception") throw exceptionFromText(packet.message);
+      if (packet.kind === "progress") {
+        yield { type: "Progress", progress: packet.progress as unknown as HttpProgress };
+      } else {
+        yield { type: "Data", chunk: packet.payload };
+      }
+    }
+  } else {
+    for await (const chunk of createStream()) {
+      yield { type: "Data", chunk };
+    }
   }
 
   // Yield Summary packet at end

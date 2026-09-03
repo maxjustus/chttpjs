@@ -779,6 +779,26 @@ LZ4 and ZSTD use native Node addons (`lz4-napi`, `zstd-napi`) installed automati
 
 `compressQuery` compresses the HTTP request body (your SQL and any external table data) using HTTP `Content-Encoding`. This is independent of `compression`, which controls ClickHouse block compression on responses — they apply to different directions and don't double-compress. Set `compressQuery` to `"zstd"`, `"lz4"`, or `{ method: "zstd", level }`; requires the server setting `enable_http_compression=1`.
 
+### Framed responses
+
+ClickHouse 26.8+ can multiplex data, totals, extremes, progress, and exceptions into one response stream with the `framing_output_format` setting. Set `framing` in HTTP query options to enable it and parse the frames back into packets:
+
+```ts
+for await (const packet of query("SELECT number FROM numbers(1000) FORMAT JSONEachRow", {
+  ...config,
+  framing: "EventStream", // or "JSONEachPacketBase64" / "JSONEachPacketString"
+})) {
+  if (packet.type === "Data") process(packet.chunk);
+  if (packet.type === "Progress") console.log(packet.progress.read_rows);
+}
+```
+
+- Data, totals, and extremes packets surface as `Data` chunks whose concatenation equals the unframed format output, so `collectText`, `streamText`, and `FORMAT Native` decoding work unchanged — including binary formats, which the base64 and EventStream framings carry byte-exactly.
+- Progress arrives as `Progress` packets instead of `X-ClickHouse-Progress` headers.
+- A failed query throws `ClickHouseException` from the terminal exception packet, even when the server already committed a 200 response.
+- Log and profile-events packets are dropped.
+- The server flushes each packet as it is produced, including under `compression` block compression, so results and progress stream instead of arriving at the end.
+
 ## Performance
 
 Benchmarks on Apple M4 Max / Node v25.9.0, 1M rows.
