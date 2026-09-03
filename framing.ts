@@ -50,6 +50,16 @@ function base64Decode(s: string): Uint8Array {
   return out;
 }
 
+/**
+ * Every packet ends with its delimiter, so bytes left over at end of stream mean
+ * the server closed the connection mid-packet.
+ */
+function truncated(bytes: number): Error {
+  return new Error(
+    `Truncated framed response: stream ended mid-packet with ${bytes} bytes buffered`,
+  );
+}
+
 /** Index of the first occurrence of `delim` at or after `from`, or -1. */
 function findDelimiter(buf: Uint8Array, from: number, delim: Uint8Array): number {
   outer: for (let i = from; i + delim.length <= buf.length; i++) {
@@ -106,10 +116,7 @@ async function* parseEventStream(chunks: AsyncIterable<Uint8Array>): AsyncGenera
     // a delimiter can span the chunk boundary; rescan the overhang next round
     scanned = Math.max(0, pending.length - (delimiter.length - 1));
   }
-  if (pending.length > 0) {
-    const packet = parseSseEvent(decoder.decode(pending));
-    if (packet) yield packet;
-  }
+  if (pending.length > 0) throw truncated(pending.length);
 }
 
 function parseSseEvent(text: string): FramedPacket | undefined {
@@ -148,10 +155,7 @@ async function* parseJsonEachPacket(
     }
   }
   pending += decoder.decode();
-  if (pending) {
-    const packet = jsonPacketLine(pending, base64);
-    if (packet) yield packet;
-  }
+  if (pending) throw truncated(pending.length);
 }
 
 function jsonPacketLine(line: string, base64: boolean): FramedPacket | undefined {

@@ -201,7 +201,13 @@ export interface HttpProgress {
 /** Packet types yielded by query() - mirrors TCP client pattern */
 export type QueryPacket =
   | { type: "Progress"; progress: HttpProgress }
-  | { type: "Data"; chunk: Uint8Array }
+  /**
+   * A chunk of formatted output. Under `framing`, `kind` tells apart the main
+   * result from the totals and extremes blocks, which are separate packets on
+   * the wire; without framing the output format inlines them and `kind` is
+   * absent. Concatenating every chunk reproduces the format's output either way.
+   */
+  | { type: "Data"; chunk: Uint8Array; kind?: "data" | "totals" | "extremes" }
   | { type: "Log"; entries: HttpLogEntry[] }
   | { type: "ProfileEvents"; events: HttpProfileEvent[] }
   | { type: "Summary"; summary: QuerySummary; queryId: string };
@@ -735,7 +741,9 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
   const compressed = compression !== false;
   const framing = options.framing;
   const params: Record<string, string> = {
-    default_format: "JSONEachRowWithProgress",
+    // The server rejects the *WithProgress formats under framing: they write
+    // progress in-band, which framing delivers as its own packets instead.
+    default_format: framing ? "JSONEachRow" : "JSONEachRowWithProgress",
   };
 
   if (options.sessionId) {
@@ -990,7 +998,7 @@ async function* queryImpl(sql: string, options: QueryOptions = {}): AsyncGenerat
       } else if (packet.kind === "profile_events") {
         yield { type: "ProfileEvents", events: packet.events };
       } else {
-        yield { type: "Data", chunk: packet.payload };
+        yield { type: "Data", chunk: packet.payload, kind: packet.kind };
       }
     }
   } else {

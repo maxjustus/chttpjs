@@ -46,6 +46,34 @@ describe("HTTP framing formats", { timeout: 120000 }, () => {
   const collectPackets = (sql: string, options: Parameters<typeof query>[1]) =>
     collect(query(sql, options));
 
+  it("queries without a FORMAT clause", async () => {
+    // The client's default_format is JSONEachRowWithProgress, which the server
+    // rejects under framing because it writes progress in-band.
+    const rows = await collectJsonEachRow<{ n: number }>(
+      query("SELECT 42 AS n", { url, auth, sessionId, framing: "EventStream" }),
+    );
+    assert.deepStrictEqual(rows, [{ n: 42 }]);
+  });
+
+  it("releases the connection when a framed query is abandoned early", async () => {
+    for (let i = 0; i < 10; i++) {
+      const gen = query("SELECT number FROM numbers(100000) FORMAT JSONEachRow", {
+        url,
+        auth,
+        sessionId: generateSessionId(`framing_abandon_${i}`),
+        framing: "EventStream",
+      });
+      await gen.next();
+      await gen.return(undefined);
+    }
+
+    // If connections leaked, this hangs until the suite timeout.
+    const rows = await collectJsonEachRow<{ n: number }>(
+      query("SELECT 1 AS n", { url, auth, framing: "EventStream" }),
+    );
+    assert.deepStrictEqual(rows, [{ n: 1 }]);
+  });
+
   describe("Auxiliary packets", () => {
     for (const framing of [
       "EventStream",
@@ -156,6 +184,54 @@ describe("HTTP framing formats", { timeout: 120000 }, () => {
           return true;
         },
       );
+    });
+
+    it("tags totals packets and keeps the format output intact", async () => {
+      // JSONEachRow inlines totals into its data packets; TSV emits a separate
+      // totals packet, which is what the kind tag exists to tell apart.
+      const sql =
+        "SELECT number % 2 AS k, count() AS c FROM numbers(10) GROUP BY k WITH TOTALS ORDER BY k FORMAT TSV";
+      const packets = await collectPackets(sql, {
+        url,
+        auth,
+        sessionId,
+        framing: "EventStream",
+        compression: false,
+      });
+
+      const kinds = packets.filter((p) => p.type === "Data").map((p) => p.kind);
+      assert.ok(kinds.includes("data"), "should tag the main result");
+      assert.ok(kinds.includes("totals"), "should tag the totals block");
+
+      // Concatenating every chunk still reproduces the unframed output.
+      const framed = packets
+        .filter((p) => p.type === "Data")
+        .map((p) => Buffer.from(p.chunk).toString())
+        .join("");
+      const plain = await collectText(query(sql, { url, auth, sessionId, compression: false }));
+      assert.strictEqual(framed, plain);
+    });
+
+    it("surfaces a compressed exception packet", async () => {
+      for (const compression of ["lz4", "zstd"] as const) {
+        await assert.rejects(
+          collectText(
+            query("SELECT throwIf(number = 5, 'framed boom') FROM numbers(10) FORMAT JSONEachRow", {
+              url,
+              auth,
+              sessionId,
+              framing: "EventStream",
+              compression,
+            }),
+          ),
+          (err: unknown) => {
+            assert.ok(err instanceof ClickHouseException);
+            assert.match(err.message, /framed boom/);
+            return true;
+          },
+          `compression: ${compression}`,
+        );
+      }
     });
 
     it("works with block compression", async () => {

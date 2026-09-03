@@ -793,7 +793,9 @@ for await (const packet of query("SELECT number FROM numbers(1000) FORMAT JSONEa
 }
 ```
 
-- Data, totals, and extremes packets surface as `Data` chunks whose concatenation equals the unframed format output, so `collectText`, `streamText`, and `FORMAT Native` decoding work unchanged — including binary formats, which the base64 and EventStream framings carry byte-exactly.
+- Data, totals, and extremes packets surface as `Data` chunks whose concatenation equals the unframed format output, so `collectText`, `streamText`, and `FORMAT Native` decoding work unchanged — including binary formats, which the base64 and EventStream framings carry byte-exactly. `packet.kind` tags which block a chunk came from. One server-side exception: the `JSONCompactEachRow` family drops totals and extremes when unframed but emits them as packets under framing, so framed output for those formats carries extra rows.
+- Omit the `*WithProgress` formats. The server rejects them under framing because they write progress in-band; the client's default format changes to `JSONEachRow` when `framing` is set.
+- A response cut short mid-packet throws instead of delivering a truncated final chunk.
 - Progress arrives as `Progress` packets instead of `X-ClickHouse-Progress` headers.
 - A failed query throws `ClickHouseException` from the terminal exception packet, even when the server already committed a 200 response.
 - Log rows surface as `Log` packets (requires the `send_logs_level` setting) and profile events as `ProfileEvents` packets, mirroring the TCP client packet names.
