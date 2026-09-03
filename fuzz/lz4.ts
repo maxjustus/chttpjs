@@ -27,8 +27,6 @@ import { pick, randomString } from "./util.ts";
 logConfig("lz4");
 
 const ENCODER = new TextEncoder();
-const SMALL_FRAME_LEN = 1024; // 1-byte chunk cap; pending copies per push
-const TINY_STEP_FRAME_LEN = 8192; // fixed 2-8 byte step chunk cap
 
 function randomBytes(rng: Rng, len: number): Uint8Array {
   const out = new Uint8Array(len);
@@ -101,13 +99,7 @@ function decodeAll(rng: Rng, frame: Uint8Array): Uint8Array {
     if (out.length > 0) parts.push(out);
   };
 
-  let mode = rng.int(0, 3);
-  if (
-    (mode === 2 && frame.length > SMALL_FRAME_LEN) ||
-    (mode === 3 && frame.length > TINY_STEP_FRAME_LEN)
-  ) {
-    mode = 1; // fall back to random cuts: tiny chunks would copy pending per push
-  }
+  const mode = rng.int(0, 3);
 
   if (mode === 0) {
     push(frame);

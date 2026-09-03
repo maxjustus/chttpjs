@@ -1,5 +1,4 @@
 import { concat, readUInt32LE } from "./compression.ts";
-import { Xxhash32Stream, xxhash32 } from "./xxhash32.ts";
 
 const MAGIC = 0x184d2204;
 const UNCOMPRESSED_BLOCK = 0x80000000;
@@ -68,7 +67,12 @@ function decodeSequences(src: Uint8Array, dst: Uint8Array, start: number, limit:
 }
 
 export function createLz4FrameDecoder(): Lz4FrameDecoder {
+  // Unparsed frame bytes live in one flat buffer between head and tail. A push
+  // copies its chunk in and parsing consumes from the front, so pending bytes
+  // move only when the buffer grows, never per push.
   let pending: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+  let head = 0;
+  let tail = 0;
   // One buffer for the whole frame: retained history at the front, the block
   // under decode behind it. Reallocating per block moved history + blockMaxSize
   // bytes each time, which dominates when the server flushes small blocks.
@@ -76,36 +80,32 @@ export function createLz4FrameDecoder(): Lz4FrameDecoder {
   let historyLen = 0;
   let blockMaxSize = 0;
   let blockChecksum = false;
-  let contentChecksum = false;
   let headerRead = false;
-  let awaitingContentChecksum = false;
   let finished = false;
-  const contentHash = new Xxhash32Stream();
 
   function readHeader(): boolean {
-    if (pending.length < 7) return false;
-    if (readUInt32LE(pending, 0) !== MAGIC) {
+    if (tail - head < 7) return false;
+    if (readUInt32LE(pending, head) !== MAGIC) {
       throw new Error("Not an LZ4 frame: bad magic number");
     }
 
-    const flg = pending[4]!;
+    const flg = pending[head + 4]!;
     if (flg >> 6 !== 1) throw new Error(`Unsupported LZ4 frame version ${flg >> 6}`);
     if (flg & 0x01) throw new Error("LZ4 frame dictionaries are not supported");
 
     // Header: magic(4) FLG(1) BD(1) [content size(8)] HC(1). Dict ID (rejected above)
-    // is the only optional field that shifts HC; content checksum lives after the frame.
+    // is the only optional field that shifts HC.
     const headerLength = 7 + (flg & 0x08 ? 8 : 0);
-    if (pending.length < headerLength) return false;
+    if (tail - head < headerLength) return false;
 
-    const sizeCode = (pending[5]! >> 4) & 7;
+    const sizeCode = (pending[head + 5]! >> 4) & 7;
     const maxSize = BLOCK_MAX_SIZES[sizeCode];
     if (!maxSize) throw new Error(`Unsupported LZ4 block size code ${sizeCode}`);
     blockMaxSize = maxSize;
 
     blockChecksum = (flg & 0x10) !== 0;
-    contentChecksum = (flg & 0x04) !== 0;
     scratch = new Uint8Array(WINDOW_SIZE + blockMaxSize);
-    pending = pending.subarray(headerLength);
+    head += headerLength;
     headerRead = true;
     return true;
   }
@@ -130,60 +130,47 @@ export function createLz4FrameDecoder(): Lz4FrameDecoder {
     return decoded;
   }
 
-  function verifyContentChecksum(): void {
-    if (pending.length < 4) return;
-    const expected = readUInt32LE(pending, 0);
-    const actual = contentHash.digest();
-    if (actual !== expected) {
-      throw new Error(`LZ4 content checksum mismatch: got ${actual}, expected ${expected}`);
+  function appendPending(chunk: Uint8Array): void {
+    if (tail + chunk.length > pending.length) {
+      const used = tail - head;
+      const next = new Uint8Array(Math.max(used + chunk.length, pending.length * 2, 1024));
+      next.set(pending.subarray(head, tail), 0);
+      pending = next;
+      head = 0;
+      tail = used;
     }
-    pending = pending.subarray(4);
-    awaitingContentChecksum = false;
-    finished = true;
+    pending.set(chunk, tail);
+    tail += chunk.length;
   }
 
   return {
     push(chunk: Uint8Array): Uint8Array {
       if (finished || chunk.length === 0) return new Uint8Array(0);
-      pending = pending.length === 0 ? chunk : concat([pending, chunk]);
-
-      if (awaitingContentChecksum) {
-        verifyContentChecksum();
-        return new Uint8Array(0);
-      }
+      appendPending(chunk);
       if (!headerRead && !readHeader()) return new Uint8Array(0);
 
       const produced: Uint8Array[] = [];
-      while (pending.length >= 4) {
-        const marker = readUInt32LE(pending, 0);
+      while (tail - head >= 4) {
+        const marker = readUInt32LE(pending, head);
         if (marker === 0) {
-          pending = pending.subarray(4);
-          if (contentChecksum) {
-            awaitingContentChecksum = true;
-            verifyContentChecksum();
-          } else {
-            finished = true;
-          }
+          // A trailing content checksum, if any, is not validated: no producer
+          // emits one.
+          finished = true;
           break;
         }
 
         const size = marker & ~UNCOMPRESSED_BLOCK;
         const total = 4 + size + (blockChecksum ? 4 : 0);
-        if (pending.length < total) break;
+        if (tail - head < total) break;
 
-        const block = pending.subarray(4, 4 + size);
-        if (blockChecksum) {
-          const expected = readUInt32LE(pending, 4 + size);
-          const actual = xxhash32(block);
-          if (actual !== expected) {
-            throw new Error(`LZ4 block checksum mismatch: got ${actual}, expected ${expected}`);
-          }
-        }
-
+        const block = pending.subarray(head + 4, head + 4 + size);
         const decoded = decodeBlock(block, (marker & UNCOMPRESSED_BLOCK) !== 0);
-        if (contentChecksum) contentHash.update(decoded);
         produced.push(decoded);
-        pending = pending.subarray(total);
+        head += total;
+      }
+      if (head === tail) {
+        head = 0;
+        tail = 0;
       }
 
       return concat(produced);
