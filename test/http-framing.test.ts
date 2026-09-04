@@ -25,6 +25,7 @@ import { collect, generateSessionId } from "./test_utils.ts";
 // Framing formats land in 26.8, newer than the pinned suite default, so this
 // file starts its own container. Override with CH_FRAMING_VERSION.
 const FRAMING_CH_VERSION = process.env.CH_FRAMING_VERSION || "26.8";
+const FRAMINGS = ["EventStream", "JSONEachPacketBase64", "JSONEachPacketString"] as const;
 
 describe("HTTP framing formats", { timeout: 120000 }, () => {
   let clickhouse: Awaited<ReturnType<typeof startClickHouse>>;
@@ -46,14 +47,16 @@ describe("HTTP framing formats", { timeout: 120000 }, () => {
   const collectPackets = (sql: string, options: Parameters<typeof query>[1]) =>
     collect(query(sql, options));
 
-  it("queries without a FORMAT clause", async () => {
-    // The client's default_format is JSONEachRowWithProgress, which the server
-    // rejects under framing because it writes progress in-band.
-    const rows = await collectJsonEachRow<{ n: number }>(
-      query("SELECT 42 AS n", { url, auth, sessionId, framing: "EventStream" }),
-    );
-    assert.deepStrictEqual(rows, [{ n: 42 }]);
-  });
+  for (const framing of FRAMINGS) {
+    it(`queries without a FORMAT clause under ${framing}`, async () => {
+      // The client's default_format is JSONEachRowWithProgress, which the server
+      // rejects under framing because it writes progress in-band.
+      const rows = await collectJsonEachRow<{ n: number }>(
+        query("SELECT 42 AS n", { url, auth, sessionId, framing }),
+      );
+      assert.deepStrictEqual(rows, [{ n: 42 }]);
+    });
+  }
 
   it("releases the connection when a framed query is abandoned early", async () => {
     for (let i = 0; i < 10; i++) {
@@ -75,11 +78,7 @@ describe("HTTP framing formats", { timeout: 120000 }, () => {
   });
 
   describe("Auxiliary packets", () => {
-    for (const framing of [
-      "EventStream",
-      "JSONEachPacketBase64",
-      "JSONEachPacketString",
-    ] as const) {
+    for (const framing of FRAMINGS) {
       it(`surfaces log and profile-events packets under ${framing}`, async () => {
         const packets = await collectPackets("SELECT number FROM numbers(10) FORMAT JSONEachRow", {
           url,
@@ -109,6 +108,54 @@ describe("HTTP framing formats", { timeout: 120000 }, () => {
         assert.ok(selected, "should report SelectedRows");
         assert.strictEqual(selected.value, "10");
         assert.ok(selected.type === "gauge" || selected.type === "increment");
+      });
+    }
+  });
+
+  describe("Exception packets", () => {
+    for (const framing of FRAMINGS) {
+      it(`surfaces a mid-stream error under ${framing}`, async () => {
+        await assert.rejects(
+          collectText(
+            query("SELECT throwIf(number = 5, 'framed boom') FROM numbers(10) FORMAT JSONEachRow", {
+              url,
+              auth,
+              sessionId,
+              framing,
+              compression: false,
+            }),
+          ),
+          (err: unknown) => {
+            assert.ok(err instanceof ClickHouseException);
+            assert.match(err.message, /framed boom/);
+            return true;
+          },
+        );
+      });
+
+      it(`surfaces a compressed error under ${framing}`, async () => {
+        for (const compression of ["lz4", "zstd"] as const) {
+          await assert.rejects(
+            collectText(
+              query(
+                "SELECT throwIf(number = 5, 'framed boom') FROM numbers(10) FORMAT JSONEachRow",
+                {
+                  url,
+                  auth,
+                  sessionId,
+                  framing,
+                  compression,
+                },
+              ),
+            ),
+            (err: unknown) => {
+              assert.ok(err instanceof ClickHouseException);
+              assert.match(err.message, /framed boom/);
+              return true;
+            },
+            `compression: ${compression}`,
+          );
+        }
       });
     }
   });
@@ -167,25 +214,6 @@ describe("HTTP framing formats", { timeout: 120000 }, () => {
       assert.deepStrictEqual(framed, plain);
     });
 
-    it("surfaces a mid-stream error from the exception packet", async () => {
-      await assert.rejects(
-        collectText(
-          query("SELECT throwIf(number = 5, 'framed boom') FROM numbers(10) FORMAT JSONEachRow", {
-            url,
-            auth,
-            sessionId,
-            framing: "EventStream",
-            compression: false,
-          }),
-        ),
-        (err: unknown) => {
-          assert.ok(err instanceof ClickHouseException);
-          assert.match(err.message, /framed boom/);
-          return true;
-        },
-      );
-    });
-
     it("tags totals packets and keeps the format output intact", async () => {
       // JSONEachRow inlines totals into its data packets; TSV emits a separate
       // totals packet, which is what the kind tag exists to tell apart.
@@ -212,28 +240,6 @@ describe("HTTP framing formats", { timeout: 120000 }, () => {
       assert.strictEqual(framed, plain);
     });
 
-    it("surfaces a compressed exception packet", async () => {
-      for (const compression of ["lz4", "zstd"] as const) {
-        await assert.rejects(
-          collectText(
-            query("SELECT throwIf(number = 5, 'framed boom') FROM numbers(10) FORMAT JSONEachRow", {
-              url,
-              auth,
-              sessionId,
-              framing: "EventStream",
-              compression,
-            }),
-          ),
-          (err: unknown) => {
-            assert.ok(err instanceof ClickHouseException);
-            assert.match(err.message, /framed boom/);
-            return true;
-          },
-          `compression: ${compression}`,
-        );
-      }
-    });
-
     it("works with block compression", async () => {
       const sql = "SELECT number FROM numbers(2000) FORMAT CSV";
       const framed = await collectText(
@@ -248,6 +254,19 @@ describe("HTTP framing formats", { timeout: 120000 }, () => {
   });
 
   describe("JSONEachPacketBase64", () => {
+    it("carries binary formats intact", async () => {
+      const sql = "SELECT number, number + 1 AS next FROM numbers(100) FORMAT Native";
+      const framed = await collectRows(
+        streamDecodeNative(
+          dataChunks(query(sql, { url, auth, sessionId, framing: "JSONEachPacketBase64" })),
+        ),
+      );
+      const plain = await collectRows(
+        streamDecodeNative(dataChunks(query(sql, { url, auth, sessionId, compression: false }))),
+      );
+      assert.deepStrictEqual(framed, plain);
+    });
+
     it("reproduces the unframed format output byte for byte", async () => {
       const sql = "SELECT number, toString(number) AS s FROM numbers(500) FORMAT JSONEachRow";
       const framed = await collectText(
